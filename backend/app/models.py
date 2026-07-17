@@ -29,6 +29,8 @@ def new_id() -> str:
 class Account(Base):
     __tablename__ = "accounts"
     __table_args__ = (
+        UniqueConstraint("imt_username", name="accounts_imt_username_key"),
+        Index("ix_accounts_imt_username", "imt_username", unique=True),
         CheckConstraint(
             "auto_sync_interval_hours IN (2, 4, 6, 8, 12, 24)",
             name="ck_accounts_auto_sync_interval",
@@ -40,7 +42,7 @@ class Account(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    imt_username: Mapped[str] = mapped_column(String(160), unique=True, index=True)
+    imt_username: Mapped[str] = mapped_column(String(160))
     display_name: Mapped[str] = mapped_column(String(120))
     encrypted_imt_password: Mapped[str] = mapped_column(Text)
     encrypted_telegram_token: Mapped[str | None] = mapped_column(Text)
@@ -371,11 +373,15 @@ class CohortPulse(Base):
 
 class ShareToken(Base):
     __tablename__ = "share_tokens"
+    __table_args__ = (
+        UniqueConstraint("prefix", name="share_tokens_prefix_key"),
+        Index("ix_share_tokens_prefix", "prefix", unique=True),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), index=True)
     name: Mapped[str] = mapped_column(String(120))
-    prefix: Mapped[str] = mapped_column(String(16), unique=True, index=True)
+    prefix: Mapped[str] = mapped_column(String(16))
     digest: Mapped[str] = mapped_column(String(64))
     role: Mapped[str] = mapped_column(String(16), default="viewer")
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -386,14 +392,18 @@ class ShareToken(Base):
 
 class WebSession(Base):
     __tablename__ = "web_sessions"
-    __table_args__ = (Index("ix_web_sessions_expires_at", "expires_at"),)
+    __table_args__ = (
+        UniqueConstraint("digest", name="web_sessions_digest_key"),
+        Index("ix_web_sessions_digest", "digest", unique=True),
+        Index("ix_web_sessions_expires_at", "expires_at"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), index=True)
     share_token_id: Mapped[str | None] = mapped_column(
         ForeignKey("share_tokens.id", ondelete="SET NULL"), index=True
     )
-    digest: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    digest: Mapped[str] = mapped_column(String(64))
     csrf_digest: Mapped[str] = mapped_column(String(64))
     role: Mapped[str] = mapped_column(String(16))
     auth_method: Mapped[str] = mapped_column(String(16))

@@ -31,7 +31,7 @@ def upgrade() -> None:
         sa.Column("last_sync_error", sa.Text()),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-        sa.UniqueConstraint("imt_username"),
+        sa.UniqueConstraint("imt_username", name="accounts_imt_username_key"),
     )
     op.create_index("ix_accounts_imt_username", "accounts", ["imt_username"], unique=True)
 
@@ -105,7 +105,7 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("last_used_at", sa.DateTime(timezone=True)),
         sa.Column("revoked_at", sa.DateTime(timezone=True)),
-        sa.UniqueConstraint("prefix"),
+        sa.UniqueConstraint("prefix", name="share_tokens_prefix_key"),
     )
     op.create_index("ix_share_tokens_account_id", "share_tokens", ["account_id"])
     op.create_index("ix_share_tokens_prefix", "share_tokens", ["prefix"], unique=True)
@@ -125,7 +125,7 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("last_seen_at", sa.DateTime(timezone=True), nullable=False),
-        sa.UniqueConstraint("digest"),
+        sa.UniqueConstraint("digest", name="web_sessions_digest_key"),
     )
     op.create_index("ix_web_sessions_account_id", "web_sessions", ["account_id"])
     op.create_index("ix_web_sessions_share_token_id", "web_sessions", ["share_token_id"])
