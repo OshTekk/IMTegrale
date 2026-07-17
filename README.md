@@ -6,6 +6,8 @@ IMTégrale est un service étudiant indépendant qui synchronise les notes PASS,
 
 Le projet est distribué sous licence MIT. Les contributions sont décrites dans [`CONTRIBUTING.md`](CONTRIBUTING.md) et les vulnérabilités doivent être signalées en privé selon [`SECURITY.md`](SECURITY.md).
 
+Code source officiel : [github.com/OshTekk/IMTegrale](https://github.com/OshTekk/IMTegrale)
+
 Le classement facultatif propose deux vues indépendantes, GPA et moyenne générale. La participation publie l'identité officielle issue de PASS, les scores utilisent exclusivement les données brutes PASS pondérées par ECTS, et le classement reste entièrement masqué au nouvel inscrit pendant 48 heures.
 
 ## Architecture

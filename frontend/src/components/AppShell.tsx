@@ -9,6 +9,7 @@ import { formatSyncDuration, manualSyncMessage, useServerCountdown } from "../li
 import type { Session } from "../types";
 import { Logo } from "./Logo";
 import { SourceNotice } from "./SourceNotice";
+import { ThemeToggle } from "./ThemeToggle";
 import { useToast } from "./Toast";
 
 const navItems = [
@@ -109,6 +110,7 @@ export function AppShell({ session }: { session: Session }) {
           <div className="page-heading"><h1>{title}</h1><p>{subtitle}</p></div>
           <div className="topbar-actions">
             {session.role === "owner" && <button className="secondary-button sync-button" type="button" onClick={runSync} disabled={sync.isPending || !manualSync?.can_start} aria-label={syncMessage} title={syncMessage}><RefreshCw size={17} className={sync.isPending || manualSync?.state === "in_progress" ? "spin" : ""} /><span>{syncButtonLabel}</span></button>}
+            <ThemeToggle />
             <div className="profile-wrap">
               <button className="profile-button" type="button" onClick={() => setProfileOpen((value) => !value)} aria-expanded={profileOpen} aria-label={`Ouvrir le profil de ${session.account?.display_name ?? "l'utilisateur"}`}>
                 <span className="avatar">{session.account?.display_name.slice(0, 2).toUpperCase()}</span>

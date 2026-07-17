@@ -3,6 +3,7 @@ import { lazy, Suspense, useEffect } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AppShell } from "./components/AppShell";
 import { Logo } from "./components/Logo";
+import { PublicLayout } from "./components/PublicLayout";
 import { SecuritySetupModal } from "./components/SecuritySetupModal";
 import { LoginPage } from "./pages/LoginPage";
 import { clearAccountState, queryKeys, replaceSessionState, useSession } from "./lib/queries";
@@ -15,11 +16,25 @@ const SharingPage = lazy(() => import("./pages/SharingPage").then((module) => ({
 const SettingsPage = lazy(() => import("./pages/SettingsPage").then((module) => ({ default: module.SettingsPage })));
 const LeaderboardPage = lazy(() => import("./pages/LeaderboardPage").then((module) => ({ default: module.LeaderboardPage })));
 const AdminPortal = lazy(() => import("./pages/AdminPortal").then((module) => ({ default: module.AdminPortal })));
+const TrustPage = lazy(() => import("./pages/TrustPage").then((module) => ({ default: module.TrustPage })));
+const DemoPage = lazy(() => import("./pages/DemoPage").then((module) => ({ default: module.DemoPage })));
 
 export default function App() {
   const location = useLocation();
   if (location.pathname.startsWith("/admin")) {
     return <Suspense fallback={<div className="route-loading skeleton" />}><AdminPortal /></Suspense>;
+  }
+  if (location.pathname === "/confiance" || location.pathname === "/demo") {
+    return (
+      <Suspense fallback={<div className="route-loading skeleton" />}>
+        <Routes>
+          <Route element={<PublicLayout />}>
+            <Route path="confiance" element={<TrustPage />} />
+            <Route path="demo" element={<DemoPage />} />
+          </Route>
+        </Routes>
+      </Suspense>
+    );
   }
   return <StudentApp />;
 }

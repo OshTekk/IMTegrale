@@ -1,9 +1,12 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Eye, EyeOff, Fingerprint, KeyRound, LockKeyhole, School, ShieldCheck } from "lucide-react";
+import { CircleHelp, ExternalLink, Eye, EyeOff, Fingerprint, KeyRound, LockKeyhole, PlayCircle, School, ShieldCheck } from "lucide-react";
 import { type FormEvent, useState } from "react";
+import { Link } from "react-router-dom";
 import { BRAND } from "../brand";
 import { BrandMark, Logo } from "../components/Logo";
+import { GitHubMark } from "../components/GitHubMark";
 import { SourceNotice } from "../components/SourceNotice";
+import { ThemeToggle } from "../components/ThemeToggle";
 import { api } from "../lib/api";
 import { authenticateWithPasskey, passkeysSupported } from "../lib/passkeys";
 import { replaceSessionState } from "../lib/queries";
@@ -50,7 +53,7 @@ export function LoginPage() {
 
   return (
     <main className="login-page">
-      <header className="login-topbar"><Logo /></header>
+      <header className="login-topbar"><Logo /><ThemeToggle /></header>
       <div className="login-layout">
         <section className="login-context" aria-label={`Présentation d’${BRAND.name}`}>
           <div className="context-icon"><BrandMark size={52} /></div>
@@ -62,6 +65,12 @@ export function LoginPage() {
             <span><LockKeyhole size={18} /> Secrets chiffrés sur le serveur</span>
           </div>
           <SourceNotice />
+          <div className="login-public-links">
+            <Link to="/confiance"><CircleHelp size={17} /><span><strong>Pourquoi puis-je me connecter ?</strong><small>Comprendre les données, le chiffrement et ses limites</small></span></Link>
+            <Link to="/demo"><PlayCircle size={17} /><span><strong>Voir la démo</strong><small>Suivre un parcours fictif, étape par étape</small></span></Link>
+            <a className="login-source-link" href={BRAND.sourceCodeUrl} target="_blank" rel="noreferrer"><GitHubMark size={17} /><span><strong>Code source public</strong><small>Examiner l'architecture, les protections et la documentation</small></span><ExternalLink size={13} /></a>
+          </div>
+          <p className="login-paff-credit">Avec un clin d'œil à <a href={BRAND.paffUrl} target="_blank" rel="noreferrer">PAFF de Lucien Hervé <ExternalLink size={12} /></a>, projet étudiant antérieur.</p>
         </section>
 
         <section className="login-panel">
