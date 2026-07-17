@@ -195,6 +195,37 @@ def test_hub_wayf_selection_rejects_an_untrusted_action(monkeypatch) -> None:
     assert called is False
 
 
+def test_cas_accepts_the_official_idp_consent_form(monkeypatch) -> None:
+    client = ImtPassClient()
+    consent = fake_response(
+        url="https://idp.imt-atlantique.fr/idp/profile/SAML2/Redirect/SSO?execution=e1s2",
+        body=(
+            b'<form action="/idp/profile/SAML2/Redirect/SSO?execution=e1s2">'
+            b'<input type="hidden" name="csrf_token" value="opaque">'
+            b'<button name="_eventId_proceed" value="Accept">Continuer</button></form>'
+        ),
+    )
+    dashboard = fake_response(
+        url="https://hub.imt-atlantique.fr/comp2/etudiant/40419",
+        body=b"student dashboard",
+    )
+    posts: list[tuple[str, list[tuple[str, str]]]] = []
+
+    def post(url: str, *, data: list[tuple[str, str]], **_kwargs) -> requests.Response:
+        posts.append((url, data))
+        return dashboard
+
+    monkeypatch.setattr(client, "_post", post)
+
+    assert client._complete_cas(consent, "student", "secret") is dashboard
+    assert posts == [
+        (
+            "https://idp.imt-atlantique.fr/idp/profile/SAML2/Redirect/SSO?execution=e1s2",
+            [("csrf_token", "opaque"), ("_eventId_proceed", "Accept")],
+        )
+    ]
+
+
 def test_telegram_messages_have_stable_chunk_and_note_limits() -> None:
     chunks = split_message("x" * 1000, limit=100, max_chunks=3)
     assert len(chunks) == 3

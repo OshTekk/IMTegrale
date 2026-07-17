@@ -402,75 +402,89 @@ class ImtPassClient:
         password: str,
     ) -> requests.Response:
         current = self._select_imt_identity_provider(response)
-        soup = BeautifulSoup(current.text, "html.parser")
-        login_form = next(
-            (
-                form
-                for form in soup.find_all("form")
-                if any((item.get("type") or "").lower() == "password" for item in form.find_all("input"))
-            ),
-            None,
-        )
-        if login_form is not None:
-            target = _form_action(current.url, login_form.get("action"), CREDENTIAL_ORIGINS)
-            payload: list[tuple[str, str]] = []
-            for item in login_form.find_all("input"):
-                name = item.get("name")
-                if not name:
-                    continue
-                lowered = name.lower()
-                item_type = (item.get("type") or "").lower()
-                value = item.get("value", "")
-                if item_type == "password":
-                    value = password
-                elif item_type in {"", "email", "text"} and "user" in lowered:
-                    value = username
-                payload.append((name, value))
-            current = self._post(target, data=payload, sensitive=True)
-            self._ensure_success(current)
-            if self._contains_password_form(current.text):
-                raise ImtAuthenticationError("Identifiant ou mot de passe IMT incorrect")
-
-        for _ in range(6):
+        credentials_submitted = False
+        for _ in range(8):
             soup = BeautifulSoup(current.text, "html.parser")
-            saml_form = next(
+            login_form = next(
                 (
                     form
                     for form in soup.find_all("form")
-                    if (
-                        {item.get("name") for item in form.find_all("input")}
-                        & {"SAMLResponse", "SAMLRequest"}
+                    if any(
+                        (item.get("type") or "").lower() == "password"
+                        for item in form.find_all("input")
                     )
-                    or "saml2/post/sso" in (form.get("action") or "").lower()
                 ),
                 None,
             )
-            if saml_form is None:
+            if login_form is not None:
+                if credentials_submitted:
+                    raise ImtAuthenticationError("Identifiant ou mot de passe IMT incorrect")
+                target = _form_action(current.url, login_form.get("action"), CREDENTIAL_ORIGINS)
+                payload: list[tuple[str, str]] = []
+                for item in login_form.find_all("input"):
+                    name = item.get("name")
+                    if not name:
+                        continue
+                    lowered = name.lower()
+                    item_type = (item.get("type") or "").lower()
+                    value = item.get("value", "")
+                    if item_type == "password":
+                        value = password
+                    elif item_type in {"", "email", "text"} and "user" in lowered:
+                        value = username
+                    payload.append((name, value))
+                current = self._post(target, data=payload, sensitive=True)
+                self._ensure_success(current)
+                credentials_submitted = True
+                continue
+
+            continuation_form = None
+            continuation_url = ""
+            for form in soup.find_all("form"):
+                controls = form.find_all(("input", "button"))
+                names = {item.get("name") for item in controls}
+                has_saml_payload = bool(names & {"SAMLResponse", "SAMLRequest"})
+                has_proceed_control = any(
+                    "proceed" in (item.get("name") or "").casefold()
+                    or "accept" in (item.get("value") or "").casefold()
+                    for item in controls
+                )
+                if not has_saml_payload and not has_proceed_control:
+                    continue
+                allowed_origins = TRUSTED_IMT_ORIGINS if has_saml_payload else {IDP_ORIGIN}
+                target = _form_action(current.url, form.get("action"), allowed_origins)
+                if not has_saml_payload:
+                    path = urlsplit(target).path.casefold()
+                    if not path.startswith("/idp/profile/saml2/") or not path.endswith("/sso"):
+                        continue
+                continuation_form = form
+                continuation_url = target
                 break
-            target = _form_action(current.url, saml_form.get("action"), TRUSTED_IMT_ORIGINS)
+
+            if continuation_form is None:
+                return current
+
             payload: list[tuple[str, str]] = []
             selected_radios = {
                 item.get("name"): item.get("value", "")
-                for item in saml_form.find_all("input", type="radio")
+                for item in continuation_form.find_all("input", type="radio")
                 if item.has_attr("checked")
             }
-            for item in saml_form.find_all("input"):
+            for item in continuation_form.find_all(("input", "button")):
                 name = item.get("name")
                 if not name:
                     continue
-                item_type = (item.get("type") or "").lower()
+                item_type = (item.get("type") or ("submit" if item.name == "button" else "")).lower()
                 value = item.get("value", "")
                 if item_type == "radio" and selected_radios.get(name) != value:
                     continue
                 if item_type == "submit" and "proceed" not in name.lower() and "accept" not in value.lower():
                     continue
                 payload.append((name, value))
-            current = self._post(target, data=payload, sensitive=True)
+            current = self._post(continuation_url, data=payload, sensitive=True)
             self._ensure_success(current)
 
-        if self._contains_password_form(current.text):
-            raise ImtAuthenticationError("Identifiant ou mot de passe IMT incorrect")
-        return current
+        raise ImtFetchError("Le parcours d'authentification IMT est anormalement long")
 
     def _select_imt_identity_provider(self, response: requests.Response) -> requests.Response:
         if _url_origin(response.url) != IDP_ORIGIN:
