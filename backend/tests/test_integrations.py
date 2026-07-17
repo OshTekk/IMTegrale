@@ -226,6 +226,59 @@ def test_cas_accepts_the_official_idp_consent_form(monkeypatch) -> None:
     ]
 
 
+def test_cas_accepts_the_official_shibboleth_consent_form(monkeypatch) -> None:
+    client = ImtPassClient()
+    consent = fake_response(
+        url="https://idp.imt-atlantique.fr/idp/profile/Shibboleth/SSO?execution=e1s2",
+        body=(
+            b'<form action="?execution=e1s2">'
+            b'<input type="hidden" name="csrf_token" value="opaque">'
+            b'<button name="_eventId_proceed" value="Accept">Continuer</button></form>'
+        ),
+    )
+    dashboard = fake_response(
+        url="https://hub.imt-atlantique.fr/comp2/etudiant/40419/home",
+        body=b"student dashboard",
+    )
+    posts: list[tuple[str, list[tuple[str, str]]]] = []
+
+    def post(url: str, *, data: list[tuple[str, str]], **_kwargs) -> requests.Response:
+        posts.append((url, data))
+        return dashboard
+
+    monkeypatch.setattr(client, "_post", post)
+
+    assert client._complete_cas(consent, "student", "secret") is dashboard
+    assert posts == [
+        (
+            "https://idp.imt-atlantique.fr/idp/profile/Shibboleth/SSO?execution=e1s2",
+            [("csrf_token", "opaque"), ("_eventId_proceed", "Accept")],
+        )
+    ]
+
+
+def test_cas_does_not_submit_a_shibboleth_lookalike_path(monkeypatch) -> None:
+    client = ImtPassClient()
+    consent = fake_response(
+        url="https://idp.imt-atlantique.fr/idp/profile/Shibboleth/SSO?execution=e1s2",
+        body=(
+            b'<form action="/idp/profile/Shibboleth/SSO/continue?execution=e1s2">'
+            b'<button name="_eventId_proceed" value="Accept">Continuer</button></form>'
+        ),
+    )
+    called = False
+
+    def unexpected_post(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("an unexpected IdP path must not be submitted")
+
+    monkeypatch.setattr(client, "_post", unexpected_post)
+
+    assert client._complete_cas(consent, "student", "secret") is consent
+    assert called is False
+
+
 def test_cas_follows_an_official_action_only_saml_relay(monkeypatch) -> None:
     client = ImtPassClient()
     relay = fake_response(

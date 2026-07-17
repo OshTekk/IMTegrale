@@ -146,6 +146,13 @@ def validate_imt_url(url: str, allowed_origins: Collection[Origin] = TRUSTED_IMT
     return url
 
 
+def _is_idp_sso_path(path: str) -> bool:
+    normalized = path.casefold().rstrip("/")
+    return normalized == "/idp/profile/shibboleth/sso" or (
+        normalized.startswith("/idp/profile/saml2/") and normalized.endswith("/sso")
+    )
+
+
 def _form_action(base_url: str, raw_action: object, allowed_origins: Collection[Origin]) -> str:
     action = raw_action if isinstance(raw_action, str) else ""
     return validate_imt_url(urljoin(base_url, action), allowed_origins)
@@ -477,10 +484,8 @@ class ImtPassClient:
                     continue
                 allowed_origins = TRUSTED_IMT_ORIGINS if has_saml_payload else {IDP_ORIGIN}
                 target = _form_action(current.url, action, allowed_origins)
-                if not has_saml_payload:
-                    path = urlsplit(target).path.casefold()
-                    if not path.startswith("/idp/profile/saml2/") or not path.endswith("/sso"):
-                        continue
+                if not has_saml_payload and not _is_idp_sso_path(urlsplit(target).path):
+                    continue
                 continuation_form = form
                 continuation_url = target
                 break
@@ -541,8 +546,7 @@ class ImtPassClient:
             if not is_proceed:
                 continue
             candidate = validate_imt_url(urljoin(response.url, raw_url), {IDP_ORIGIN})
-            path = urlsplit(candidate).path.casefold()
-            if not path.startswith("/idp/profile/saml2/") or not path.endswith("/sso"):
+            if not _is_idp_sso_path(urlsplit(candidate).path):
                 raise ImtFetchError("La continuation SSO IMT a fourni un chemin inattendu")
             return candidate
         return None
