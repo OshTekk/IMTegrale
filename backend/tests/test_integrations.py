@@ -257,6 +257,38 @@ def test_cas_accepts_the_official_shibboleth_consent_form(monkeypatch) -> None:
     ]
 
 
+def test_cas_accepts_the_official_shibboleth_session_path(monkeypatch) -> None:
+    client = ImtPassClient()
+    session_path = "/idp/profile/Shibboleth/SSO;jsessionid=0123456789ABCDEF0123456789ABCDEF"
+    consent = fake_response(
+        url=f"https://idp.imt-atlantique.fr{session_path}?execution=e1s2",
+        body=(
+            f'<form action="{session_path}?execution=e1s2">'
+            '<input type="hidden" name="csrf_token" value="opaque">'
+            '<button name="_eventId_proceed" value="Accept">Continuer</button></form>'
+        ).encode(),
+    )
+    dashboard = fake_response(
+        url="https://hub.imt-atlantique.fr/comp2/etudiant/40419/home",
+        body=b"student dashboard",
+    )
+    posts: list[tuple[str, list[tuple[str, str]]]] = []
+
+    def post(url: str, *, data: list[tuple[str, str]], **_kwargs) -> requests.Response:
+        posts.append((url, data))
+        return dashboard
+
+    monkeypatch.setattr(client, "_post", post)
+
+    assert client._complete_cas(consent, "student", "secret") is dashboard
+    assert posts == [
+        (
+            f"https://idp.imt-atlantique.fr{session_path}?execution=e1s2",
+            [("csrf_token", "opaque"), ("_eventId_proceed", "Accept")],
+        )
+    ]
+
+
 def test_cas_does_not_submit_a_shibboleth_lookalike_path(monkeypatch) -> None:
     client = ImtPassClient()
     consent = fake_response(
@@ -272,6 +304,28 @@ def test_cas_does_not_submit_a_shibboleth_lookalike_path(monkeypatch) -> None:
         nonlocal called
         called = True
         raise AssertionError("an unexpected IdP path must not be submitted")
+
+    monkeypatch.setattr(client, "_post", unexpected_post)
+
+    assert client._complete_cas(consent, "student", "secret") is consent
+    assert called is False
+
+
+def test_cas_does_not_submit_an_unbounded_shibboleth_session_path(monkeypatch) -> None:
+    client = ImtPassClient()
+    consent = fake_response(
+        url="https://idp.imt-atlantique.fr/idp/profile/Shibboleth/SSO",
+        body=(
+            b'<form action="/idp/profile/Shibboleth/SSO;jsessionid=short">'
+            b'<button name="_eventId_proceed" value="Accept">Continuer</button></form>'
+        ),
+    )
+    called = False
+
+    def unexpected_post(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("an invalid IdP session path must not be submitted")
 
     monkeypatch.setattr(client, "_post", unexpected_post)
 

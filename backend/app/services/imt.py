@@ -148,6 +148,7 @@ def validate_imt_url(url: str, allowed_origins: Collection[Origin] = TRUSTED_IMT
 
 def _is_idp_sso_path(path: str) -> bool:
     normalized = path.casefold().rstrip("/")
+    normalized = re.sub(r";jsessionid=[a-z0-9._-]{16,160}$", "", normalized)
     return normalized == "/idp/profile/shibboleth/sso" or (
         normalized.startswith("/idp/profile/saml2/") and normalized.endswith("/sso")
     )
