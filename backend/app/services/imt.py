@@ -443,7 +443,10 @@ class ImtPassClient:
             for form in soup.find_all("form"):
                 controls = form.find_all(("input", "button"))
                 names = {item.get("name") for item in controls}
-                has_saml_payload = bool(names & {"SAMLResponse", "SAMLRequest"})
+                action = form.get("action")
+                has_saml_payload = bool(
+                    names & {"SAMLResponse", "SAMLRequest"}
+                ) or "saml2/post/sso" in (action or "").casefold()
                 has_proceed_control = any(
                     "proceed" in (item.get("name") or "").casefold()
                     or "accept" in (item.get("value") or "").casefold()
@@ -452,7 +455,7 @@ class ImtPassClient:
                 if not has_saml_payload and not has_proceed_control:
                     continue
                 allowed_origins = TRUSTED_IMT_ORIGINS if has_saml_payload else {IDP_ORIGIN}
-                target = _form_action(current.url, form.get("action"), allowed_origins)
+                target = _form_action(current.url, action, allowed_origins)
                 if not has_saml_payload:
                     path = urlsplit(target).path.casefold()
                     if not path.startswith("/idp/profile/saml2/") or not path.endswith("/sso"):

@@ -226,6 +226,58 @@ def test_cas_accepts_the_official_idp_consent_form(monkeypatch) -> None:
     ]
 
 
+def test_cas_follows_an_official_action_only_saml_relay(monkeypatch) -> None:
+    client = ImtPassClient()
+    relay = fake_response(
+        url="https://cas.imt-atlantique.fr/cas/login",
+        body=(
+            b'<form action="https://pass.imt-atlantique.fr/SAML2/POST/SSO">'
+            b'<input type="hidden" name="RelayState" value="opaque"></form>'
+        ),
+    )
+    report = fake_response(
+        url="https://pass.imt-atlantique.fr/OpDotNet/",
+        body=b"PASS",
+    )
+    posts: list[tuple[str, list[tuple[str, str]]]] = []
+
+    def post(url: str, *, data: list[tuple[str, str]], **_kwargs) -> requests.Response:
+        posts.append((url, data))
+        return report
+
+    monkeypatch.setattr(client, "_post", post)
+
+    assert client._complete_cas(relay, "student", "secret") is report
+    assert posts == [
+        (
+            "https://pass.imt-atlantique.fr/SAML2/POST/SSO",
+            [("RelayState", "opaque")],
+        )
+    ]
+
+
+def test_cas_rejects_an_untrusted_action_only_saml_relay(monkeypatch) -> None:
+    client = ImtPassClient()
+    relay = fake_response(
+        body=(
+            b'<form action="https://evil.example/SAML2/POST/SSO">'
+            b'<input type="hidden" name="RelayState" value="opaque"></form>'
+        )
+    )
+    called = False
+
+    def unexpected_post(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("the SAML relay must remain on an official IMT origin")
+
+    monkeypatch.setattr(client, "_post", unexpected_post)
+
+    with pytest.raises(ImtFetchError):
+        client._complete_cas(relay, "student", "secret")
+    assert called is False
+
+
 def test_telegram_messages_have_stable_chunk_and_note_limits() -> None:
     chunks = split_message("x" * 1000, limit=100, max_chunks=3)
     assert len(chunks) == 3
