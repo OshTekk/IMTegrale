@@ -4,6 +4,7 @@ import fcntl
 import hashlib
 import logging
 import math
+import re
 from contextlib import contextmanager
 from datetime import timedelta
 from pathlib import Path
@@ -308,21 +309,47 @@ def apply_competency_ues(
         code = ue_code(entry.ue_code)
         title = clean_text(entry.title)
         credits = float(entry.credits_ects)
+        earned_credits = (
+            float(entry.earned_credits_ects)
+            if entry.earned_credits_ects is not None
+            else None
+        )
         if not code or len(code) > MAX_UE_CODE_LENGTH:
             raise ImtFetchError("COMPETENCES a fourni un code UE invalide")
         if not title or len(title) > 200:
             raise ImtFetchError("COMPETENCES a fourni un intitulé d'UE invalide")
         if not math.isfinite(credits) or not 0 < credits <= 60:
             raise ImtFetchError("COMPETENCES a fourni des crédits ECTS invalides")
+        if earned_credits is not None and (
+            not math.isfinite(earned_credits) or not 0 <= earned_credits <= credits
+        ):
+            raise ImtFetchError("COMPETENCES a fourni des crédits obtenus invalides")
+        if entry.semester is not None and not re.fullmatch(r"S(?:[1-9]|1\d|20)", entry.semester):
+            raise ImtFetchError("COMPETENCES a fourni un semestre invalide")
+        if entry.grade is not None and entry.grade not in {"A", "B", "C", "D", "E", "FX", "F"}:
+            raise ImtFetchError("COMPETENCES a fourni un grade invalide")
 
         setting = by_code.get(code)
         if setting is None:
             setting = UeSetting(account_id=account.id, code=code, year=ue_year(code))
             db.add(setting)
             by_code[code] = setting
-        changed = setting.title != title or setting.credits_ects != credits
+        changed = any(
+            (
+                setting.title != title,
+                setting.credits_ects != credits,
+                setting.earned_credits_ects != earned_credits,
+                setting.semester != entry.semester,
+                setting.official_code != entry.official_code,
+                setting.official_grade != entry.grade,
+            )
+        )
         setting.title = title
         setting.credits_ects = credits
+        setting.earned_credits_ects = earned_credits
+        setting.semester = entry.semester
+        setting.official_code = entry.official_code
+        setting.official_grade = entry.grade
         setting.metadata_source = "competences"
         setting.metadata_refreshed_at = now
         setting.updated_at = now

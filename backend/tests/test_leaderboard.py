@@ -115,6 +115,14 @@ def make_visible(account_id: str) -> None:
         db.commit()
 
 
+def make_withdrawable(account_id: str) -> None:
+    with SessionLocal() as db:
+        profile = db.get(LeaderboardProfile, account_id)
+        assert profile is not None
+        profile.ranking_visible_at = utcnow() - timedelta(hours=48, seconds=1)
+        db.commit()
+
+
 @pytest.mark.parametrize(
     ("raw_campus", "expected"),
     [
@@ -238,6 +246,17 @@ def test_opt_in_wait_visibility_withdrawal_and_dense_ties(
     average = client.get("/api/v1/leaderboard?metric=average&cohort=1a").json()
     assert average["board"]["entries"][0]["score"] == 15.33
 
+    locked_withdrawal = beta.delete(
+        "/api/v1/leaderboard/participation",
+        headers=csrf_headers(beta),
+    )
+    assert locked_withdrawal.status_code == 409
+
+    make_withdrawable(beta_id)
+    unlocked = beta.get("/api/v1/leaderboard").json()
+    assert unlocked["state"] == "active"
+    assert unlocked["can_withdraw"] is True
+
     withdrawn = beta.delete(
         "/api/v1/leaderboard/participation",
         headers=csrf_headers(beta),
@@ -328,6 +347,42 @@ def test_leaderboard_score_uses_all_raw_pass_notes_only(client: TestClient, monk
     assert score.average == 15.33
     assert score.gpa == 3.8
     assert score.note_count == 2
+
+
+def test_official_competencies_grade_has_priority_for_gpa(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    def official_grade_notes(
+        pass_client: ImtPassClient,
+        username: str,
+        password: str,
+    ) -> list[PassEntry]:
+        entries = leaderboard_notes(pass_client, username, password)
+        pass_client.last_competency_ues = [
+            CompetencyUe(
+                "SIT130",
+                "Outils mathematiques",
+                4,
+                official_code="FIP-SIT130-BR-2025",
+                semester="S1",
+                grade="A",
+                earned_credits_ects=4,
+            )
+        ]
+        return entries
+
+    monkeypatch.setattr(ImtPassClient, "fetch_entries", official_grade_notes)
+    account_id = prepare_owner(client, "official-grade@imt-atlantique.fr")
+
+    with SessionLocal() as db:
+        score = account_leaderboard_score(db, account_id)
+
+    dashboard_ue = client.get("/api/v1/dashboard").json()["ues"][0]
+    assert score.average == 15.33
+    assert score.gpa == 4.0
+    assert dashboard_ue["grade"] == "A"
+    assert dashboard_ue["grade_source"] == "competences"
 
 
 def test_official_ects_basis_cannot_be_changed_by_account_editors(

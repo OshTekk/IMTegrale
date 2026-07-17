@@ -28,7 +28,7 @@ PASS_PROFILE_URL = (
 )
 COMPETENCIES_HOME_URL = "https://hub.imt-atlantique.fr/comp2/"
 IMT_ATLANTIQUE_IDP_ENTITY_ID = "https://idp.imt-atlantique.fr/idp/shibboleth"
-USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) IMTegrale/3.3"
+USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) IMTegrale/3.4"
 
 Origin = tuple[str, str, int]
 PASS_ORIGIN: Origin = ("https", "pass.imt-atlantique.fr", 443)
@@ -99,6 +99,10 @@ class CompetencyUe:
     ue_code: str
     title: str
     credits_ects: float
+    official_code: str = ""
+    semester: str | None = None
+    grade: str | None = None
+    earned_credits_ects: float | None = None
 
 
 def _clean(value: str) -> str:
@@ -740,6 +744,17 @@ class ImtPassClient:
         current = urlsplit(response.url)
         if re.fullmatch(r"/comp2/etudiant/\d{1,12}/ue/?", current.path, re.IGNORECASE):
             return validate_imt_url(response.url, {HUB_ORIGIN})
+        if re.fullmatch(r"/comp2/etudiant/\d{1,12}/home/?", current.path, re.IGNORECASE):
+            derived = urlunsplit(
+                (
+                    current.scheme,
+                    current.netloc,
+                    f"{current.path.rstrip('/').removesuffix('/home')}/ue",
+                    "",
+                    "",
+                )
+            )
+            return validate_imt_url(derived, {HUB_ORIGIN})
         if re.fullmatch(r"/comp2/etudiant/\d{1,12}/?", current.path, re.IGNORECASE):
             derived = urlunsplit(
                 (current.scheme, current.netloc, f"{current.path.rstrip('/')}/ue", "", "")
@@ -760,6 +775,14 @@ class ImtPassClient:
                 re.IGNORECASE,
             ):
                 return candidate
+        route_match = re.search(
+            r"/comp2/etudiant/(\d{1,12})/(?:home|ue)/?",
+            response.text,
+            re.IGNORECASE,
+        )
+        if route_match:
+            derived = urljoin(response.url, f"/comp2/etudiant/{route_match.group(1)}/ue")
+            return validate_imt_url(derived, {HUB_ORIGIN})
         return None
 
     def fetch_competency_ues_authenticated(
@@ -893,6 +916,8 @@ def parse_competency_ues(content: str) -> list[CompetencyUe]:
         r"(?:^|[-\s])([A-Z]{2,6}\d{3}[A-Z0-9]{0,8})(?=-|\s|$)",
         re.IGNORECASE,
     )
+    semester_pattern = re.compile(r"\bsemestre\s*(\d{1,2})\b", re.IGNORECASE)
+    official_grades = frozenset({"A", "B", "C", "D", "E", "FX", "F"})
     entries: dict[str, CompetencyUe] = {}
     for row in rows:
         cells = [
@@ -915,6 +940,29 @@ def parse_competency_ues(content: str) -> list[CompetencyUe]:
         if len(code) > MAX_UE_CODE_LENGTH:
             raise ImtFetchError("COMPETENCES a fourni un code UE trop long")
 
+        official_code = cells[code_index].upper()
+        if len(official_code) > 80:
+            raise ImtFetchError("COMPETENCES a fourni une référence d'UE trop longue")
+
+        semester: str | None = None
+        for cell in cells:
+            semester_match = semester_pattern.search(cell)
+            if semester_match:
+                semester_number = int(semester_match.group(1))
+                if not 1 <= semester_number <= 20:
+                    raise ImtFetchError("COMPETENCES a fourni un semestre invalide")
+                semester = f"S{semester_number}"
+                break
+
+        grade = next(
+            (
+                normalized
+                for cell in cells[code_index + 1 :]
+                if (normalized := cell.strip().upper()) in official_grades
+            ),
+            None,
+        )
+
         numeric_values = [
             value
             for value in (_decimal(cell) for cell in cells[code_index + 1 :])
@@ -929,7 +977,20 @@ def parse_competency_ues(content: str) -> list[CompetencyUe]:
         title = cells[0]
         if not title or len(title) > 200:
             raise ImtFetchError("COMPETENCES a fourni un intitulé d'UE invalide")
-        entry = CompetencyUe(ue_code=code, title=title, credits_ects=float(credits))
+        earned_credits = numeric_values[-2] if len(numeric_values) >= 2 else None
+        if earned_credits is not None and (
+            not math.isfinite(earned_credits) or not 0 <= earned_credits <= credits
+        ):
+            raise ImtFetchError("COMPETENCES a fourni des crédits obtenus invalides")
+        entry = CompetencyUe(
+            ue_code=code,
+            official_code=official_code,
+            title=title,
+            semester=semester,
+            grade=grade,
+            credits_ects=float(credits),
+            earned_credits_ects=float(earned_credits) if earned_credits is not None else None,
+        )
         previous = entries.get(code)
         if previous is not None and previous != entry:
             raise ImtFetchError("COMPETENCES a fourni deux définitions contradictoires d'une UE")

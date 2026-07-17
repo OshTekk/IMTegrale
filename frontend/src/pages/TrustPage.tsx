@@ -44,7 +44,7 @@ export function TrustPage() {
           <i><ArrowRight size={18} /></i>
           <article><span><KeyRound size={20} /></span><strong>Services IMT</strong><small>CAS vérifie, PASS et COMPETENCES répondent</small></article>
           <i><ArrowRight size={18} /></i>
-          <article><span><Database size={20} /></span><strong>Espace privé</strong><small>Importe profil, notes, UE et ECTS</small></article>
+          <article><span><Database size={20} /></span><strong>Espace privé</strong><small>Importe profil, notes, semestres, grades et ECTS</small></article>
         </div>
       </section>
 

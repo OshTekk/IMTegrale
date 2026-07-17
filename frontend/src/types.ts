@@ -21,6 +21,7 @@ export interface NoteItem {
   coefficient: number;
   is_resit: boolean;
   has_override: boolean;
+  editable: boolean;
   detected_at: string;
   updated_at: string;
 }
@@ -29,12 +30,16 @@ export interface UeItem {
   code: string;
   title: string;
   year: string;
+  semester: string | null;
+  official_code: string | null;
   credits_ects: number | null;
+  earned_credits_ects: number | null;
   metadata_source: "manual" | "competences";
   metadata_refreshed_at: string | null;
   average: number | null;
   grade: string | null;
   grade_description: string | null;
+  grade_source: "competences" | "pass_calculated" | "manual_calculated";
   gpa: number | null;
   validated: boolean;
   used_resit: boolean;
@@ -124,6 +129,16 @@ export interface Dashboard {
   };
   years: Array<{
     year: string;
+    label: string;
+    average: number | null;
+    average_credits: number;
+    gpa: number | null;
+    gpa_credits: number;
+    validated_credits: number;
+    ue_count: number;
+  }>;
+  semesters: Array<{
+    semester: string;
     label: string;
     average: number | null;
     average_credits: number;
@@ -234,6 +249,7 @@ export interface LeaderboardView {
     classification_review_required: boolean;
     joined_at: string | null;
     ranking_visible_at: string | null;
+    withdraw_available_at: string | null;
     left_at: string | null;
     rejoin_after: string | null;
     verification_status: "standard" | "review" | "suspended";
@@ -261,6 +277,7 @@ export interface LeaderboardView {
     version: string;
     updated_at: string;
     wait_hours: number;
+    withdrawal_lock_hours: number;
     rejoin_cooldown_hours: number;
     source: string;
     weighting: string;

@@ -1,4 +1,5 @@
-import { ArrowRight, Award, BookOpenCheck, CircleCheck, CircleGauge, Clock3, GraduationCap, TriangleAlert } from "lucide-react";
+import { ArrowRight, Award, BookOpenCheck, CalendarRange, CircleCheck, CircleGauge, Clock3, GraduationCap, TriangleAlert } from "lucide-react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { Bar, BarChart, CartesianGrid, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { GradeBadge } from "../components/GradeBadge";
@@ -11,6 +12,7 @@ function LoadingOverview() {
 
 export function OverviewPage() {
   const dashboard = useDashboard();
+  const [semesterKey, setSemesterKey] = useState("");
   if (dashboard.isPending) return <LoadingOverview />;
   if (dashboard.isError || !dashboard.data) return <div className="error-panel"><TriangleAlert size={22} /><div><h2>Données indisponibles</h2><p>{dashboard.error?.message}</p></div><button className="secondary-button" onClick={() => dashboard.refetch()}>Réessayer</button></div>;
 
@@ -19,6 +21,7 @@ export function OverviewPage() {
   const progress = allocatedCredits > 0 ? Math.min(100, Math.round((data.summary.validated_credits / allocatedCredits) * 100)) : 0;
   const chart = data.ues.filter((ue) => ue.average !== null).map((ue) => ({ name: ue.code, moyenne: ue.average, validated: ue.validated }));
   const maxGradeCount = Math.max(1, ...data.grade_distribution.map((item) => item.count));
+  const selectedSemester = data.semesters.find((item) => item.semester === semesterKey) ?? data.semesters[0];
 
   return (
     <div className="overview-grid">
@@ -30,6 +33,8 @@ export function OverviewPage() {
         <article className="metric-card credits"><div className="metric-label"><span><CircleCheck size={18} /></span>ECTS validés</div><div className="metric-progress"><strong>{formatNumber(data.summary.validated_credits)}</strong><svg viewBox="0 0 44 44" aria-label={`${progress}% des crédits alloués validés`}><circle cx="22" cy="22" r="18" /><circle className="progress" cx="22" cy="22" r="18" pathLength="100" strokeDasharray={`${progress} 100`} /></svg></div><p>{progress}% des crédits renseignés</p></article>
         <article className="metric-card ues"><div className="metric-label"><span><BookOpenCheck size={18} /></span>Unités d'enseignement</div><strong>{data.summary.ue_count}</strong><p>{data.summary.note_count} notes actives</p></article>
       </section>
+
+      {selectedSemester && <section className="semester-overview-band"><header><span><CalendarRange size={19} /></span><div><small>Progression académique</small><h2>Résultats par semestre</h2></div><div className="segmented semester-overview-tabs" role="tablist" aria-label="Choisir un semestre">{data.semesters.map((item) => <button key={item.semester} type="button" role="tab" aria-selected={selectedSemester.semester === item.semester} className={selectedSemester.semester === item.semester ? "active" : ""} onClick={() => setSemesterKey(item.semester)}>{item.semester}</button>)}</div></header><div className="semester-overview-values"><div><span>Moyenne PASS</span><strong>{formatNumber(selectedSemester.average, " /20")}</strong><small>{formatNumber(selectedSemester.average_credits, " ECTS pondérés")}</small></div><div><span>GPA</span><strong>{formatNumber(selectedSemester.gpa, " /4")}</strong><small>{formatNumber(selectedSemester.gpa_credits, " ECTS pondérés")}</small></div><div><span>Crédits obtenus</span><strong>{formatNumber(selectedSemester.validated_credits)}</strong><small>{selectedSemester.ue_count} UE officielles</small></div></div></section>}
 
       <section className="content-panel performance-panel">
         <header className="panel-heading"><div><span>Performance</span><h2>Moyenne par UE</h2></div><Link to="/ues">Voir les UE <ArrowRight size={16} /></Link></header>

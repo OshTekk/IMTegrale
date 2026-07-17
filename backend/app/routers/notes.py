@@ -96,35 +96,25 @@ def update_note(
     db: Session = Depends(get_db),
 ) -> dict:
     note = _account_note(db, auth.account.id, note_id)
-    if payload.clear_overrides and note.source == "pass":
-        note.label_override = None
-        note.score_override = None
-        note.coefficient_override = None
-        note.is_resit_override = None
-    elif note.source == "pass":
-        if payload.label is not None:
-            note.label_override = clean_text(payload.label)
-        if payload.score is not None:
-            note.score_override = payload.score
-        if payload.coefficient is not None:
-            note.coefficient_override = payload.coefficient
-        if payload.is_resit is not None:
-            note.is_resit_override = payload.is_resit
-    else:
-        if payload.ue_code is not None:
-            code = ue_code(payload.ue_code)
-            setting = ensure_ue_capacity(db, auth.account.id, code)
-            if setting is None:
-                db.add(UeSetting(account_id=auth.account.id, code=code, year=ue_year(code)))
-            note.ue_code = code
-        if payload.label is not None:
-            note.raw_label = clean_text(payload.label)
-        if payload.score is not None:
-            note.raw_score = payload.score
-        if payload.coefficient is not None:
-            note.raw_coefficient = payload.coefficient
-        if payload.is_resit is not None:
-            note.raw_is_resit = payload.is_resit
+    if note.source == "pass":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Les notes officielles PASS sont en lecture seule.",
+        )
+    if payload.ue_code is not None:
+        code = ue_code(payload.ue_code)
+        setting = ensure_ue_capacity(db, auth.account.id, code)
+        if setting is None:
+            db.add(UeSetting(account_id=auth.account.id, code=code, year=ue_year(code)))
+        note.ue_code = code
+    if payload.label is not None:
+        note.raw_label = clean_text(payload.label)
+    if payload.score is not None:
+        note.raw_score = payload.score
+    if payload.coefficient is not None:
+        note.raw_coefficient = payload.coefficient
+    if payload.is_resit is not None:
+        note.raw_is_resit = payload.is_resit
     note.updated_at = utcnow()
     record_event(
         db,
@@ -144,12 +134,13 @@ def hide_note(
     db: Session = Depends(get_db),
 ) -> dict:
     note = _account_note(db, auth.account.id, note_id)
+    if note.source == "pass":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Les notes officielles PASS ne peuvent pas être masquées.",
+        )
     event_payload = {"note_id": note.id, "ue_code": note.ue_code}
-    if note.source == "manual":
-        db.delete(note)
-    else:
-        note.hidden_by_user = True
-        note.updated_at = utcnow()
+    db.delete(note)
     record_event(
         db,
         account_id=auth.account.id,

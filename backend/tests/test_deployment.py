@@ -27,6 +27,22 @@ def test_internal_proxy_requires_mutual_tls_and_a_trusted_identity_header() -> N
     assert "tcp dport 8080" not in firewall
 
 
+def test_admin_console_uses_api_limits_while_admin_login_stays_strict() -> None:
+    nginx = read("deploy/pve/botnote-nginx.conf")
+    login_block = nginx.split("location = /api/v1/admin/auth/login", 1)[1].split(
+        "location ~ ^/(?:api/v1/admin(?:/|$)|admin(?:/|$))",
+        1,
+    )[0]
+    console_block = nginx.split(
+        "location ~ ^/(?:api/v1/admin(?:/|$)|admin(?:/|$))",
+        1,
+    )[1].split("location ~ ^/api/v1/auth/login", 1)[0]
+
+    assert "limit_req zone=botnote_auth " in login_block
+    assert "limit_req zone=botnote_api " in console_block
+    assert "limit_req zone=botnote_auth " not in console_block
+
+
 def test_services_share_the_atomic_release_runtime() -> None:
     web_service = read("deploy/botnote-web.service")
     worker_service = read("deploy/botnote-worker.service")

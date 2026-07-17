@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { BookOpenCheck, Gauge, KeyRound, LogOut, NotebookPen, RefreshCw, Settings, ShieldCheck, SlidersHorizontal, Trophy } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { BookOpenCheck, Ellipsis, Gauge, KeyRound, LogOut, NotebookPen, RefreshCw, Settings, ShieldCheck, SlidersHorizontal, Trophy } from "lucide-react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import { queryKeys, useDashboard, useRefreshDashboard } from "../lib/queries";
@@ -8,6 +8,7 @@ import { broadcastSessionChange } from "../lib/sessionSync";
 import { formatSyncDuration, manualSyncMessage, useServerCountdown } from "../lib/sync";
 import type { Session } from "../types";
 import { Logo } from "./Logo";
+import { Modal } from "./Modal";
 import { SourceNotice } from "./SourceNotice";
 import { ThemeToggle } from "./ThemeToggle";
 import { useToast } from "./Toast";
@@ -30,7 +31,11 @@ const titles: Record<string, [string, string]> = {
   "/settings": ["Paramètres", "Compte, synchronisation et notifications"]
 };
 
-export function AppShell({ session }: { session: Session }) {
+function PageRouteLoading() {
+  return <div className="page-route-loading" aria-busy="true" aria-label="Chargement de la page"><div className="skeleton route-heading-skeleton" /><div className="skeleton route-content-skeleton" /></div>;
+}
+
+export function AppShell({ session, preloadRoute }: { session: Session; preloadRoute: (path: string) => void }) {
   const location = useLocation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -38,9 +43,13 @@ export function AppShell({ session }: { session: Session }) {
   const sync = useRefreshDashboard();
   const { showToast } = useToast();
   const [profileOpen, setProfileOpen] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [live, setLive] = useState<"connected" | "connecting">("connecting");
   const [title, subtitle] = titles[location.pathname] ?? titles["/"]!;
   const visibleNav = useMemo(() => navItems.filter((item) => !item.ownerOnly || session.role === "owner"), [session.role]);
+  const mobilePrimaryNav = useMemo(() => visibleNav.filter((item) => !["/sharing", "/settings"].includes(item.to)), [visibleNav]);
+  const mobileSecondaryNav = useMemo(() => visibleNav.filter((item) => ["/sharing", "/settings"].includes(item.to)), [visibleNav]);
+  const profileWrap = useRef<HTMLDivElement>(null);
   const manualSync = dashboard.data?.account.manual_sync;
   const syncRemaining = useServerCountdown(manualSync);
   const syncMessage = manualSyncMessage(manualSync, syncRemaining);
@@ -60,6 +69,27 @@ export function AppShell({ session }: { session: Session }) {
     });
     return () => source.close();
   }, [dashboard.data?.latest_event_id, queryClient]);
+
+  useEffect(() => {
+    setProfileOpen(false);
+    setMobileMenuOpen(false);
+  }, [location.pathname]);
+
+  useEffect(() => {
+    if (!profileOpen) return;
+    const close = (event: PointerEvent) => {
+      if (!profileWrap.current?.contains(event.target as Node)) setProfileOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setProfileOpen(false);
+    };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [profileOpen]);
 
   useEffect(() => {
     if (!manualSync || manualSync.can_start || syncRemaining > 0) {
@@ -98,7 +128,7 @@ export function AppShell({ session }: { session: Session }) {
       <aside className="sidebar">
         <div className="sidebar-brand"><Logo /></div>
         <nav className="sidebar-nav" aria-label="Navigation principale">
-          {visibleNav.map((item) => <NavLink key={item.to} to={item.to} end={item.to === "/"} className={({ isActive }) => isActive ? "active" : ""}><item.icon size={19} /><span>{item.label}</span></NavLink>)}
+          {visibleNav.map((item) => <NavLink key={item.to} to={item.to} end={item.to === "/"} viewTransition onMouseEnter={() => preloadRoute(item.to)} onFocus={() => preloadRoute(item.to)} className={({ isActive }) => isActive ? "active" : ""}><item.icon size={19} /><span>{item.label}</span></NavLink>)}
         </nav>
         {session.role === "viewer" && <div className="access-badge"><ShieldCheck size={17} /><div><strong>Lecture seule</strong><span>Accès partagé</span></div></div>}
         {session.role === "editor" && <div className="access-badge editor"><SlidersHorizontal size={17} /><div><strong>Édition</strong><span>Accès partagé</span></div></div>}
@@ -111,7 +141,7 @@ export function AppShell({ session }: { session: Session }) {
           <div className="topbar-actions">
             {session.role === "owner" && <button className="secondary-button sync-button" type="button" onClick={runSync} disabled={sync.isPending || !manualSync?.can_start} aria-label={syncMessage} title={syncMessage}><RefreshCw size={17} className={sync.isPending || manualSync?.state === "in_progress" ? "spin" : ""} /><span>{syncButtonLabel}</span></button>}
             <ThemeToggle />
-            <div className="profile-wrap">
+            <div className="profile-wrap" ref={profileWrap}>
               <button className="profile-button" type="button" onClick={() => setProfileOpen((value) => !value)} aria-expanded={profileOpen} aria-label={`Ouvrir le profil de ${session.account?.display_name ?? "l'utilisateur"}`}>
                 <span className="avatar">{session.account?.display_name.slice(0, 2).toUpperCase()}</span>
                 <span className="profile-copy"><strong>{session.account?.display_name}</strong><small>{session.auth_method === "imt" ? "Compte IMT" : "Accès partagé"}</small></span>
@@ -120,13 +150,18 @@ export function AppShell({ session }: { session: Session }) {
             </div>
           </div>
         </header>
-        <main className="page-content"><Outlet /></main>
+        <main className="page-content"><Suspense fallback={<PageRouteLoading />}><Outlet /></Suspense></main>
         <footer className="product-footer"><SourceNotice compact /></footer>
       </div>
 
       <nav className="mobile-nav" aria-label="Navigation mobile">
-        {visibleNav.map((item) => <NavLink key={item.to} to={item.to} end={item.to === "/"} className={({ isActive }) => isActive ? "active" : ""}><item.icon size={20} /><span>{item.short}</span></NavLink>)}
+        {mobilePrimaryNav.map((item) => <NavLink key={item.to} to={item.to} end={item.to === "/"} viewTransition onTouchStart={() => preloadRoute(item.to)} onFocus={() => preloadRoute(item.to)} className={({ isActive }) => isActive ? "active" : ""}><item.icon size={20} /><span>{item.short}</span></NavLink>)}
+        {mobileSecondaryNav.length > 0 && <button className={mobileSecondaryNav.some((item) => item.to === location.pathname) ? "active" : ""} type="button" onClick={() => setMobileMenuOpen(true)} aria-label="Ouvrir les autres pages" aria-expanded={mobileMenuOpen}><Ellipsis size={21} /><span>Plus</span></button>}
       </nav>
+
+      <Modal open={mobileMenuOpen} title="Autres pages" description="Compte, accès et préférences." onClose={() => setMobileMenuOpen(false)}>
+        <nav className="mobile-overflow-links" aria-label="Navigation secondaire">{mobileSecondaryNav.map((item) => <NavLink key={item.to} to={item.to} viewTransition onTouchStart={() => preloadRoute(item.to)} onFocus={() => preloadRoute(item.to)} onClick={() => setMobileMenuOpen(false)}><item.icon size={19} /><span><strong>{item.label}</strong><small>{item.to === "/sharing" ? "Tokens et accès partagés" : "Compte, synchronisation et notifications"}</small></span></NavLink>)}</nav>
+      </Modal>
     </div>
   );
 }

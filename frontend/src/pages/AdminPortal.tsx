@@ -507,7 +507,7 @@ function AdminDashboard({ session, onLogout }: { session: AdminSession; onLogout
     staleTime: 5_000,
   });
   const audit = useQuery({ queryKey: ["admin", "audit"], queryFn: () => adminApi<AuditItem[]>("/api/v1/admin/audit"), enabled: tab === "audit", staleTime: 5_000 });
-  const passStatus = useQuery({ queryKey: ["admin", "pass", "status"], queryFn: () => adminApi<AdminPassStatus>("/api/v1/admin/pass/status"), enabled: tab === "pass", refetchInterval: tab === "pass" ? 15_000 : false });
+  const passStatus = useQuery({ queryKey: ["admin", "pass", "status"], queryFn: () => adminApi<AdminPassStatus>("/api/v1/admin/pass/status"), enabled: tab === "pass", staleTime: 15_000, refetchInterval: tab === "pass" ? 30_000 : false });
   const passMetrics = useQuery({ queryKey: ["admin", "pass", "metrics", metricsWindow], queryFn: () => adminApi<AdminPassMetrics>(`/api/v1/admin/pass/metrics?window=${metricsWindow}`), enabled: tab === "pass", staleTime: 10_000 });
   const selected = useMemo(() => accounts.data?.accounts.find((account) => account.id === selectedId) ?? null, [accounts.data, selectedId]);
   const refreshAccounts = (updated?: AdminAccount) => {

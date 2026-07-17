@@ -170,8 +170,12 @@ class UeSetting(Base):
     account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), index=True)
     code: Mapped[str] = mapped_column(String(32))
     credits_ects: Mapped[float | None] = mapped_column(Float)
+    earned_credits_ects: Mapped[float | None] = mapped_column(Float)
     title: Mapped[str] = mapped_column(String(200), default="")
     year: Mapped[str] = mapped_column(String(16), default="")
+    semester: Mapped[str | None] = mapped_column(String(16))
+    official_code: Mapped[str | None] = mapped_column(String(80))
+    official_grade: Mapped[str | None] = mapped_column(String(4))
     metadata_source: Mapped[str] = mapped_column(String(24), default="manual")
     metadata_refreshed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
@@ -401,12 +405,19 @@ class WebSession(Base):
 
 class LeaderboardProfile(Base):
     __tablename__ = "leaderboard_profiles"
+    __table_args__ = (
+        UniqueConstraint(
+            "pseudonym_key",
+            name="uq_leaderboard_profiles_pseudonym_key",
+        ),
+        Index("ix_leaderboard_profiles_pseudonym_key", "pseudonym_key"),
+    )
 
     account_id: Mapped[str] = mapped_column(
         ForeignKey("accounts.id", ondelete="CASCADE"), primary_key=True
     )
     pseudonym: Mapped[str | None] = mapped_column(String(24))
-    pseudonym_key: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)
+    pseudonym_key: Mapped[str | None] = mapped_column(String(64))
     is_participating: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     joined_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ranking_visible_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -427,9 +438,13 @@ class LeaderboardProfile(Base):
 
 class AdminUser(Base):
     __tablename__ = "admin_users"
+    __table_args__ = (
+        UniqueConstraint("username", name="uq_admin_users_username"),
+        Index("ix_admin_users_username", "username", unique=True),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    username: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    username: Mapped[str] = mapped_column(String(80))
     password_hash: Mapped[str] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -440,13 +455,17 @@ class AdminUser(Base):
 
 class AdminSession(Base):
     __tablename__ = "admin_sessions"
-    __table_args__ = (Index("ix_admin_sessions_expires_at", "expires_at"),)
+    __table_args__ = (
+        UniqueConstraint("digest", name="uq_admin_sessions_digest"),
+        Index("ix_admin_sessions_digest", "digest", unique=True),
+        Index("ix_admin_sessions_expires_at", "expires_at"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     admin_user_id: Mapped[str] = mapped_column(
         ForeignKey("admin_users.id", ondelete="CASCADE"), index=True
     )
-    digest: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    digest: Mapped[str] = mapped_column(String(64))
     csrf_digest: Mapped[str] = mapped_column(String(64))
     identity_digest: Mapped[str] = mapped_column(String(64))
     user_agent: Mapped[str] = mapped_column(String(300), default="")

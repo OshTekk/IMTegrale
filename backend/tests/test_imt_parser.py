@@ -1,6 +1,8 @@
 import pytest
+import requests
 from app.services.imt import (
     ImtFetchError,
+    ImtPassClient,
     parse_competency_ues,
     parse_pass_export,
     parse_pass_profile,
@@ -49,6 +51,16 @@ def test_imt_url_policy_accepts_exact_competencies_origin() -> None:
     assert validate_imt_url(url) == url
 
 
+def test_competencies_home_route_derives_the_official_ue_route() -> None:
+    response = requests.Response()
+    response.url = "https://hub.imt-atlantique.fr/comp2/etudiant/40419/home"
+    response._content = b"<html></html>"
+
+    assert ImtPassClient._competency_ue_url(response) == (
+        "https://hub.imt-atlantique.fr/comp2/etudiant/40419/ue"
+    )
+
+
 def test_competencies_parser_imports_official_titles_and_attempted_credits() -> None:
     content = """
     <table>
@@ -69,10 +81,17 @@ def test_competencies_parser_imports_official_titles_and_attempted_credits() -> 
     entries = parse_competency_ues(content)
 
     assert entries[0].ue_code == "SIT140"
+    assert entries[0].official_code == "FIP-SIT140-BR-2025"
     assert entries[0].title == "Outils physiques pour l'ingénieur S5"
+    assert entries[0].semester == "S1"
+    assert entries[0].grade == "E"
     assert entries[0].credits_ects == 3
+    assert entries[0].earned_credits_ects == 3
     assert entries[1].ue_code == "PRJ120"
+    assert entries[1].semester == "S2"
+    assert entries[1].grade == "FX"
     assert entries[1].credits_ects == 5
+    assert entries[1].earned_credits_ects == 0
 
 
 def test_competencies_parser_rejects_conflicting_duplicate_codes() -> None:

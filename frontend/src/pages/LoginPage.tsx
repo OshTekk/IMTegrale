@@ -16,7 +16,7 @@ import type { Session } from "../types";
 type LoginMode = "passkey" | "imt" | "token";
 
 export function LoginPage() {
-  const [mode, setMode] = useState<LoginMode>(passkeysSupported() ? "passkey" : "imt");
+  const [mode, setMode] = useState<LoginMode>("imt");
   const [showPassword, setShowPassword] = useState(false);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -74,12 +74,13 @@ export function LoginPage() {
         </section>
 
         <section className="login-panel">
-          <div className="login-heading"><span>Accès sécurisé</span><h2>Se connecter</h2></div>
+          <div className="login-heading"><span>{mode === "imt" ? "Première connexion ou retour" : "Compte déjà créé"}</span><h2>{mode === "imt" ? "Connexion avec ton compte IMT" : mode === "passkey" ? "Connexion par passkey" : "Connexion par token"}</h2></div>
           <div className="segmented login-methods" role="tablist" aria-label="Méthode de connexion">
+            <button className={mode === "imt" ? "active" : ""} onClick={() => selectMode("imt")} type="button" role="tab" aria-selected={mode === "imt"}><School size={17} /> Compte IMT</button>
             {passkeysSupported() && <button className={mode === "passkey" ? "active" : ""} onClick={() => selectMode("passkey")} type="button" role="tab" aria-selected={mode === "passkey"}><Fingerprint size={17} /> Passkey</button>}
-            <button className={mode === "imt" ? "active" : ""} onClick={() => selectMode("imt")} type="button" role="tab" aria-selected={mode === "imt"}><School size={17} /> IMT</button>
             <button className={mode === "token" ? "active" : ""} onClick={() => selectMode("token")} type="button" role="tab" aria-selected={mode === "token"}><KeyRound size={17} /> Token</button>
           </div>
+          <div className={`login-method-note ${mode}`}><span>{mode === "imt" ? <School size={18} /> : mode === "passkey" ? <Fingerprint size={18} /> : <KeyRound size={18} />}</span><p>{mode === "imt" ? <><strong>Nouveau sur IMTégrale ? Commence ici.</strong> Ton espace est créé après vérification par l'IMT. Si ton compte existe déjà, aucune synchronisation de notes n'est lancée.</> : mode === "passkey" ? <><strong>Accès rapide recommandé après l'inscription.</strong> Utilise la clé enregistrée sur cet appareil, sans contacter PASS.</> : <><strong>Accès personnel ou partagé.</strong> Utilise un token généré depuis un compte IMTégrale existant.</>}</p></div>
 
           <form onSubmit={submit} className="login-form">
             {mode === "passkey" && <div className="passkey-login-choice"><span><Fingerprint size={28} /></span><div><strong>Connexion sans mot de passe</strong><p>Utilise Face ID, Touch ID, Windows Hello ou la sécurité de ton appareil.</p></div></div>}
@@ -95,7 +96,7 @@ export function LoginPage() {
             {login.error && <div className="form-error" role="alert">{login.error.message}</div>}
             <button className="primary-button login-submit" disabled={login.isPending} type="submit">
               {login.isPending ? <span className="spinner" /> : mode === "passkey" ? <Fingerprint size={18} /> : <LockKeyhole size={18} />}
-              {login.isPending ? "Vérification…" : mode === "passkey" ? "Utiliser ma passkey" : "Continuer"}
+              {login.isPending ? "Vérification…" : mode === "passkey" ? "Utiliser ma passkey" : mode === "imt" ? "Se connecter avec l'IMT" : "Utiliser ce token"}
             </button>
           </form>
           <p className="login-footnote">HTTPS · Session HttpOnly · Protection CSRF</p>

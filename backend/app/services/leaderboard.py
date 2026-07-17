@@ -10,14 +10,15 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.calculations import grade_for_average
+from app.calculations import grade_for_average, grade_from_code
 from app.database import utcnow
 from app.models import Account, LeaderboardProfile, Note, UeSetting
 
-LEADERBOARD_CONSENT_VERSION = "2026-07-17.2"
-LEADERBOARD_RULES_VERSION = "2026-07-17.2"
+LEADERBOARD_CONSENT_VERSION = "2026-07-17.3"
+LEADERBOARD_RULES_VERSION = "2026-07-17.3"
 LEADERBOARD_RULES_UPDATED_AT = "2026-07-17"
 LEADERBOARD_WAIT = timedelta(hours=48)
+LEADERBOARD_WITHDRAWAL_LOCK = timedelta(hours=48)
 LEADERBOARD_REJOIN_COOLDOWN = timedelta(hours=48)
 
 CAMPUSES = frozenset({"rennes", "brest", "nantes", "other"})
@@ -260,6 +261,12 @@ def calculate_raw_pass_score(
             if setting.credits_ects is not None
         }
     )
+    official_grades = {
+        setting.code: grade
+        for setting in settings
+        if setting.metadata_source == "competences"
+        and (grade := grade_from_code(setting.official_grade)) is not None
+    }
     weighted_average_total = 0.0
     weighted_gpa_total = 0.0
     credits = 0.0
@@ -282,7 +289,7 @@ def calculate_raw_pass_score(
         if ects is None or float(ects) <= 0:
             missing_ects += 1
             continue
-        grade = grade_for_average(average, used_resit)
+        grade = official_grades.get(code) or grade_for_average(average, used_resit)
         if grade is None:
             continue
         weighted_average_total += average * float(ects)
@@ -358,8 +365,11 @@ def _official_leaderboard_score(
             )
         )
     )
+    settings = list(
+        db.scalars(select(UeSetting).where(UeSetting.account_id == account.id))
+    )
     basis, missing = _official_ects_basis(db, account, {note.ue_code for note in notes})
-    return calculate_raw_pass_score(notes, [], ects_basis=basis), basis, missing
+    return calculate_raw_pass_score(notes, settings, ects_basis=basis), basis, missing
 
 
 def account_leaderboard_score(db: Session, account_id: str) -> LeaderboardScore:
@@ -435,14 +445,17 @@ def rules_view() -> dict:
         "version": LEADERBOARD_RULES_VERSION,
         "updated_at": LEADERBOARD_RULES_UPDATED_AT,
         "wait_hours": 48,
+        "withdrawal_lock_hours": 48,
         "rejoin_cooldown_hours": 48,
-        "source": "Notes brutes synchronisées depuis PASS uniquement",
-        "weighting": "Moyennes d'UE pondérées par les ECTS officiels COMPETENCES courants",
+        "source": "Notes brutes PASS et grades officiels COMPETENCES lorsqu'ils sont disponibles",
+        "weighting": (
+            "Moyennes d'UE et GPA pondérés par les ECTS officiels COMPETENCES courants ; "
+            "un grade absent est calculé depuis PASS"
+        ),
         "segment": "Cursus de primo-inscription et année de sortie vérifiés par PASS",
         "excluded": [
             "notes manuelles",
-            "corrections utilisateur",
-            "masquage local des notes PASS",
+            "données et simulations locales",
             "ECTS manuels ou issus d'une ancienne génération COMPETENCES",
         ],
         "ties": "Rang dense : un score identique reçoit le même rang",
@@ -485,6 +498,12 @@ def _profile_view(account: Account, profile: LeaderboardProfile | None, score: L
         missing.append("pass_notes")
     if score.missing_ects_count:
         missing.append("ects")
+    withdraw_available_at = (
+        ensure_utc(profile.ranking_visible_at) + LEADERBOARD_WITHDRAWAL_LOCK
+        if profile and profile.is_participating and profile.ranking_visible_at
+        else None
+    )
+    privacy_unlocked = bool(withdraw_available_at and withdraw_available_at <= now)
     return {
         "state": state,
         "profile": {
@@ -508,6 +527,7 @@ def _profile_view(account: Account, profile: LeaderboardProfile | None, score: L
             "classification_review_required": account.classification_review_required,
             "joined_at": profile.joined_at if profile else None,
             "ranking_visible_at": profile.ranking_visible_at if profile else None,
+            "withdraw_available_at": withdraw_available_at,
             "left_at": profile.left_at if profile else None,
             "rejoin_after": profile.rejoin_after if profile else None,
             "verification_status": profile.verification_status if profile else "standard",
@@ -524,8 +544,12 @@ def _profile_view(account: Account, profile: LeaderboardProfile | None, score: L
                 "missing_ects_count": score.missing_ects_count,
             },
         },
-        "can_withdraw": bool(profile and profile.is_participating),
-        "can_delete_data": bool(profile and profile.consent_at),
+        "can_withdraw": bool(profile and profile.is_participating and privacy_unlocked),
+        "can_delete_data": bool(
+            profile
+            and profile.consent_at
+            and (not profile.is_participating or privacy_unlocked)
+        ),
         "consent_version": LEADERBOARD_CONSENT_VERSION,
         "publication": {
             "wait_complete": bool(
@@ -789,16 +813,47 @@ def update_leaderboard_classification(
         profile.updated_at = utcnow()
 
 
-def leave_leaderboard(profile: LeaderboardProfile) -> None:
+def leave_leaderboard(
+    profile: LeaderboardProfile,
+    *,
+    enforce_lock: bool = True,
+) -> None:
     now = utcnow()
+    withdraw_available_at = (
+        ensure_utc(profile.ranking_visible_at) + LEADERBOARD_WITHDRAWAL_LOCK
+        if profile.ranking_visible_at
+        else None
+    )
+    if enforce_lock and (
+        withdraw_available_at is None or withdraw_available_at > now
+    ):
+        raise ValueError(
+            "Le retrait ordinaire reste verrouillé pendant 48 heures après l'ouverture du classement"
+        )
     profile.is_participating = False
     profile.left_at = now
     profile.rejoin_after = now + LEADERBOARD_REJOIN_COOLDOWN
     profile.updated_at = now
 
 
-def delete_leaderboard_data(account: Account, profile: LeaderboardProfile) -> None:
+def delete_leaderboard_data(
+    account: Account,
+    profile: LeaderboardProfile,
+    *,
+    enforce_lock: bool = True,
+) -> None:
     now = utcnow()
+    withdraw_available_at = (
+        ensure_utc(profile.ranking_visible_at) + LEADERBOARD_WITHDRAWAL_LOCK
+        if profile.ranking_visible_at
+        else None
+    )
+    if enforce_lock and profile.is_participating and (
+        withdraw_available_at is None or withdraw_available_at > now
+    ):
+        raise ValueError(
+            "L'effacement ordinaire reste verrouillé pendant la période d'engagement du classement"
+        )
     profile.is_participating = False
     profile.pseudonym = None
     profile.pseudonym_key = None

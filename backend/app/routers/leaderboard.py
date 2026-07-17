@@ -79,7 +79,10 @@ def withdraw_from_leaderboard(
 ) -> dict:
     profile = db.get(LeaderboardProfile, auth.account.id)
     if profile is not None and profile.is_participating:
-        leave_leaderboard(profile)
+        try:
+            leave_leaderboard(profile)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
         record_event(
             db,
             account_id=auth.account.id,
@@ -97,7 +100,10 @@ def erase_leaderboard_data(
 ) -> dict:
     profile = db.get(LeaderboardProfile, auth.account.id)
     if profile is not None:
-        delete_leaderboard_data(auth.account, profile)
+        try:
+            delete_leaderboard_data(auth.account, profile)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
         record_event(
             db,
             account_id=auth.account.id,

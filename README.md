@@ -11,13 +11,13 @@ IMTégrale est un projet étudiant indépendant. Il n'est ni affilié, ni approu
 ## Ce que fait le projet
 
 - première importation depuis un compte PASS, puis connexion par passkey, compte IMT ou token personnel ;
-- notes PASS, UE et crédits ECTS officiels, moyenne générale et GPA sur 4 ;
+- notes PASS, intitulés, semestres, grades et crédits ECTS officiels COMPETENCES, moyenne générale et GPA sur 4 ;
 - actualisation manuelle ou automatique facultative, avec des quotas pour ne pas marteler PASS ;
 - notification Telegram privée lorsqu'une note évolue ;
 - partage en lecture ou en édition avec des tokens révocables ;
 - leaderboard facultatif par promotion, avec deux classements : GPA par défaut et moyenne générale.
 
-Le leaderboard n'utilise que les notes issues de PASS. Lorsqu'un étudiant le rejoint, son identité PASS et ses deux scores deviennent visibles par les participants déjà actifs. Lui doit attendre 48 heures avant de voir le classement : cela évite l'aller-retour « j'active, je regarde, je repars ». Le retrait de ses données reste immédiat.
+Le leaderboard utilise la moyenne calculée depuis les notes brutes PASS, le grade COMPETENCES lorsqu'il existe et les ECTS officiels. Lorsqu'un étudiant le rejoint, son identité PASS et ses deux scores deviennent immédiatement visibles par les participants actifs. Lui attend 48 heures avant de voir le classement, puis reste engagé 48 heures supplémentaires avant un retrait ordinaire : l'aller-retour « j'active, je regarde, je repars » n'est donc pas possible. L'administrateur peut toujours retirer immédiatement un profil pour une urgence de confidentialité.
 
 ## Comment les données sont traitées
 

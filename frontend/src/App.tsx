@@ -9,15 +9,34 @@ import { LoginPage } from "./pages/LoginPage";
 import { clearAccountState, queryKeys, replaceSessionState, useSession } from "./lib/queries";
 import { broadcastSessionChange, subscribeToSessionChanges } from "./lib/sessionSync";
 
-const OverviewPage = lazy(() => import("./pages/OverviewPage").then((module) => ({ default: module.OverviewPage })));
-const NotesPage = lazy(() => import("./pages/NotesPage").then((module) => ({ default: module.NotesPage })));
-const UesPage = lazy(() => import("./pages/UesPage").then((module) => ({ default: module.UesPage })));
-const SharingPage = lazy(() => import("./pages/SharingPage").then((module) => ({ default: module.SharingPage })));
-const SettingsPage = lazy(() => import("./pages/SettingsPage").then((module) => ({ default: module.SettingsPage })));
-const LeaderboardPage = lazy(() => import("./pages/LeaderboardPage").then((module) => ({ default: module.LeaderboardPage })));
+const loadOverviewPage = () => import("./pages/OverviewPage");
+const loadNotesPage = () => import("./pages/NotesPage");
+const loadUesPage = () => import("./pages/UesPage");
+const loadSharingPage = () => import("./pages/SharingPage");
+const loadSettingsPage = () => import("./pages/SettingsPage");
+const loadLeaderboardPage = () => import("./pages/LeaderboardPage");
+const OverviewPage = lazy(() => loadOverviewPage().then((module) => ({ default: module.OverviewPage })));
+const NotesPage = lazy(() => loadNotesPage().then((module) => ({ default: module.NotesPage })));
+const UesPage = lazy(() => loadUesPage().then((module) => ({ default: module.UesPage })));
+const SharingPage = lazy(() => loadSharingPage().then((module) => ({ default: module.SharingPage })));
+const SettingsPage = lazy(() => loadSettingsPage().then((module) => ({ default: module.SettingsPage })));
+const LeaderboardPage = lazy(() => loadLeaderboardPage().then((module) => ({ default: module.LeaderboardPage })));
 const AdminPortal = lazy(() => import("./pages/AdminPortal").then((module) => ({ default: module.AdminPortal })));
 const TrustPage = lazy(() => import("./pages/TrustPage").then((module) => ({ default: module.TrustPage })));
 const DemoPage = lazy(() => import("./pages/DemoPage").then((module) => ({ default: module.DemoPage })));
+
+const studentRouteLoaders: Record<string, () => Promise<unknown>> = {
+  "/": loadOverviewPage,
+  "/notes": loadNotesPage,
+  "/ues": loadUesPage,
+  "/leaderboard": loadLeaderboardPage,
+  "/sharing": loadSharingPage,
+  "/settings": loadSettingsPage,
+};
+
+function preloadStudentRoute(path: string) {
+  void studentRouteLoaders[path]?.();
+}
 
 export default function App() {
   const location = useLocation();
@@ -76,9 +95,9 @@ function StudentApp() {
 
   const isOwner = session.data.role === "owner";
   return (
-    <Suspense fallback={<div className="route-loading skeleton" />}>
+    <>
       <Routes>
-        <Route element={<AppShell session={session.data} />}>
+        <Route element={<AppShell session={session.data} preloadRoute={preloadStudentRoute} />}>
           <Route index element={<OverviewPage />} />
           <Route path="notes" element={<NotesPage role={session.data.role} />} />
           <Route path="ues" element={<UesPage role={session.data.role} />} />
@@ -92,6 +111,6 @@ function StudentApp() {
         open={Boolean(isOwner && session.data.needs_security_setup)}
         onComplete={() => queryClient.invalidateQueries({ queryKey: queryKeys.session })}
       />
-    </Suspense>
+    </>
   );
 }

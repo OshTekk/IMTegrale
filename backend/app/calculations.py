@@ -13,6 +13,8 @@ GRADE_SCALE = (
     {"grade": "F", "description": "[0-5[", "gpa": 0.0, "min": 0.0},
 )
 
+OFFICIAL_GRADES = frozenset({"A", "B", "C", "D", "E", "FX", "F"})
+
 
 @dataclass(frozen=True, slots=True)
 class Grade:
@@ -44,6 +46,18 @@ def grade_for_average(average: float | None, used_resit: bool = False) -> Grade 
         if value >= row["min"]:
             return Grade(str(row["grade"]), str(row["description"]), float(row["gpa"]))
     return Grade("F", "[0-5[", 0.0)
+
+
+def grade_from_code(value: str | None) -> Grade | None:
+    code = clean_text(value).upper()
+    if code not in OFFICIAL_GRADES:
+        return None
+    if code == "E":
+        return Grade("E", "Rattrapage validé", 2.5)
+    for row in GRADE_SCALE:
+        if row["grade"] == code:
+            return Grade(code, str(row["description"]), float(row["gpa"]))
+    return None
 
 
 def weighted_average(items: list[dict], value_key: str) -> tuple[float | None, float]:

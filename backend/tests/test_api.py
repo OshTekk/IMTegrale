@@ -52,6 +52,27 @@ def test_owner_flow_calculation_and_csrf(client: TestClient, monkeypatch) -> Non
     assert dashboard["ues"][0]["grade"] == "B"
 
 
+def test_official_pass_notes_are_read_only(client: TestClient, monkeypatch) -> None:
+    monkeypatch.setattr(ImtPassClient, "fetch_entries", fake_notes)
+    login_owner(client, "readonly@imt-atlantique.fr")
+    note = client.get("/api/v1/notes").json()[0]
+
+    updated = client.patch(
+        f"/api/v1/notes/{note['id']}",
+        json={"score": 20},
+        headers=csrf_headers(client),
+    )
+    removed = client.delete(
+        f"/api/v1/notes/{note['id']}",
+        headers=csrf_headers(client),
+    )
+
+    assert note["editable"] is False
+    assert updated.status_code == 409
+    assert removed.status_code == 409
+    assert client.get("/api/v1/notes").json()[0]["score"] == note["score"]
+
+
 def test_official_competencies_metadata_is_read_only_for_account_editors(
     client: TestClient,
     monkeypatch,
@@ -79,13 +100,12 @@ def test_official_competencies_metadata_is_read_only_for_account_editors(
     )
     assert rejected.status_code == 409
 
-    updated = client.patch(
+    year_rejected = client.patch(
         "/api/v1/ues/SIT130",
         json={"year": "2"},
         headers=csrf_headers(client),
     )
-    assert updated.status_code == 200
-    assert updated.json()["metadata_source"] == "competences"
+    assert year_rejected.status_code == 409
     ue = client.get("/api/v1/dashboard").json()["ues"][0]
     assert ue["title"] == "Outils mathématiques"
     assert ue["credits_ects"] == 4
@@ -99,7 +119,15 @@ def test_registration_imports_competencies_metadata(client: TestClient, monkeypa
         _password: str,
     ) -> list[PassEntry]:
         self.last_competency_ues = [
-            CompetencyUe("SIT130", "Outils mathématiques pour l'ingénieur", 4),
+            CompetencyUe(
+                "SIT130",
+                "Outils mathématiques pour l'ingénieur",
+                4,
+                official_code="FIP-SIT130-BR-2025",
+                semester="S1",
+                grade="B",
+                earned_credits_ects=4,
+            ),
         ]
         return [PassEntry("SIT130", "Examen", 14, 1, False)]
 
@@ -110,7 +138,11 @@ def test_registration_imports_competencies_metadata(client: TestClient, monkeypa
     assert dashboard["summary"]["missing_ects_count"] == 0
     assert dashboard["ues"][0]["title"] == "Outils mathématiques pour l'ingénieur"
     assert dashboard["ues"][0]["credits_ects"] == 4
+    assert dashboard["ues"][0]["semester"] == "S1"
+    assert dashboard["ues"][0]["grade"] == "B"
+    assert dashboard["ues"][0]["grade_source"] == "competences"
     assert dashboard["ues"][0]["metadata_source"] == "competences"
+    assert dashboard["semesters"][0]["gpa"] == 3.8
 
 
 def test_official_identity_and_telegram_test_stay_owner_only(
