@@ -70,11 +70,13 @@ def test_existing_imt_login_authenticates_without_fetching_notes(
         *,
         include_profile: bool,
         include_competencies: bool,
+        competency_credentials: tuple[str, str] | None,
     ) -> list[PassEntry]:
         calls["fetch"] += 1
         raise AssertionError(
             "unexpected PASS fetch "
-            f"include_profile={include_profile} include_competencies={include_competencies}"
+            f"include_profile={include_profile} include_competencies={include_competencies} "
+            f"has_competency_credentials={competency_credentials is not None}"
         )
 
     monkeypatch.setattr(ImtPassClient, "authenticate", authenticate)

@@ -92,6 +92,42 @@ def test_competencies_url_is_derived_only_from_validated_student_route() -> None
     )
 
 
+def test_hub_sso_uses_current_credentials_when_cas_requests_login(monkeypatch) -> None:
+    client = ImtPassClient()
+    login = fake_response(
+        body=(
+            b'<form action="https://cas.imt-atlantique.fr/login">'
+            b'<input name="username"><input type="password" name="password"></form>'
+        )
+    )
+    dashboard = fake_response(
+        url="https://hub.imt-atlantique.fr/comp2/etudiant/40419",
+        body=b"student dashboard",
+    )
+    captured: list[tuple[str, str]] = []
+
+    def complete_cas(
+        _response: requests.Response,
+        username: str,
+        password: str,
+    ) -> requests.Response:
+        captured.append((username, password))
+        return dashboard
+
+    monkeypatch.setattr(client, "_complete_cas", complete_cas)
+
+    assert client._complete_hub_sso(login, ("student", "secret")) is dashboard
+    assert captured == [("student", "secret")]
+
+
+def test_hub_sso_refuses_a_password_form_without_current_credentials() -> None:
+    client = ImtPassClient()
+    login = fake_response(body=b'<form><input type="password" name="password"></form>')
+
+    with pytest.raises(ImtFetchError, match="session IMT"):
+        client._complete_hub_sso(login, None)
+
+
 def test_telegram_messages_have_stable_chunk_and_note_limits() -> None:
     chunks = split_message("x" * 1000, limit=100, max_chunks=3)
     assert len(chunks) == 3

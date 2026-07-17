@@ -646,6 +646,7 @@ def perform_login_operation(
                 entries = client.fetch_entries_authenticated(
                     include_profile=True,
                     include_competencies=True,
+                    competency_credentials=(username, password),
                 )
         _store_session(target_ref, client, credentials_updated_at)
         record_auth_outcome(target_ref=target_ref, client_ref=client_ref, outcome="success")
@@ -722,6 +723,7 @@ def perform_sync_operation(
                 entries = client.fetch_entries_authenticated(
                     include_profile=profile_due,
                     include_competencies=metadata_due,
+                    competency_credentials=(account.imt_username, password) if metadata_due else None,
                 )
             except ImtAuthenticationError:
                 request_count += client.request_count

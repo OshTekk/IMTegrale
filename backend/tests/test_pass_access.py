@@ -263,7 +263,9 @@ class FakePassClient:
         *,
         include_profile: bool,
         include_competencies: bool,
+        competency_credentials: tuple[str, str] | None,
     ) -> list[PassEntry]:
+        assert (competency_credentials is not None) is include_competencies
         self.request_count = 2
         self.last_profile = (
             PassProfile(
@@ -317,11 +319,17 @@ def test_expired_cached_session_performs_one_full_authentication_fallback(monkey
 
     cached = FakePassClient.instances[0]
 
-    def expired(*, include_profile: bool, include_competencies: bool) -> list[PassEntry]:
+    def expired(
+        *,
+        include_profile: bool,
+        include_competencies: bool,
+        competency_credentials: tuple[str, str] | None,
+    ) -> list[PassEntry]:
         cached.request_count = 1
         raise ImtAuthenticationError(
             f"expired include_profile={include_profile} "
-            f"include_competencies={include_competencies}"
+            f"include_competencies={include_competencies} "
+            f"has_competency_credentials={competency_credentials is not None}"
         )
 
     monkeypatch.setattr(cached, "fetch_entries_authenticated", expired)

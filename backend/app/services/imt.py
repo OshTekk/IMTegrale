@@ -497,6 +497,7 @@ class ImtPassClient:
             return self.fetch_entries_authenticated(
                 include_profile=include_profile,
                 include_competencies=include_competencies,
+                competency_credentials=(username, password) if include_competencies else None,
             )
 
     def fetch_entries_authenticated(
@@ -504,6 +505,7 @@ class ImtPassClient:
         *,
         include_profile: bool = False,
         include_competencies: bool = False,
+        competency_credentials: tuple[str, str] | None = None,
     ) -> list[PassEntry]:
         with self._operation():
             try:
@@ -555,9 +557,15 @@ class ImtPassClient:
                     logger.warning("PASS profile could not be refreshed: %s", type(exc).__name__)
             if include_competencies:
                 try:
-                    self.last_competency_ues = self.fetch_competency_ues_authenticated()
+                    self.last_competency_ues = self.fetch_competency_ues_authenticated(
+                        credentials=competency_credentials,
+                    )
                 except (ImtError, requests.RequestException) as exc:
-                    logger.warning("COMPETENCES metadata could not be refreshed: %s", type(exc).__name__)
+                    logger.warning(
+                        "COMPETENCES metadata could not be refreshed: %s: %s",
+                        type(exc).__name__,
+                        exc,
+                    )
             return entries
 
     def fetch_profile_authenticated(self) -> PassProfile:
@@ -583,12 +591,16 @@ class ImtPassClient:
             self._ensure_success(profile)
             return parse_pass_profile(profile.text)
 
-    def _complete_hub_sso(self, response: requests.Response) -> requests.Response:
+    def _complete_hub_sso(
+        self,
+        response: requests.Response,
+        credentials: tuple[str, str] | None,
+    ) -> requests.Response:
         self._ensure_success(response)
-        if self._contains_password_form(response.text):
-            raise ImtFetchError("La session IMT n'a pas pu ouvrir COMPETENCES")
-        if _url_origin(response.url) != HUB_ORIGIN:
-            response = self._complete_cas(response, "", "")
+        if _url_origin(response.url) != HUB_ORIGIN or self._contains_password_form(response.text):
+            if credentials is None:
+                raise ImtFetchError("La session IMT n'a pas pu ouvrir COMPETENCES")
+            response = self._complete_cas(response, *credentials)
             self._ensure_success(response)
         if _url_origin(response.url) != HUB_ORIGIN or self._contains_password_form(response.text):
             raise ImtFetchError("La session IMT n'a pas pu ouvrir COMPETENCES")
@@ -621,10 +633,14 @@ class ImtPassClient:
                 return candidate
         return None
 
-    def fetch_competency_ues_authenticated(self) -> list[CompetencyUe]:
+    def fetch_competency_ues_authenticated(
+        self,
+        *,
+        credentials: tuple[str, str] | None = None,
+    ) -> list[CompetencyUe]:
         with self._operation():
             response = self._get(COMPETENCIES_HOME_URL)
-            response = self._complete_hub_sso(response)
+            response = self._complete_hub_sso(response, credentials)
             ue_url = self._competency_ue_url(response)
             if ue_url is None:
                 soup = BeautifulSoup(response.text, "html.parser")
@@ -642,12 +658,12 @@ class ImtPassClient:
                 access_url = validate_imt_url(urljoin(response.url, href), {HUB_ORIGIN})
                 if not urlsplit(access_url).path.casefold().startswith("/comp2/"):
                     raise ImtFetchError("Le chemin COMPETENCES a été refusé")
-                response = self._complete_hub_sso(self._get(access_url))
+                response = self._complete_hub_sso(self._get(access_url), credentials)
                 ue_url = self._competency_ue_url(response)
             if ue_url is None:
                 raise ImtFetchError("COMPETENCES n'a pas fourni la liste des UE")
             if response.url != ue_url:
-                response = self._complete_hub_sso(self._get(ue_url))
+                response = self._complete_hub_sso(self._get(ue_url), credentials)
             return parse_competency_ues(response.text)
 
 
