@@ -27,6 +27,7 @@ PASS_PROFILE_URL = (
     "?IdApplication=142&TypeAcces=MaFiche&IdLien=190"
 )
 COMPETENCIES_HOME_URL = "https://hub.imt-atlantique.fr/comp2/"
+IMT_ATLANTIQUE_IDP_ENTITY_ID = "https://idp.imt-atlantique.fr/idp/shibboleth"
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) IMTegrale/3.3"
 
 Origin = tuple[str, str, int]
@@ -400,7 +401,7 @@ class ImtPassClient:
         username: str,
         password: str,
     ) -> requests.Response:
-        current = response
+        current = self._select_imt_identity_provider(response)
         soup = BeautifulSoup(current.text, "html.parser")
         login_form = next(
             (
@@ -470,6 +471,42 @@ class ImtPassClient:
         if self._contains_password_form(current.text):
             raise ImtAuthenticationError("Identifiant ou mot de passe IMT incorrect")
         return current
+
+    def _select_imt_identity_provider(self, response: requests.Response) -> requests.Response:
+        if _url_origin(response.url) != IDP_ORIGIN:
+            return response
+
+        soup = BeautifulSoup(response.text, "html.parser")
+        wayf_form = next(
+            (
+                form
+                for form in soup.find_all("form")
+                if form.find(
+                    attrs={
+                        "name": "user_idp",
+                        "value": IMT_ATLANTIQUE_IDP_ENTITY_ID,
+                    }
+                )
+                is not None
+            ),
+            None,
+        )
+        if wayf_form is None:
+            return response
+
+        target = _form_action(response.url, wayf_form.get("action"), {IDP_ORIGIN})
+        if urlsplit(target).path.casefold() != "/imt/wayf":
+            raise ImtFetchError("Le sélecteur d'identité IMT a fourni un chemin inattendu")
+        selected = self._post(
+            target,
+            data=[
+                ("user_idp", IMT_ATLANTIQUE_IDP_ENTITY_ID),
+                ("session", "true"),
+            ],
+            allowed_origins={IDP_ORIGIN, CAS_ORIGIN, HUB_ORIGIN},
+        )
+        self._ensure_success(selected)
+        return selected
 
     @staticmethod
     def _contains_password_form(content: str) -> bool:

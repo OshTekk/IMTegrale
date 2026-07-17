@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import pytest
 import requests
-from app.services.imt import CAS_LOGIN_URL, ImtFetchError, ImtPassClient
+from app.services.imt import (
+    CAS_LOGIN_URL,
+    IMT_ATLANTIQUE_IDP_ENTITY_ID,
+    ImtFetchError,
+    ImtPassClient,
+)
 from app.services.telegram import (
     MAX_TELEGRAM_CHUNKS,
     MAX_TELEGRAM_RESPONSE_BYTES,
@@ -126,6 +131,68 @@ def test_hub_sso_refuses_a_password_form_without_current_credentials() -> None:
 
     with pytest.raises(ImtFetchError, match="session IMT"):
         client._complete_hub_sso(login, None)
+
+
+def test_cas_selects_the_official_imt_identity_provider_before_login(monkeypatch) -> None:
+    client = ImtPassClient()
+    wayf = fake_response(
+        url="https://idp.imt-atlantique.fr/IMT/WAYF?target=opaque",
+        body=(
+            b'<form action="/IMT/WAYF?target=opaque">'
+            b'<button name="user_idp" value="https://idp.imt-atlantique.fr/idp/shibboleth">'
+            b"IMT Atlantique</button></form>"
+        ),
+    )
+    login = fake_response(
+        url="https://cas.imt-atlantique.fr/cas/login",
+        body=(
+            b'<form action="https://cas.imt-atlantique.fr/cas/login">'
+            b'<input name="username"><input type="password" name="password"></form>'
+        ),
+    )
+    dashboard = fake_response(
+        url="https://hub.imt-atlantique.fr/comp2/etudiant/40419",
+        body=b"student dashboard",
+    )
+    posts: list[tuple[str, list[tuple[str, str]]]] = []
+
+    def post(url: str, *, data: list[tuple[str, str]], **_kwargs) -> requests.Response:
+        posts.append((url, data))
+        return login if len(posts) == 1 else dashboard
+
+    monkeypatch.setattr(client, "_post", post)
+
+    assert client._complete_cas(wayf, "student", "secret") is dashboard
+    assert posts[0] == (
+        "https://idp.imt-atlantique.fr/IMT/WAYF?target=opaque",
+        [("user_idp", IMT_ATLANTIQUE_IDP_ENTITY_ID), ("session", "true")],
+    )
+    assert ("username", "student") in posts[1][1]
+    assert ("password", "secret") in posts[1][1]
+
+
+def test_hub_wayf_selection_rejects_an_untrusted_action(monkeypatch) -> None:
+    client = ImtPassClient()
+    wayf = fake_response(
+        url="https://idp.imt-atlantique.fr/IMT/WAYF?target=opaque",
+        body=(
+            b'<form action="https://evil.example/collect">'
+            b'<button name="user_idp" value="https://idp.imt-atlantique.fr/idp/shibboleth">'
+            b"IMT Atlantique</button></form>"
+        ),
+    )
+    called = False
+
+    def unexpected_post(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("the WAYF selection must remain on the official IdP")
+
+    monkeypatch.setattr(client, "_post", unexpected_post)
+
+    with pytest.raises(ImtFetchError):
+        client._select_imt_identity_provider(wayf)
+    assert called is False
 
 
 def test_telegram_messages_have_stable_chunk_and_note_limits() -> None:
