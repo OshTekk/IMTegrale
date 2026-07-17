@@ -1,0 +1,32 @@
+#!/bin/sh
+set -eu
+
+running_kernel=$(uname -r)
+newest_kernel=$(
+    find /boot -maxdepth 1 -type f -name 'vmlinuz-*-pve' -printf '%f\n' \
+        | sed 's/^vmlinuz-//' \
+        | sort -V \
+        | tail -n 1
+)
+
+request_reboot() {
+    reason=$1
+    logger -t pve-maintenance "Rebooting: $reason"
+    if [ "${PVE_REBOOT_DRY_RUN:-0}" = "1" ]; then
+        printf 'reboot-required: %s\n' "$reason"
+        return
+    fi
+    exec systemctl --no-block reboot
+}
+
+if [ -e /var/run/reboot-required ]; then
+    request_reboot "package upgrade requested a reboot"
+    exit 0
+fi
+
+if [ -n "$newest_kernel" ] && dpkg --compare-versions "$newest_kernel" gt "$running_kernel"; then
+    request_reboot "running kernel $running_kernel is older than $newest_kernel"
+    exit 0
+fi
+
+logger -t pve-maintenance "No reboot required (kernel $running_kernel)"

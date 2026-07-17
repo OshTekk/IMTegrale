@@ -1,0 +1,40 @@
+#!/bin/sh
+set -eu
+
+umask 077
+
+NETWORK_ENV="${BOTNOTE_NETWORK_ENV:-/etc/default/botnote-network}"
+[ -r "${NETWORK_ENV}" ] || { printf 'missing %s\n' "${NETWORK_ENV}" >&2; exit 1; }
+# shellcheck disable=SC1090
+. "${NETWORK_ENV}"
+: "${PUBLIC_HOSTNAME:?PUBLIC_HOSTNAME is required}"
+
+HOSTNAME="${PUBLIC_HOSTNAME}"
+CERT_DIR="/etc/botnote-lan-https"
+CERT_FILE="${CERT_DIR}/${HOSTNAME}.crt"
+KEY_FILE="${CERT_DIR}/${HOSTNAME}.key"
+RENEW_BEFORE_SECONDS=2592000
+
+if [ -s "${CERT_FILE}" ] && [ -s "${KEY_FILE}" ] \
+    && openssl x509 -in "${CERT_FILE}" -checkend "${RENEW_BEFORE_SECONDS}" -noout >/dev/null 2>&1; then
+    exit 0
+fi
+
+TEMP_DIR="$(mktemp -d "${CERT_DIR}/.renew.XXXXXX")"
+trap 'rm -rf "${TEMP_DIR}"' EXIT HUP INT TERM
+
+tailscale cert \
+    --min-validity=720h \
+    --cert-file="${TEMP_DIR}/certificate.crt" \
+    --key-file="${TEMP_DIR}/certificate.key" \
+    "${HOSTNAME}"
+
+openssl x509 -in "${TEMP_DIR}/certificate.crt" -checkhost "${HOSTNAME}" -noout
+openssl x509 -in "${TEMP_DIR}/certificate.crt" -checkend 1209600 -noout
+openssl pkey -in "${TEMP_DIR}/certificate.key" -check -noout
+
+install -o root -g root -m 0644 "${TEMP_DIR}/certificate.crt" "${CERT_FILE}"
+install -o root -g root -m 0600 "${TEMP_DIR}/certificate.key" "${KEY_FILE}"
+
+nginx -t
+systemctl reload nginx.service

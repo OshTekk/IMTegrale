@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly PVE reboot window for completed package upgrades
+
+[Timer]
+OnCalendar=Sun *-*-* 04:30:00
+RandomizedDelaySec=10m
+Persistent=false
+Unit=pve-reboot-if-required.service
+
+[Install]
+WantedBy=timers.target

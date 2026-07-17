@@ -1,0 +1,48 @@
+[Unit]
+Description=IMTégrale web application
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=botnote
+Group=botnote
+WorkingDirectory=/opt/botnote/current
+EnvironmentFile=/etc/botnote/botnote.env
+EnvironmentFile=/etc/botnote/botnote-runtime.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/botnote/runtime/bin/botnote serve --host ${BOTNOTE_BIND_HOST} --port 8443
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+MemoryMax=512M
+TasksMax=128
+RuntimeDirectory=botnote
+RuntimeDirectoryMode=0750
+UMask=0077
+
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,42 @@
+[OPTIONS]
+
+enable: 1
+policy_in: DROP
+policy_out: ACCEPT
+policy_forward: ACCEPT
+
+[ALIASES]
+
+# This single-node PVE has no corosync network. Avoid treating the whole LAN as
+# a management network through Proxmox's automatic local-network detection.
+local_network 192.168.50.5
+
+[IPSET management]
+
+# Administration workstations on the trusted LAN (example values).
+192.168.50.13
+192.168.50.17
+
+# Administration workstation over Tailscale (example values).
+100.64.0.100
+fd7a:115c:a1e0::100
+
+[RULES]
+
+# BotNote HTTPS and split-DNS are available to the trusted home LAN.
+IN ACCEPT -source 192.168.50.0/24 -p tcp -dport 443
+IN ACCEPT -source 192.168.50.0/24 -p tcp -dport 53
+IN ACCEPT -source 192.168.50.0/24 -p udp -dport 53
+
+# The same services remain available to authenticated Tailnet devices.
+IN ACCEPT -source 100.64.0.0/10 -p tcp -dport 443
+IN ACCEPT -source 100.64.0.0/10 -p tcp -dport 53
+IN ACCEPT -source 100.64.0.0/10 -p udp -dport 53
+IN ACCEPT -source fd7a:115c:a1e0::/48 -p tcp -dport 443
+IN ACCEPT -source fd7a:115c:a1e0::/48 -p tcp -dport 53
+IN ACCEPT -source fd7a:115c:a1e0::/48 -p udp -dport 53
+
+# Tailscale direct peer connectivity and basic network diagnostics.
+IN ACCEPT -p udp -dport 41641
+IN ACCEPT -p icmp
+IN ACCEPT -p icmpv6

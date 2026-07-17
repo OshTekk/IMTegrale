@@ -1,0 +1,9 @@
+[OPTIONS]
+
+enable: 1
+nftables: 0
+log_level_in: info
+log_level_out: nolog
+nosmurfs: 1
+smurf_log_level: info
+tcpflags: 1

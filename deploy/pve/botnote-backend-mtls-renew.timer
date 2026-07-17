@@ -1,0 +1,11 @@
+[Unit]
+Description=Check IMTégrale internal mTLS certificates daily
+
+[Timer]
+OnCalendar=*-*-* 04:35:00
+RandomizedDelaySec=20min
+Persistent=true
+Unit=botnote-backend-mtls-renew.service
+
+[Install]
+WantedBy=timers.target

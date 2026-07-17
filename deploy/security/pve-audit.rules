@@ -1,0 +1,22 @@
+## Queue sizing and failure reporting.
+-b 8192
+--backlog_wait_time 60000
+-f 1
+
+## Administrative and service configuration changes.
+-w /etc/pve/ -p wa -k pve_config
+-w /etc/ssh/ -p wa -k ssh_config
+-w /root/.ssh/authorized_keys -p wa -k root_keys
+-w /etc/apt/ -p wa -k apt_config
+-w /etc/systemd/system/ -p wa -k systemd_config
+-w /etc/network/ -p wa -k network_config
+-w /etc/nginx/ -p wa -k nginx_config
+-w /etc/botnote-dnsmasq.conf -p wa -k botnote_dns
+-w /etc/botnote-lan-https/ -p wa -k botnote_tls
+
+## Local identities and authentication policy.
+-w /etc/passwd -p wa -k identity
+-w /etc/group -p wa -k identity
+-w /etc/shadow -p wa -k identity
+-w /etc/gshadow -p wa -k identity
+-w /etc/sudoers.d/ -p wa -k sudo_policy

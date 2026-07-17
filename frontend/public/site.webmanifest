@@ -1,0 +1,18 @@
+{
+  "name": "IMTégrale",
+  "short_name": "IMTégrale",
+  "description": "Suivi académique étudiant indépendant connecté à PASS.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f3f6f5",
+  "theme_color": "#0b4f50",
+  "lang": "fr",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

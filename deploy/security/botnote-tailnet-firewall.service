@@ -1,0 +1,29 @@
+[Unit]
+Description=IMTégrale Tailscale subnet routing and HTTPS enforcement
+Wants=network-online.target
+Requires=tailscaled.service
+After=network-online.target tailscaled.service pve-firewall.service
+PartOf=tailscaled.service pve-firewall.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+ExecStart=/bin/sh /usr/local/sbin/botnote-tailnet-firewall apply
+ExecReload=/bin/sh /usr/local/sbin/botnote-tailnet-firewall apply
+ExecStop=/bin/sh /usr/local/sbin/botnote-tailnet-firewall remove
+TimeoutStartSec=30
+TimeoutStopSec=30
+
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

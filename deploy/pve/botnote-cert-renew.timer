@@ -1,0 +1,11 @@
+[Unit]
+Description=Check the IMTégrale HTTPS certificate daily
+
+[Timer]
+OnCalendar=*-*-* 04:20:00
+RandomizedDelaySec=20min
+Persistent=true
+Unit=botnote-cert-renew.service
+
+[Install]
+WantedBy=timers.target

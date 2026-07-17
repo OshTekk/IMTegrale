@@ -1,0 +1,17 @@
+[Unit]
+Description=Reboot PVE after the maintenance backup window when required
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/pve-reboot-if-required
+
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true

@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=83", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "botnote-imt"
+version = "3.2.0"
+description = "IMTégrale secure multi-account academic dashboard and Telegram notifier"
+requires-python = ">=3.11,<3.15"
+dependencies = [
+  "alembic>=1.14,<2",
+  "beautifulsoup4>=4.12,<5",
+  "cryptography>=49,<50",
+  "fastapi>=0.115,<1",
+  "psycopg[binary]>=3.2,<4",
+  "pydantic-settings>=2.6,<3",
+  "requests>=2.32,<3",
+  "sqlalchemy>=2.0,<3",
+  "uvicorn[standard]>=0.32,<1",
+  "webauthn>=3.0,<4",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx2>=2.6,<3",
+  "pip-audit>=2.9,<3",
+  "pytest>=9.0.3,<10",
+  "pytest-cov>=7,<8",
+  "ruff>=0.8,<1",
+]
+
+[project.scripts]
+botnote = "app.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "backend"}
+
+[tool.setuptools.packages.find]
+where = ["backend"]
+include = ["app*"]
+exclude = ["tests*"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["backend/tests"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+ignore = ["B008"]

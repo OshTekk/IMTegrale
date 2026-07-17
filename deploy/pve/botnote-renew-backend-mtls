@@ -1,0 +1,93 @@
+#!/bin/sh
+set -eu
+
+umask 077
+
+NETWORK_ENV="${BOTNOTE_NETWORK_ENV:-/etc/default/botnote-network}"
+[ -r "$NETWORK_ENV" ] || { printf 'missing %s\n' "$NETWORK_ENV" >&2; exit 1; }
+# shellcheck disable=SC1090
+. "$NETWORK_ENV"
+: "${PVE_LAN_V4:?PVE_LAN_V4 is required}"
+: "${LXC_LAN_V4:?LXC_LAN_V4 is required}"
+
+VMID="${BOTNOTE_VMID:-105}"
+CERT_DIR=/etc/botnote-backend-mtls
+CA_KEY="$CERT_DIR/ca.key"
+CA_CERT="$CERT_DIR/ca.crt"
+SERVER_KEY="$CERT_DIR/server.key"
+SERVER_CERT="$CERT_DIR/server.crt"
+CLIENT_KEY="$CERT_DIR/client.key"
+CLIENT_CERT="$CERT_DIR/client.crt"
+RENEW_BEFORE_SECONDS=2592000
+
+install -d -o root -g root -m 0700 "$CERT_DIR"
+TEMP_DIR="$(mktemp -d "$CERT_DIR/.renew.XXXXXX")"
+trap 'rm -rf "$TEMP_DIR"' EXIT HUP INT TERM
+
+if [ ! -s "$CA_KEY" ] || [ ! -s "$CA_CERT" ]; then
+    openssl ecparam -name prime256v1 -genkey -noout -out "$TEMP_DIR/ca.key"
+    openssl req -new -x509 -sha256 -days 3650 \
+        -key "$TEMP_DIR/ca.key" \
+        -subj "/CN=BotNote Internal CA" \
+        -out "$TEMP_DIR/ca.crt"
+    install -o root -g root -m 0600 "$TEMP_DIR/ca.key" "$CA_KEY"
+    install -o root -g root -m 0644 "$TEMP_DIR/ca.crt" "$CA_CERT"
+fi
+
+renew_leaves=0
+for cert in "$SERVER_CERT" "$CLIENT_CERT"; do
+    if [ ! -s "$cert" ] || ! openssl x509 -in "$cert" \
+        -checkend "$RENEW_BEFORE_SECONDS" -noout >/dev/null 2>&1; then
+        renew_leaves=1
+    fi
+done
+
+if [ "$renew_leaves" -eq 1 ] || [ ! -s "$SERVER_KEY" ] || [ ! -s "$CLIENT_KEY" ]; then
+    cat >"$TEMP_DIR/server.ext" <<EOF
+basicConstraints=critical,CA:FALSE
+keyUsage=critical,digitalSignature,keyAgreement
+extendedKeyUsage=serverAuth
+subjectAltName=DNS:botnote-lxc.internal,IP:${LXC_LAN_V4}
+EOF
+    cat >"$TEMP_DIR/client.ext" <<EOF
+basicConstraints=critical,CA:FALSE
+keyUsage=critical,digitalSignature,keyAgreement
+extendedKeyUsage=clientAuth
+subjectAltName=DNS:botnote-pve.internal,IP:${PVE_LAN_V4}
+EOF
+
+    openssl ecparam -name prime256v1 -genkey -noout -out "$TEMP_DIR/server.key"
+    openssl req -new -sha256 -key "$TEMP_DIR/server.key" \
+        -subj "/CN=botnote-lxc.internal" -out "$TEMP_DIR/server.csr"
+    openssl x509 -req -sha256 -days 397 -in "$TEMP_DIR/server.csr" \
+        -CA "$CA_CERT" -CAkey "$CA_KEY" -CAcreateserial \
+        -extfile "$TEMP_DIR/server.ext" -out "$TEMP_DIR/server.crt"
+
+    openssl ecparam -name prime256v1 -genkey -noout -out "$TEMP_DIR/client.key"
+    openssl req -new -sha256 -key "$TEMP_DIR/client.key" \
+        -subj "/CN=botnote-pve.internal" -out "$TEMP_DIR/client.csr"
+    openssl x509 -req -sha256 -days 397 -in "$TEMP_DIR/client.csr" \
+        -CA "$CA_CERT" -CAkey "$CA_KEY" -CAserial "$CERT_DIR/ca.srl" \
+        -extfile "$TEMP_DIR/client.ext" -out "$TEMP_DIR/client.crt"
+
+    openssl verify -CAfile "$CA_CERT" -purpose sslserver "$TEMP_DIR/server.crt"
+    openssl verify -CAfile "$CA_CERT" -purpose sslclient "$TEMP_DIR/client.crt"
+    openssl x509 -in "$TEMP_DIR/server.crt" -checkhost botnote-lxc.internal -noout
+    openssl x509 -in "$TEMP_DIR/server.crt" -checkip "$LXC_LAN_V4" -noout
+
+    install -o root -g root -m 0600 "$TEMP_DIR/server.key" "$SERVER_KEY"
+    install -o root -g root -m 0644 "$TEMP_DIR/server.crt" "$SERVER_CERT"
+    install -o root -g root -m 0600 "$TEMP_DIR/client.key" "$CLIENT_KEY"
+    install -o root -g root -m 0644 "$TEMP_DIR/client.crt" "$CLIENT_CERT"
+fi
+
+pct exec "$VMID" -- install -d -o root -g botnote -m 0750 /etc/botnote/mtls
+pct push "$VMID" "$CA_CERT" /etc/botnote/mtls/ca.crt --perms 0644
+pct push "$VMID" "$SERVER_CERT" /etc/botnote/mtls/server.crt --perms 0644
+pct push "$VMID" "$SERVER_KEY" /etc/botnote/mtls/server.key --perms 0640
+pct exec "$VMID" -- chown root:botnote \
+    /etc/botnote/mtls/ca.crt /etc/botnote/mtls/server.crt /etc/botnote/mtls/server.key
+pct exec "$VMID" -- systemctl try-restart botnote-web.service
+
+nginx -t
+systemctl reload nginx.service

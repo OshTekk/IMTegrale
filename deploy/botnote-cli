@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+
+set -a
+. /etc/botnote/botnote.env
+. /etc/botnote/botnote-runtime.env
+set +a
+
+cd /opt/botnote/current
+
+if [ "$(id -u)" -eq 0 ]; then
+    exec runuser -u botnote --preserve-environment -- /opt/botnote/runtime/bin/botnote "$@"
+fi
+
+exec /opt/botnote/runtime/bin/botnote "$@"

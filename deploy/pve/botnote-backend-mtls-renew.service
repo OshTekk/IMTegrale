@@ -1,0 +1,21 @@
+[Unit]
+Description=Renew IMTégrale internal mTLS certificates
+After=network-online.target nginx.service
+Wants=network-online.target
+Requires=nginx.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/botnote-renew-backend-mtls
+MemoryMax=256M
+TasksMax=64
+UMask=0077
+
+NoNewPrivileges=false
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/etc/botnote-backend-mtls
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true

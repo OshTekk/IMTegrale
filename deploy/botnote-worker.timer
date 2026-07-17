@@ -1,0 +1,12 @@
+[Unit]
+Description=Check due opt-in IMTégrale synchronizations
+
+[Timer]
+OnCalendar=*-*-* *:00/15:00
+RandomizedDelaySec=2min
+AccuracySec=1min
+Persistent=true
+Unit=botnote-worker.service
+
+[Install]
+WantedBy=timers.target
