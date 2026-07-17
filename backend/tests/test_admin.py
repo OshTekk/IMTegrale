@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-from datetime import timedelta
-
 from app import main as main_module
 from app.admin_security import hash_admin_password, verify_admin_password
 from app.database import SessionLocal, utcnow
 from app.models import Account, AdminAuditLog, AdminUser, LeaderboardProfile, ShareToken, WebSession
 from app.services.auth_protection import record_auth_outcome
-from app.services.imt import ImtPassClient, PassEntry, PassProfile
+from app.services.imt import CompetencyUe, ImtPassClient, PassEntry, PassProfile
 from app.services.pass_gateway import client_reference, target_reference
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -23,6 +21,7 @@ def fake_notes(_self: ImtPassClient, _username: str, _password: str) -> list[Pas
         first_name="Managed",
         last_name="STUDENT",
     )
+    _self.last_competency_ues = [CompetencyUe("SIT130", "Outils mathematiques", 4)]
     return [PassEntry("SIT130", "Examen", 15, 1, False)]
 
 
@@ -246,11 +245,6 @@ def test_admin_can_manage_wait_campus_tokens_and_permanent_account_deletion(
     )
     assert owner_login.status_code == 200
     account_id = owner_login.json()["account"]["id"]
-    assert client.patch(
-        "/api/v1/ues/SIT130",
-        json={"credits_ects": 4},
-        headers=csrf_headers(client),
-    ).status_code == 200
     created_token = client.post(
         "/api/v1/tokens",
         json={"name": "Accès ami", "role": "viewer", "expires_in_days": 7},
@@ -264,18 +258,19 @@ def test_admin_can_manage_wait_campus_tokens_and_permanent_account_deletion(
         json={"token": created_token.json()["token"]},
     ).status_code == 200
 
+    leaderboard = client.get("/api/v1/leaderboard").json()
+    assert client.post(
+        "/api/v1/leaderboard/participation",
+        json={
+            "consent_version": leaderboard["consent_version"],
+            "acknowledge_visibility": True,
+            "acknowledge_wait": True,
+        },
+        headers=csrf_headers(client),
+    ).status_code == 201
+
     now = utcnow()
     with SessionLocal() as db:
-        db.add(
-            LeaderboardProfile(
-                account_id=account_id,
-                is_participating=True,
-                joined_at=now,
-                ranking_visible_at=now + timedelta(hours=48),
-                consent_version="test",
-                consent_at=now,
-            )
-        )
         account = db.get(Account, account_id)
         assert account is not None
         account.cohort = "1a"
@@ -321,12 +316,13 @@ def test_admin_can_manage_wait_campus_tokens_and_permanent_account_deletion(
     released = admin.post(
         f"/api/v1/admin/accounts/{account_id}/actions",
         json={
-            "action": "leaderboard_verify_score",
-            "reason": "ECTS vérifiés sur le relevé de l'étudiant",
+            "action": "leaderboard_refresh_score_basis",
+            "reason": "Correction des ECTS demandée par l'étudiant",
         },
         headers=admin_csrf_headers(admin),
     )
     assert released.status_code == 200
+    assert released.json()["leaderboard"]["score_ects_basis"] == {"SIT130": 4.0}
     released = admin.post(
         f"/api/v1/admin/accounts/{account_id}/actions",
         json={"action": "leaderboard_release_wait"},

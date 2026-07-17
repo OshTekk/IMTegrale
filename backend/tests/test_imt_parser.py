@@ -1,5 +1,11 @@
 import pytest
-from app.services.imt import ImtFetchError, parse_pass_export, parse_pass_profile, validate_imt_url
+from app.services.imt import (
+    ImtFetchError,
+    parse_competency_ues,
+    parse_pass_export,
+    parse_pass_profile,
+    validate_imt_url,
+)
 
 
 def test_parser_extracts_only_grade_rows_and_resits() -> None:
@@ -36,6 +42,55 @@ def test_imt_url_policy_rejects_lookalike_destinations(url: str) -> None:
 def test_imt_url_policy_accepts_exact_https_origin() -> None:
     url = "https://pass.imt-atlantique.fr/OpDotNet/report?id=1"
     assert validate_imt_url(url) == url
+
+
+def test_imt_url_policy_accepts_exact_competencies_origin() -> None:
+    url = "https://hub.imt-atlantique.fr/comp2/etudiant/40419/ue"
+    assert validate_imt_url(url) == url
+
+
+def test_competencies_parser_imports_official_titles_and_attempted_credits() -> None:
+    content = """
+    <table>
+      <thead><tr><th>UE</th><th>Semestre</th><th>Code</th><th>Grade</th><th>Obtenus</th><th>Tentés</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>Outils physiques pour l'ingénieur S5</td><td>Semestre 1</td>
+          <td>FIP-SIT140-BR-2025</td><td>E</td><td>3.00</td><td>3.00</td>
+        </tr>
+        <tr>
+          <td>Projet en cours</td><td>Semestre 2</td>
+          <td>FIP-PRJ120-BR-2026</td><td>FX</td><td>0.00</td><td>5.00</td>
+        </tr>
+      </tbody>
+    </table>
+    """
+
+    entries = parse_competency_ues(content)
+
+    assert entries[0].ue_code == "SIT140"
+    assert entries[0].title == "Outils physiques pour l'ingénieur S5"
+    assert entries[0].credits_ects == 3
+    assert entries[1].ue_code == "PRJ120"
+    assert entries[1].credits_ects == 5
+
+
+def test_competencies_parser_rejects_conflicting_duplicate_codes() -> None:
+    content = """
+    <table>
+      <tr>
+        <td>UE initiale</td><td>Semestre 1</td><td>FIP-SIT140-BR-2025</td>
+        <td>B</td><td>3</td><td>3</td>
+      </tr>
+      <tr>
+        <td>UE modifiée</td><td>Semestre 1</td><td>FIP-SIT140-BR-2025</td>
+        <td>B</td><td>4</td><td>4</td>
+      </tr>
+    </table>
+    """
+
+    with pytest.raises(ImtFetchError, match="contradictoires"):
+        parse_competency_ues(content)
 
 
 @pytest.mark.parametrize("score, coefficient", [("NaN", "1"), ("12", "Infinity"), ("12", "101")])

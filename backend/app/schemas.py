@@ -125,8 +125,7 @@ class AdminAccountAction(BaseModel):
         "leaderboard_release_wait",
         "leaderboard_clear_cooldown",
         "leaderboard_delete_data",
-        "leaderboard_verify_score",
-        "leaderboard_request_score_review",
+        "leaderboard_refresh_score_basis",
         "auth_clear_cooldown",
         "profile_refresh",
     ]

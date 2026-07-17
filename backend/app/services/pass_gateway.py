@@ -24,6 +24,7 @@ from app.models import (
     WebAuthnChallenge,
 )
 from app.services.imt import (
+    CompetencyUe,
     ImtAuthenticationError,
     ImtNetworkError,
     ImtPassClient,
@@ -110,6 +111,7 @@ class GatewayResult:
     operation_id: str
     entries: list[PassEntry]
     profile: PassProfile | None
+    competency_ues: list[CompetencyUe] | None
     request_count: int
     session_reused: bool
     full_sso_performed: bool
@@ -541,6 +543,16 @@ def _profile_refresh_due(account: Account, now: datetime) -> bool:
     )
 
 
+def _ue_metadata_refresh_due(account: Account, now: datetime) -> bool:
+    refreshed_at = ensure_utc(account.ue_metadata_refreshed_at)
+    requested_at = ensure_utc(account.ue_metadata_refresh_requested_at)
+    return bool(
+        refreshed_at is None
+        or refreshed_at <= now - timedelta(days=get_settings().pass_profile_refresh_days)
+        or (requested_at is not None and (refreshed_at is None or requested_at > refreshed_at))
+    )
+
+
 def _cached_session(target_ref: str, credentials_updated_at: datetime | None) -> _CachedSession | None:
     if get_settings().environment == "test":
         return None
@@ -625,12 +637,16 @@ def perform_login_operation(
     try:
         if get_settings().environment == "test":
             client.include_profile_on_fetch = initial_import
+            client.include_competencies_on_fetch = initial_import
             fetched = client.fetch_entries(username, password)
             entries = fetched if initial_import else []
         else:
             client.authenticate(username, password)
             if initial_import:
-                entries = client.fetch_entries_authenticated(include_profile=True)
+                entries = client.fetch_entries_authenticated(
+                    include_profile=True,
+                    include_competencies=True,
+                )
         _store_session(target_ref, client, credentials_updated_at)
         record_auth_outcome(target_ref=target_ref, client_ref=client_ref, outcome="success")
         complete_pass_operation(
@@ -645,6 +661,7 @@ def perform_login_operation(
             operation_id=lease.id,
             entries=entries,
             profile=client.last_profile if initial_import else None,
+            competency_ues=client.last_competency_ues if initial_import else None,
             request_count=client.request_count,
             session_reused=False,
             full_sso_performed=True,
@@ -678,6 +695,7 @@ def perform_sync_operation(
     now = utcnow()
     target_ref = target_reference(account.imt_username)
     profile_due = _profile_refresh_due(account, now)
+    metadata_due = _ue_metadata_refresh_due(account, now)
     lease = reserve_pass_operation(
         account_id=account.id,
         target_ref=target_ref,
@@ -701,17 +719,22 @@ def perform_sync_operation(
     try:
         if cached is not None:
             try:
-                entries = client.fetch_entries_authenticated(include_profile=profile_due)
+                entries = client.fetch_entries_authenticated(
+                    include_profile=profile_due,
+                    include_competencies=metadata_due,
+                )
             except ImtAuthenticationError:
                 request_count += client.request_count
                 purge_pass_session(target_ref=target_ref)
                 client = ImtPassClient(timeout_seconds=get_settings().imt_timeout_seconds)
                 client.include_profile_on_fetch = profile_due
+                client.include_competencies_on_fetch = metadata_due
                 entries = client.fetch_entries(account.imt_username, password)
                 session_reused = False
                 full_sso = True
         else:
             client.include_profile_on_fetch = profile_due
+            client.include_competencies_on_fetch = metadata_due
             entries = client.fetch_entries(account.imt_username, password)
         request_count += client.request_count
         _store_session(target_ref, client, account.credentials_updated_at)
@@ -727,6 +750,7 @@ def perform_sync_operation(
             operation_id=lease.id,
             entries=entries,
             profile=client.last_profile,
+            competency_ues=client.last_competency_ues,
             request_count=request_count,
             session_reused=session_reused,
             full_sso_performed=full_sso,

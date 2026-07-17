@@ -59,8 +59,7 @@ type AdminAction =
   | "leaderboard_release_wait"
   | "leaderboard_clear_cooldown"
   | "leaderboard_delete_data"
-  | "leaderboard_verify_score"
-  | "leaderboard_request_score_review"
+  | "leaderboard_refresh_score_basis"
   | "auth_clear_cooldown"
   | "profile_refresh";
 
@@ -90,8 +89,7 @@ const ACTIONS: Record<AdminAction, ActionDefinition> = {
   leaderboard_release_wait: { title: "Ouvrir le classement maintenant", description: "Met fin au délai initial de 48 heures. L'utilisateur accède immédiatement aux classements.", confirmation: "Donner accès" },
   leaderboard_clear_cooldown: { title: "Lever le délai de réactivation", description: "Autorise exceptionnellement l'utilisateur à rejoindre de nouveau le classement sans attendre.", confirmation: "Lever le délai" },
   leaderboard_delete_data: { title: "Effacer les données leaderboard", description: "Efface la participation et le consentement, sans toucher au profil PASS, aux notes ni au compte.", confirmation: "Effacer", dangerous: true },
-  leaderboard_verify_score: { title: "Valider l'instantané ECTS", description: "Fige et valide les crédits ECTS actuellement calculés depuis les UE PASS. Le profil pourra alors être publié dans son segment officiel.", confirmation: "Valider les ECTS", reasonRequired: true },
-  leaderboard_request_score_review: { title: "Remettre le score en revue", description: "Retire immédiatement le profil des classements publics jusqu'à une nouvelle validation de l'instantané ECTS.", confirmation: "Demander une revue", reasonRequired: true, dangerous: true },
+  leaderboard_refresh_score_basis: { title: "Actualiser les coefficients du classement", description: "Recopie la dernière génération complète d'ECTS officiels COMPETENCES. Les valeurs manuelles restent exclues.", confirmation: "Actualiser", reasonRequired: true },
   auth_clear_cooldown: { title: "Lever le cooldown PASS", description: "Réinitialise exceptionnellement le délai de sécurité lié aux échecs de connexion de ce compte. La protection par adresse cliente reste active.", confirmation: "Lever le cooldown", reasonRequired: true },
   profile_refresh: { title: "Actualiser le profil officiel", description: "Le prénom, le nom, le campus, le cursus et la promotion seront relus sur PASS lors de la prochaine synchronisation autorisée.", confirmation: "Programmer l'actualisation" },
 };
@@ -255,9 +253,9 @@ function AccountDetail({
     && profileReason.trim().length >= 3
   );
   const leaderboardState = account.leaderboard.state;
-  const ectsSnapshot = account.leaderboard.score_ects_snapshot ?? {};
-  const ectsCount = Object.keys(ectsSnapshot).length;
-  const ectsTotal = Object.values(ectsSnapshot).reduce((total, value) => total + value, 0);
+  const ectsBasis = account.leaderboard.score_ects_basis ?? {};
+  const ectsCount = Object.keys(ectsBasis).length;
+  const ectsTotal = Object.values(ectsBasis).reduce((total, value) => total + value, 0);
   const syncMode = !account.auto_sync_enabled
     ? "Désactivée"
     : account.auto_sync_adaptive
@@ -294,15 +292,13 @@ function AccountDetail({
         <section className="admin-detail-section">
           <header><div><h3>Profil académique et leaderboard</h3><p><LeaderboardState account={account} /> · source {account.leaderboard.academic_source === "pass" ? "PASS" : account.leaderboard.academic_source === "admin" ? "correction admin" : "non confirmée"} · vérifié {formatDate(account.leaderboard.academic_verified_at)}</p></div>{account.leaderboard.classification_review_required && <span className="review-flag"><AlertTriangle size={14} /> Divergence à vérifier</span>}</header>
           <div className="admin-official-profile"><Info size={16} /><span>Le prénom et le nom sont figés depuis PASS. Le campus, le cursus et la promotion segmentent le classement ; toute correction administrative est historisée.</span></div>
-          {account.leaderboard.has_leaderboard_data && <div className={`admin-score-verification ${account.leaderboard.score_verified_at ? "is-verified" : "needs-review"}`}>
-            <span>{account.leaderboard.score_verified_at ? <ShieldCheck size={18} /> : <ShieldAlert size={18} />}</span>
+          {account.leaderboard.has_leaderboard_data && <div className="admin-score-basis">
+            <span><ShieldCheck size={18} /></span>
             <div>
-              <strong>{account.leaderboard.score_verified_at ? "Instantané ECTS validé" : "Validation ECTS requise"}</strong>
-              <small>{ectsCount ? `${ectsCount} UE · ${formatNumber(ectsTotal)} ECTS figés` : "Aucun instantané exploitable"}{account.leaderboard.score_verified_at ? ` · ${formatDate(account.leaderboard.score_verified_at)}` : " · le profil n'est pas publié"}</small>
+              <strong>Coefficients officiels du classement</strong>
+              <small>{ectsCount ? `${ectsCount} UE · ${formatNumber(ectsTotal)} ECTS` : "Aucune base de calcul disponible"}{account.leaderboard.score_basis_updated_at ? ` · ${formatDate(account.leaderboard.score_basis_updated_at)}` : ""}</small>
             </div>
-            {account.leaderboard.score_verified_at
-              ? <button className="secondary-button" type="button" onClick={() => onAction("leaderboard_request_score_review")} disabled={pending}><ShieldAlert size={16} /> Revoir</button>
-              : <button className="secondary-button" type="button" onClick={() => onAction("leaderboard_verify_score")} disabled={pending || ectsCount === 0}><ShieldCheck size={16} /> Valider</button>}
+            <button className="secondary-button" type="button" onClick={() => onAction("leaderboard_refresh_score_basis")} disabled={pending || leaderboardState === "not_joined" || leaderboardState === "cooldown"}><RefreshCw size={16} /> Actualiser</button>
           </div>}
           <form className="admin-profile-form" onSubmit={(event) => { event.preventDefault(); if (profileValid && campus) onProfile({ campus, program: program.trim().toUpperCase(), promotion_year: promotionNumber, reason: profileReason.trim() }); }}>
             <label>Identité PASS<input value={account.leaderboard.official_first_name && account.leaderboard.official_last_name ? `${account.leaderboard.official_first_name} ${account.leaderboard.official_last_name}` : "Non disponible"} disabled /></label>

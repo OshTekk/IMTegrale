@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -15,7 +16,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    environment: str = "production"
+    environment: Literal["production", "development", "test"] = "production"
     database_url: str = "postgresql+psycopg:///botnote"
     credential_key: str = ""
     token_pepper: str = ""
@@ -65,9 +66,10 @@ class Settings(BaseSettings):
             raise RuntimeError("BOTNOTE_CREDENTIAL_KEY is required")
         if not self.token_pepper:
             raise RuntimeError("BOTNOTE_TOKEN_PEPPER is required")
-        for path in (self.backend_tls_cert, self.backend_tls_key, self.backend_tls_ca):
-            if not path.is_file():
-                raise RuntimeError(f"Required backend mTLS file is missing: {path}")
+        if self.environment == "production":
+            for path in (self.backend_tls_cert, self.backend_tls_key, self.backend_tls_ca):
+                if not path.is_file():
+                    raise RuntimeError(f"Required backend mTLS file is missing: {path}")
 
 
 @lru_cache

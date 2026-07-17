@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from app.database import SessionLocal
-from app.models import Account, Event, Note, ShareToken, WebSession
+from app.models import Account, Event, Note, ShareToken, UeSetting, WebSession
 from app.security import session_is_active
 from app.services.events import record_event
-from app.services.imt import ImtPassClient, PassEntry
+from app.services.imt import CompetencyUe, ImtPassClient, PassEntry
 from app.services.telegram import TelegramError
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -50,6 +50,67 @@ def test_owner_flow_calculation_and_csrf(client: TestClient, monkeypatch) -> Non
     assert dashboard["summary"]["gpa"] == 3.8
     assert dashboard["summary"]["average_credits"] == 4
     assert dashboard["ues"][0]["grade"] == "B"
+
+
+def test_official_competencies_metadata_is_read_only_for_account_editors(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(ImtPassClient, "fetch_entries", fake_notes)
+    session = login_owner(client)
+    with SessionLocal() as db:
+        setting = db.scalar(
+            select(UeSetting).where(
+                UeSetting.account_id == session["account"]["id"],
+                UeSetting.code == "SIT130",
+            )
+        )
+        assert setting is not None
+        setting.title = "Outils mathématiques"
+        setting.credits_ects = 4
+        setting.metadata_source = "competences"
+        setting.metadata_refreshed_at = setting.updated_at
+        db.commit()
+
+    rejected = client.patch(
+        "/api/v1/ues/SIT130",
+        json={"credits_ects": 6},
+        headers=csrf_headers(client),
+    )
+    assert rejected.status_code == 409
+
+    updated = client.patch(
+        "/api/v1/ues/SIT130",
+        json={"year": "2"},
+        headers=csrf_headers(client),
+    )
+    assert updated.status_code == 200
+    assert updated.json()["metadata_source"] == "competences"
+    ue = client.get("/api/v1/dashboard").json()["ues"][0]
+    assert ue["title"] == "Outils mathématiques"
+    assert ue["credits_ects"] == 4
+    assert ue["metadata_source"] == "competences"
+
+
+def test_registration_imports_competencies_metadata(client: TestClient, monkeypatch) -> None:
+    def official_notes(
+        self: ImtPassClient,
+        _username: str,
+        _password: str,
+    ) -> list[PassEntry]:
+        self.last_competency_ues = [
+            CompetencyUe("SIT130", "Outils mathématiques pour l'ingénieur", 4),
+        ]
+        return [PassEntry("SIT130", "Examen", 14, 1, False)]
+
+    monkeypatch.setattr(ImtPassClient, "fetch_entries", official_notes)
+    login_owner(client, "official-metadata@imt-atlantique.fr")
+
+    dashboard = client.get("/api/v1/dashboard").json()
+    assert dashboard["summary"]["missing_ects_count"] == 0
+    assert dashboard["ues"][0]["title"] == "Outils mathématiques pour l'ingénieur"
+    assert dashboard["ues"][0]["credits_ects"] == 4
+    assert dashboard["ues"][0]["metadata_source"] == "competences"
 
 
 def test_official_identity_and_telegram_test_stay_owner_only(

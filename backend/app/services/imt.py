@@ -26,13 +26,15 @@ PASS_PROFILE_URL = (
     "https://pass.imt-atlantique.fr/opdotnet/eplug/annuaire/accueil.aspx"
     "?IdApplication=142&TypeAcces=MaFiche&IdLien=190"
 )
-USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) IMTegrale/3.2"
+COMPETENCIES_HOME_URL = "https://hub.imt-atlantique.fr/comp2/"
+USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) IMTegrale/3.3"
 
 Origin = tuple[str, str, int]
 PASS_ORIGIN: Origin = ("https", "pass.imt-atlantique.fr", 443)
 CAS_ORIGIN: Origin = ("https", "cas.imt-atlantique.fr", 443)
 IDP_ORIGIN: Origin = ("https", "idp.imt-atlantique.fr", 443)
-TRUSTED_IMT_ORIGINS = frozenset({PASS_ORIGIN, CAS_ORIGIN, IDP_ORIGIN})
+HUB_ORIGIN: Origin = ("https", "hub.imt-atlantique.fr", 443)
+TRUSTED_IMT_ORIGINS = frozenset({PASS_ORIGIN, CAS_ORIGIN, IDP_ORIGIN, HUB_ORIGIN})
 CREDENTIAL_ORIGINS = frozenset({CAS_ORIGIN, IDP_ORIGIN})
 
 MAX_URL_LENGTH = 4096
@@ -43,6 +45,7 @@ MAX_REQUESTS_PER_OPERATION = 24
 MAX_REDIRECTS = 8
 MAX_PASS_ROWS = 10_000
 MAX_PASS_ENTRIES = 2_000
+MAX_COMPETENCY_UES = 500
 MAX_UE_CODE_LENGTH = 32
 MAX_NOTE_LABEL_LENGTH = 240
 MAX_NOTE_COEFFICIENT = 100.0
@@ -88,6 +91,13 @@ class PassProfile:
     promotion_year: int | None = None
     first_name: str | None = None
     last_name: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CompetencyUe:
+    ue_code: str
+    title: str
+    credits_ects: float
 
 
 def _clean(value: str) -> str:
@@ -157,8 +167,10 @@ class ImtPassClient:
         self._operation_bytes = 0
         self._request_count = 0
         self.last_profile: PassProfile | None = None
+        self.last_competency_ues: list[CompetencyUe] | None = None
         self.authenticated = False
         self.include_profile_on_fetch = True
+        self.include_competencies_on_fetch = True
 
     @property
     def request_count(self) -> int:
@@ -382,7 +394,12 @@ class ImtPassClient:
             except requests.RequestException as exc:
                 raise ImtNetworkError("Le service IMT ne répond pas pour le moment") from exc
 
-    def _complete_cas(self, response: requests.Response, username: str, password: str) -> None:
+    def _complete_cas(
+        self,
+        response: requests.Response,
+        username: str,
+        password: str,
+    ) -> requests.Response:
         current = response
         soup = BeautifulSoup(current.text, "html.parser")
         login_form = next(
@@ -452,6 +469,7 @@ class ImtPassClient:
 
         if self._contains_password_form(current.text):
             raise ImtAuthenticationError("Identifiant ou mot de passe IMT incorrect")
+        return current
 
     @staticmethod
     def _contains_password_form(content: str) -> bool:
@@ -468,14 +486,25 @@ class ImtPassClient:
         password: str,
         *,
         include_profile: bool | None = None,
+        include_competencies: bool | None = None,
     ) -> list[PassEntry]:
         with self._operation():
             self.authenticate(username, password)
             if include_profile is None:
                 include_profile = self.include_profile_on_fetch
-            return self.fetch_entries_authenticated(include_profile=include_profile)
+            if include_competencies is None:
+                include_competencies = self.include_competencies_on_fetch
+            return self.fetch_entries_authenticated(
+                include_profile=include_profile,
+                include_competencies=include_competencies,
+            )
 
-    def fetch_entries_authenticated(self, *, include_profile: bool = False) -> list[PassEntry]:
+    def fetch_entries_authenticated(
+        self,
+        *,
+        include_profile: bool = False,
+        include_competencies: bool = False,
+    ) -> list[PassEntry]:
         with self._operation():
             try:
                 response = self._get(PASS_REPORT_URL)
@@ -516,6 +545,7 @@ class ImtPassClient:
                 raise ImtNetworkError("Impossible de télécharger les notes depuis PASS") from exc
 
             self.last_profile = None
+            self.last_competency_ues = None
             if include_profile:
                 try:
                     self.last_profile = self.fetch_profile_authenticated()
@@ -523,6 +553,11 @@ class ImtPassClient:
                     raise
                 except (ImtError, requests.RequestException) as exc:
                     logger.warning("PASS profile could not be refreshed: %s", type(exc).__name__)
+            if include_competencies:
+                try:
+                    self.last_competency_ues = self.fetch_competency_ues_authenticated()
+                except (ImtError, requests.RequestException) as exc:
+                    logger.warning("COMPETENCES metadata could not be refreshed: %s", type(exc).__name__)
             return entries
 
     def fetch_profile_authenticated(self) -> PassProfile:
@@ -547,6 +582,73 @@ class ImtPassClient:
             profile = self._get(profile_url, allowed_origins={PASS_ORIGIN})
             self._ensure_success(profile)
             return parse_pass_profile(profile.text)
+
+    def _complete_hub_sso(self, response: requests.Response) -> requests.Response:
+        self._ensure_success(response)
+        if self._contains_password_form(response.text):
+            raise ImtFetchError("La session IMT n'a pas pu ouvrir COMPETENCES")
+        if _url_origin(response.url) != HUB_ORIGIN:
+            response = self._complete_cas(response, "", "")
+            self._ensure_success(response)
+        if _url_origin(response.url) != HUB_ORIGIN or self._contains_password_form(response.text):
+            raise ImtFetchError("La session IMT n'a pas pu ouvrir COMPETENCES")
+        return response
+
+    @staticmethod
+    def _competency_ue_url(response: requests.Response) -> str | None:
+        current = urlsplit(response.url)
+        if re.fullmatch(r"/comp2/etudiant/\d{1,12}/ue/?", current.path, re.IGNORECASE):
+            return validate_imt_url(response.url, {HUB_ORIGIN})
+        if re.fullmatch(r"/comp2/etudiant/\d{1,12}/?", current.path, re.IGNORECASE):
+            derived = urlunsplit(
+                (current.scheme, current.netloc, f"{current.path.rstrip('/')}/ue", "", "")
+            )
+            return validate_imt_url(derived, {HUB_ORIGIN})
+        soup = BeautifulSoup(response.text, "html.parser")
+        for link in soup.find_all("a", href=True):
+            href = link.get("href")
+            if not isinstance(href, str):
+                continue
+            try:
+                candidate = validate_imt_url(urljoin(response.url, href), {HUB_ORIGIN})
+            except ImtFetchError:
+                continue
+            if re.fullmatch(
+                r"/comp2/etudiant/\d{1,12}/ue/?",
+                urlsplit(candidate).path,
+                re.IGNORECASE,
+            ):
+                return candidate
+        return None
+
+    def fetch_competency_ues_authenticated(self) -> list[CompetencyUe]:
+        with self._operation():
+            response = self._get(COMPETENCIES_HOME_URL)
+            response = self._complete_hub_sso(response)
+            ue_url = self._competency_ue_url(response)
+            if ue_url is None:
+                soup = BeautifulSoup(response.text, "html.parser")
+                access_link = next(
+                    (
+                        link
+                        for link in soup.find_all("a", href=True)
+                        if "acces competences" in _fold(_clean(link.get_text(" ", strip=True)))
+                    ),
+                    None,
+                )
+                href = access_link.get("href") if access_link is not None else None
+                if not isinstance(href, str):
+                    raise ImtFetchError("COMPETENCES n'a pas fourni l'accès aux UE")
+                access_url = validate_imt_url(urljoin(response.url, href), {HUB_ORIGIN})
+                if not urlsplit(access_url).path.casefold().startswith("/comp2/"):
+                    raise ImtFetchError("Le chemin COMPETENCES a été refusé")
+                response = self._complete_hub_sso(self._get(access_url))
+                ue_url = self._competency_ue_url(response)
+            if ue_url is None:
+                raise ImtFetchError("COMPETENCES n'a pas fourni la liste des UE")
+            if response.url != ue_url:
+                response = self._complete_hub_sso(self._get(ue_url))
+            return parse_competency_ues(response.text)
 
 
 class _PassRowCounter(HTMLParser):
@@ -631,6 +733,65 @@ def parse_pass_export(content: str) -> list[PassEntry]:
 def _fold(value: str) -> str:
     normalized = unicodedata.normalize("NFKD", value)
     return "".join(char for char in normalized if not unicodedata.combining(char)).casefold()
+
+
+def parse_competency_ues(content: str) -> list[CompetencyUe]:
+    if len(content.encode("utf-8")) > MAX_HTML_BYTES:
+        raise ImtFetchError("La liste des UE COMPETENCES dépasse la taille autorisée")
+
+    soup = BeautifulSoup(content, "html.parser", parse_only=SoupStrainer("tr"))
+    rows = soup.find_all("tr", limit=MAX_COMPETENCY_UES + 2)
+    if len(rows) > MAX_COMPETENCY_UES + 1:
+        raise ImtFetchError("COMPETENCES a fourni trop d'UE")
+
+    code_pattern = re.compile(
+        r"(?:^|[-\s])([A-Z]{2,6}\d{3}[A-Z0-9]{0,8})(?=-|\s|$)",
+        re.IGNORECASE,
+    )
+    entries: dict[str, CompetencyUe] = {}
+    for row in rows:
+        cells = [
+            _clean(cell.get_text(" ", strip=True))
+            for cell in row.find_all(("th", "td"), recursive=False)
+        ]
+        cells = [cell for cell in cells if cell and cell != "\xa0"]
+        if len(cells) < 4:
+            continue
+        code_index = -1
+        code = ""
+        for index, cell in enumerate(cells):
+            match = code_pattern.search(cell)
+            if match:
+                code_index = index
+                code = match.group(1).upper()
+                break
+        if code_index < 1:
+            continue
+        if len(code) > MAX_UE_CODE_LENGTH:
+            raise ImtFetchError("COMPETENCES a fourni un code UE trop long")
+
+        numeric_values = [
+            value
+            for value in (_decimal(cell) for cell in cells[code_index + 1 :])
+            if value is not None
+        ]
+        if not numeric_values:
+            raise ImtFetchError("COMPETENCES n'a pas fourni les crédits d'une UE")
+        credits = numeric_values[-1]
+        if not math.isfinite(credits) or not 0 < credits <= 60:
+            raise ImtFetchError("COMPETENCES a fourni des crédits ECTS invalides")
+
+        title = cells[0]
+        if not title or len(title) > 200:
+            raise ImtFetchError("COMPETENCES a fourni un intitulé d'UE invalide")
+        entry = CompetencyUe(ue_code=code, title=title, credits_ects=float(credits))
+        previous = entries.get(code)
+        if previous is not None and previous != entry:
+            raise ImtFetchError("COMPETENCES a fourni deux définitions contradictoires d'une UE")
+        entries[code] = entry
+
+    logger.info("COMPETENCES metadata parsed: %s UE", len(entries))
+    return list(entries.values())
 
 
 def _profile_field_value(

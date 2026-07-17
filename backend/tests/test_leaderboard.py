@@ -5,12 +5,14 @@ from datetime import timedelta
 import pytest
 from app.database import SessionLocal, utcnow
 from app.models import Account, LeaderboardProfile, Note
-from app.services.imt import ImtPassClient, PassEntry, PassProfile
+from app.services.imt import CompetencyUe, ImtPassClient, PassEntry, PassProfile
 from app.services.leaderboard import (
     account_leaderboard_score,
+    ensure_utc,
     normalize_detected_campus,
-    verify_leaderboard_score,
+    reconcile_participating_leaderboard_basis,
 )
+from app.services.sync import apply_competency_ues
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
@@ -32,6 +34,7 @@ def leaderboard_notes(_self: ImtPassClient, username: str, _password: str) -> li
         first_name=first_name,
         last_name=last_name,
     )
+    _self.last_competency_ues = [CompetencyUe("SIT130", "Outils mathematiques", 4)]
     return [
         PassEntry("SIT130", "Projet", 16, 2, False),
         PassEntry("SIT130", "Examen", 14, 1, False),
@@ -51,6 +54,7 @@ def campus_specific_notes(
         first_name=campus,
         last_name="STUDENT",
     )
+    _self.last_competency_ues = [CompetencyUe("SIT130", "Outils mathematiques", 4)]
     return [
         PassEntry("SIT130", "Projet", 16, 2, False),
         PassEntry("SIT130", "Examen", 14, 1, False),
@@ -71,6 +75,7 @@ def promotion_specific_notes(
         first_name=first_name,
         last_name=last_name,
     )
+    _self.last_competency_ues = [CompetencyUe("SIT130", "Outils mathematiques", 4)]
     return [PassEntry("SIT130", "Examen", 15, 1, False)]
 
 
@@ -81,12 +86,9 @@ def prepare_owner(client: TestClient, username: str) -> str:
     )
     assert login.status_code == 200, login.text
     account_id = login.json()["account"]["id"]
-    ects = client.patch(
-        "/api/v1/ues/SIT130",
-        json={"credits_ects": 4},
-        headers=csrf_headers(client),
-    )
-    assert ects.status_code == 200, ects.text
+    ue = client.get("/api/v1/dashboard").json()["ues"][0]
+    assert ue["credits_ects"] == 4
+    assert ue["metadata_source"] == "competences"
     return account_id
 
 
@@ -105,23 +107,7 @@ def join(client: TestClient) -> dict:
     return response.json()
 
 
-def verify_score(account_id: str) -> None:
-    with SessionLocal() as db:
-        profile = db.get(LeaderboardProfile, account_id)
-        account = db.get(Account, account_id)
-        assert profile is not None
-        assert account is not None
-        verify_leaderboard_score(
-            db,
-            account,
-            profile,
-            admin_user_id="test-admin",
-        )
-        db.commit()
-
-
 def make_visible(account_id: str) -> None:
-    verify_score(account_id)
     with SessionLocal() as db:
         profile = db.get(LeaderboardProfile, account_id)
         assert profile is not None
@@ -242,9 +228,6 @@ def test_opt_in_wait_visibility_withdrawal_and_dense_ties(
     assert beta_joined["board"] is None
 
     visible_to_alpha = client.get("/api/v1/leaderboard?metric=gpa&cohort=1a").json()
-    assert visible_to_alpha["board"]["participant_count"] == 1
-    verify_score(beta_id)
-    visible_to_alpha = client.get("/api/v1/leaderboard?metric=gpa&cohort=1a").json()
     assert visible_to_alpha["board"]["participant_count"] == 2
     assert [entry["rank"] for entry in visible_to_alpha["board"]["entries"]] == [1, 1]
     assert all(
@@ -347,7 +330,7 @@ def test_leaderboard_score_uses_all_raw_pass_notes_only(client: TestClient, monk
     assert score.note_count == 2
 
 
-def test_verified_ects_snapshot_cannot_be_changed_by_later_owner_edits(
+def test_official_ects_basis_cannot_be_changed_by_account_editors(
     client: TestClient,
     monkeypatch,
 ) -> None:
@@ -363,6 +346,10 @@ def test_verified_ects_snapshot_cannot_be_changed_by_later_owner_edits(
             first_name="Score",
             last_name="STUDENT",
         )
+        pass_client.last_competency_ues = [
+            CompetencyUe("SIT130", "Outils mathematiques", 1),
+            CompetencyUe("NET100", "Reseaux", 9),
+        ]
         return [
             PassEntry("SIT130", "Examen", 16, 1, False),
             PassEntry("NET100", "Examen", 10, 1, False),
@@ -374,12 +361,6 @@ def test_verified_ects_snapshot_cannot_be_changed_by_later_owner_edits(
         json={"username": "score@imt-atlantique.fr", "password": "correct-password"},
     )
     account_id = login.json()["account"]["id"]
-    for code, credits in (("SIT130", 1), ("NET100", 9)):
-        assert client.patch(
-            f"/api/v1/ues/{code}",
-            json={"credits_ects": credits},
-            headers=csrf_headers(client),
-        ).status_code == 200
     join(client)
     make_visible(account_id)
     initial = client.get("/api/v1/leaderboard?metric=gpa").json()["board"]
@@ -390,13 +371,29 @@ def test_verified_ects_snapshot_cannot_be_changed_by_later_owner_edits(
             f"/api/v1/ues/{code}",
             json={"credits_ects": credits},
             headers=csrf_headers(client),
-        ).status_code == 200
+        ).status_code == 409
     unchanged = client.get("/api/v1/leaderboard?metric=gpa").json()["board"]
     assert unchanged["entries"][0]["score"] == 3.08
 
 
 def test_join_requires_complete_ects(client: TestClient, monkeypatch) -> None:
-    monkeypatch.setattr(ImtPassClient, "fetch_entries", leaderboard_notes)
+    def notes_without_competencies(
+        pass_client: ImtPassClient,
+        username: str,
+        _password: str,
+    ) -> list[PassEntry]:
+        first_name, last_name = identity_for(username)
+        pass_client.last_profile = PassProfile(
+            campus="Rennes",
+            program="FIP",
+            promotion_year=2028,
+            first_name=first_name,
+            last_name=last_name,
+        )
+        pass_client.last_competency_ues = None
+        return [PassEntry("SIT130", "Examen", 15, 1, False)]
+
+    monkeypatch.setattr(ImtPassClient, "fetch_entries", notes_without_competencies)
     login = client.post(
         "/api/v1/auth/login/imt",
         json={"username": "missing-ects@imt-atlantique.fr", "password": "correct-password"},
@@ -417,6 +414,122 @@ def test_join_requires_complete_ects(client: TestClient, monkeypatch) -> None:
     assert "ECTS" in response.json()["detail"]
 
 
+def test_manual_ects_cannot_be_used_to_join_the_public_leaderboard(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    def manual_only_notes(
+        pass_client: ImtPassClient,
+        _username: str,
+        _password: str,
+    ) -> list[PassEntry]:
+        pass_client.last_profile = PassProfile(
+            campus="Rennes",
+            program="FIP",
+            promotion_year=2028,
+            first_name="Manual",
+            last_name="STUDENT",
+        )
+        pass_client.last_competency_ues = None
+        return [
+            PassEntry("SIT130", "Examen", 16, 1, False),
+            PassEntry("NET100", "Examen", 10, 1, False),
+        ]
+
+    monkeypatch.setattr(ImtPassClient, "fetch_entries", manual_only_notes)
+    login = client.post(
+        "/api/v1/auth/login/imt",
+        json={"username": "manual-ects@imt-atlantique.fr", "password": "correct-password"},
+    )
+    assert login.status_code == 200
+    for code, credits in (("SIT130", 1), ("NET100", 9)):
+        assert client.patch(
+            f"/api/v1/ues/{code}",
+            json={"credits_ects": credits},
+            headers=csrf_headers(client),
+        ).status_code == 200
+
+    view = client.get("/api/v1/leaderboard").json()
+    assert "ects" in view["eligibility"]["missing"]
+    response = client.post(
+        "/api/v1/leaderboard/participation",
+        json={
+            "consent_version": view["consent_version"],
+            "acknowledge_visibility": True,
+            "acknowledge_wait": True,
+        },
+        headers=csrf_headers(client),
+    )
+
+    assert response.status_code == 409
+    assert "COMPETENCES" in response.json()["detail"]
+    with SessionLocal() as db:
+        profile = db.get(LeaderboardProfile, login.json()["account"]["id"])
+        assert profile is None or profile.is_participating is False
+
+
+def test_stale_consent_is_neither_active_nor_published(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(ImtPassClient, "fetch_entries", leaderboard_notes)
+    victim = TestClient(client.app, base_url="https://testserver")
+    victim_id = prepare_owner(victim, "victim@imt-atlantique.fr")
+    viewer_id = prepare_owner(client, "viewer@imt-atlantique.fr")
+    join(victim)
+    join(client)
+    make_visible(victim_id)
+    make_visible(viewer_id)
+
+    with SessionLocal() as db:
+        profile = db.get(LeaderboardProfile, victim_id)
+        assert profile is not None
+        profile.consent_version = "legacy-consent"
+        db.commit()
+
+    victim_view = victim.get("/api/v1/leaderboard").json()
+    assert victim_view["state"] == "not_joined"
+    assert victim_view["board"] is None
+    board = client.get("/api/v1/leaderboard").json()["board"]
+    assert [entry["official_name"] for entry in board["entries"]] == ["Viewer STUDENT"]
+
+
+def test_latest_official_metadata_generation_reconciles_or_withdraws_participation(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(ImtPassClient, "fetch_entries", leaderboard_notes)
+    account_id = prepare_owner(client, "official-refresh@imt-atlantique.fr")
+    join(client)
+
+    with SessionLocal() as db:
+        account = db.get(Account, account_id)
+        assert account is not None
+        apply_competency_ues(
+            db,
+            account,
+            [CompetencyUe("SIT130", "Outils mathematiques", 6)],
+        )
+        assert reconcile_participating_leaderboard_basis(db, account) == "refreshed"
+        db.commit()
+        profile = db.get(LeaderboardProfile, account_id)
+        assert profile is not None
+        assert profile.score_ects_basis == {"SIT130": 6.0}
+        assert ensure_utc(profile.score_basis_updated_at) == ensure_utc(account.ue_metadata_refreshed_at)
+
+        apply_competency_ues(
+            db,
+            account,
+            [CompetencyUe("OTHER100", "Autre UE", 3)],
+        )
+        assert reconcile_participating_leaderboard_basis(db, account) == "withdrawn"
+        db.commit()
+        assert profile.is_participating is False
+        assert profile.rejoin_after is None
+        assert profile.consent_version is None
+        assert profile.score_ects_basis is None
+
+
 def test_join_requires_official_pass_identity(client: TestClient, monkeypatch) -> None:
     def notes_without_identity(
         _self: ImtPassClient,
@@ -424,6 +537,7 @@ def test_join_requires_official_pass_identity(client: TestClient, monkeypatch) -
         _password: str,
     ) -> list[PassEntry]:
         _self.last_profile = PassProfile(campus="Rennes", program="FIP", promotion_year=2028)
+        _self.last_competency_ues = [CompetencyUe("SIT130", "Outils mathematiques", 4)]
         return [PassEntry("SIT130", "Examen", 15, 1, False)]
 
     monkeypatch.setattr(ImtPassClient, "fetch_entries", notes_without_identity)

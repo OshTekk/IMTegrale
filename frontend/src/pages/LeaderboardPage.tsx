@@ -38,7 +38,7 @@ const MISSING_LABELS: Record<LeaderboardView["eligibility"]["missing"][number], 
   campus: "Campus PASS indisponible : contacter l'administrateur",
   promotion: "Cursus ou promotion PASS indisponible : contacter l'administrateur",
   pass_notes: "Synchroniser au moins une note PASS",
-  ects: "Renseigner les crédits ECTS de toutes tes UE PASS",
+  ects: "Synchroniser les ECTS officiels de toutes tes UE depuis COMPETENCES",
 };
 
 function useCountdown(target: string | null) {
@@ -63,12 +63,12 @@ function scoreLabel(metric: LeaderboardMetric, value: number) {
   return metric === "gpa" ? `${formatNumber(value)} / 4` : `${formatNumber(value)} / 20`;
 }
 
-function ScoreSnapshot({ view }: { view: LeaderboardView }) {
+function CurrentScores({ view }: { view: LeaderboardView }) {
   const score = view.eligibility.score;
   return (
-    <section className="leaderboard-score-band" aria-label="Scores calculés depuis PASS">
+    <section className="leaderboard-score-band" aria-label="Scores calculés depuis PASS et COMPETENCES">
       <div>
-        <span><Gauge size={17} /> GPA brut</span>
+        <span><Gauge size={17} /> GPA calculé</span>
         <strong>{formatNumber(score.gpa)} <small>/ 4</small></strong>
       </div>
       <div>
@@ -95,7 +95,7 @@ function RulesModal({ view, open, onClose }: { view: LeaderboardView; open: bool
     >
       <div className="leaderboard-rules">
         <section><span><BookOpenCheck size={18} /></span><div><strong>Source contrôlée</strong><p>{view.rules.source}. {view.rules.weighting}.</p></div></section>
-        <section><span><ShieldCheck size={18} /></span><div><strong>ECTS vérifiés avant publication</strong><p>L'instantané des crédits est figé à l'inscription puis validé dans le portail d'administration. Aucune modification privée ultérieure ne change un rang public.</p></div></section>
+        <section><span><ShieldCheck size={18} /></span><div><strong>Coefficients officiels</strong><p>Seule la dernière génération complète importée depuis COMPETENCES peut pondérer le classement. Les ECTS saisis pour ton tableau de bord privé n'y entrent jamais.</p></div></section>
         <section><span><Clock3 size={18} /></span><div><strong>Accès différé</strong><p>Ton profil devient public dès l'activation. Tu accèdes au classement après {view.rules.wait_hours} heures.</p></div></section>
         <section><span><Scale size={18} /></span><div><strong>Égalités</strong><p>{view.rules.ties}. Les deux métriques produisent deux classements indépendants.</p></div></section>
         <section><span><ShieldCheck size={18} /></span><div><strong>Classement nominatif</strong><p>Le prénom et le nom officiels PASS, le rang et le score figurent dans chaque ligne. Le cursus et la promotion définissent le segment ; le campus sert uniquement de filtre.</p></div></section>
@@ -179,8 +179,8 @@ function ParticipationPanel({
         <p>Les scores sont calculés exclusivement depuis les notes brutes PASS. Ton identité officielle rend la participation transparente ; cursus et promotion définissent automatiquement le groupe comparable.</p>
         <div className="privacy-flow">
           <div><span><UserRoundCheck size={18} /></span><div><strong>1. Ton identité PASS est utilisée</strong><p>Prénom, nom, campus, cursus et promotion ne sont pas modifiables ici.</p></div></div>
-          <div><span><ShieldCheck size={18} /></span><div><strong>2. Tes ECTS sont vérifiés</strong><p>Un instantané figé est validé avant toute apparition dans le classement.</p></div></div>
-          <div><span><Clock3 size={18} /></span><div><strong>3. La publication commence, tu patientes 48 heures</strong><p>Les membres actifs voient alors ton score ; le classement reste totalement masqué pour toi pendant le délai.</p></div></div>
+          <div><span><ShieldCheck size={18} /></span><div><strong>2. Tes coefficients sont officiels</strong><p>Les ECTS viennent de COMPETENCES et suivent automatiquement la dernière génération complète synchronisée.</p></div></div>
+          <div><span><Clock3 size={18} /></span><div><strong>3. Tu deviens visible, puis tu patientes 48 heures</strong><p>Les membres actifs voient immédiatement ton score ; le classement reste totalement masqué pour toi pendant le délai.</p></div></div>
         </div>
       </section>
 
@@ -196,7 +196,7 @@ function ParticipationPanel({
         <label className={`consent-check ${visibilityAccepted ? "checked" : ""}`}>
           <input type="checkbox" checked={visibilityAccepted} onChange={(event) => setVisibilityAccepted(event.target.checked)} />
           <i><Check size={14} /></i>
-          <span><strong>J'accepte la publication de mon identité</strong><small>Après validation des ECTS, mon prénom, mon nom officiels PASS et mes scores seront affichés aux participants déjà actifs.</small></span>
+          <span><strong>J'accepte la publication de mon identité</strong><small>Dès l'activation, mon prénom, mon nom officiels PASS et mes scores seront affichés aux participants déjà actifs.</small></span>
         </label>
         <label className={`consent-check ${waitAccepted ? "checked" : ""}`}>
           <input type="checkbox" checked={waitAccepted} onChange={(event) => setWaitAccepted(event.target.checked)} />
@@ -213,23 +213,17 @@ function ParticipationPanel({
 
 function PendingView({ view, onManage }: { view: LeaderboardView; onManage: () => void }) {
   const countdown = useCountdown(view.profile.ranking_visible_at);
-  const awaitingVerification = !view.publication.ects_verified;
-  const awaitingWait = !view.publication.wait_complete;
   return (
     <>
       <section className="leaderboard-wait-banner">
-        <div className="wait-icon">{awaitingVerification ? <ShieldCheck size={24} /> : <Clock3 size={24} />}</div>
-        {awaitingWait
-          ? <div><span>Accès au classement dans</span><strong>{countdown.label}</strong><small>Prévu le {formatDate(view.profile.ranking_visible_at)}</small></div>
-          : <div><span>Dernière étape</span><strong>Vérification ECTS</strong><small>L'administrateur contrôle l'instantané figé</small></div>}
-        <div className="wait-privacy"><EyeOff size={18} /><span>Aucun classement, rang ou nombre de participants n'est visible tant que les deux étapes ne sont pas terminées.</span></div>
+        <div className="wait-icon"><Clock3 size={24} /></div>
+        <div><span>Accès au classement dans</span><strong>{countdown.label}</strong><small>Prévu le {formatDate(view.profile.ranking_visible_at)}</small></div>
+        <div className="wait-privacy"><EyeOff size={18} /><span>Aucun classement, rang ou nombre de participants ne t'est révélé avant la fin du délai.</span></div>
       </section>
       <section className="leaderboard-pending-panel">
-        <div><span className="status-dot" /><span>{awaitingVerification ? "Validation ECTS en attente" : "Participation publiée"}</span></div>
-        <h2>{awaitingVerification ? "Ton profil n'est pas encore publié" : "Ton profil contribue déjà au classement"}</h2>
-        <p>{awaitingVerification
-          ? <>L'instantané de tes crédits doit encore être validé. Ni ton identité ni tes scores ne sont visibles avant ce contrôle ; ton délai de 48 heures continue toutefois de s'écouler.</>
-          : <>Les participants actifs voient <strong>{view.profile.official_name}</strong> et tes scores calculés depuis PASS. Cette asymétrie évite l'activation opportuniste tout en te laissant le droit de te retirer immédiatement.</>}</p>
+        <div><span className="status-dot" /><span>Participation publiée</span></div>
+        <h2>Ton profil contribue déjà au classement</h2>
+        <p>Les participants actifs voient <strong>{view.profile.official_name}</strong> et tes scores calculés depuis PASS. Tu découvriras le classement à la fin du délai affiché ci-dessus.</p>
         <dl>
           <div><dt>Identité PASS</dt><dd>{view.profile.official_name}</dd></div>
           <div><dt>Campus PASS</dt><dd>{CAMPUS_LABELS[view.profile.campus]}</dd></div>
@@ -274,7 +268,7 @@ function ActiveLeaderboard({
 
       <section className="leaderboard-board">
         <header>
-          <div><span className="section-kicker">{view.profile.program} {view.profile.promotion_year} · {metric === "gpa" ? "GPA" : "moyenne générale"}</span><h2>{board?.participant_count ?? 0} participant{board?.participant_count === 1 ? "" : "s"}</h2><p>Scores PASS pondérés par les ECTS, actualisés à chaque consultation.</p></div>
+          <div><span className="section-kicker">{view.profile.program} {view.profile.promotion_year} · {metric === "gpa" ? "GPA" : "moyenne générale"}</span><h2>{board?.participant_count ?? 0} participant{board?.participant_count === 1 ? "" : "s"}</h2><p>Notes PASS pondérées par les ECTS officiels COMPETENCES, actualisées à chaque consultation.</p></div>
           <div className="board-actions"><button className="icon-button" type="button" onClick={onRules} aria-label="Voir les règles" title="Règles"><Info size={18} /></button><button className="icon-button" type="button" onClick={onManage} aria-label="Gérer ma participation" title="Confidentialité"><ShieldCheck size={18} /></button></div>
         </header>
         {board?.entries.length ? (
@@ -349,7 +343,7 @@ export function LeaderboardPage() {
 
   const join = useMutation({
     mutationFn: () => api<LeaderboardView>("/api/v1/leaderboard/participation", { method: "POST", body: JSON.stringify({ consent_version: leaderboard.data?.consent_version, acknowledge_visibility: true, acknowledge_wait: true }) }),
-    onSuccess: (next) => { applyMutationView(next); showToast("Participation activée. Le délai commence et l'instantané ECTS attend sa validation."); },
+    onSuccess: (next) => { applyMutationView(next); showToast("Participation activée. Ton profil est publié et le délai de 48 heures commence."); },
     onError: (error) => showToast(error.message, "error"),
   });
   const withdraw = useMutation({
@@ -368,7 +362,7 @@ export function LeaderboardPage() {
   const stateDescription = useMemo(() => {
     if (!view) return "";
     if (view.state === "active") return "Deux classements distincts, calculés uniquement depuis les données PASS.";
-    if (view.state === "pending") return "Ta participation est enregistrée ; l'accès attend le délai de 48 heures et la validation des ECTS.";
+    if (view.state === "pending") return "Ton profil est publié ; ton accès au classement s'ouvrira après 48 heures.";
     if (view.state === "suspended") return "L'affichage du profil est suspendu pendant une vérification administrative.";
     return "Une participation volontaire, nominative et réversible à tout moment.";
   }, [view]);
@@ -383,7 +377,7 @@ export function LeaderboardPage() {
         <button className="secondary-button" type="button" onClick={() => setRulesOpen(true)}><Info size={16} /> Règles et calculs</button>
       </section>
 
-      <ScoreSnapshot view={view} />
+      <CurrentScores view={view} />
 
       {(view.state === "not_joined" || view.state === "cooldown") && <ParticipationPanel view={view} visibilityAccepted={visibilityAccepted} setVisibilityAccepted={setVisibilityAccepted} waitAccepted={waitAccepted} setWaitAccepted={setWaitAccepted} onSubmit={() => join.mutate()} pending={join.isPending} />}
       {view.state === "pending" && <PendingView view={view} onManage={() => setPrivacyOpen(true)} />}

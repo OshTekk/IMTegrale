@@ -14,9 +14,9 @@ from app.calculations import grade_for_average
 from app.database import utcnow
 from app.models import Account, LeaderboardProfile, Note, UeSetting
 
-LEADERBOARD_CONSENT_VERSION = "2026-07-16.3"
-LEADERBOARD_RULES_VERSION = "2026-07-16.3"
-LEADERBOARD_RULES_UPDATED_AT = "2026-07-16"
+LEADERBOARD_CONSENT_VERSION = "2026-07-17.2"
+LEADERBOARD_RULES_VERSION = "2026-07-17.2"
+LEADERBOARD_RULES_UPDATED_AT = "2026-07-17"
 LEADERBOARD_WAIT = timedelta(hours=48)
 LEADERBOARD_REJOIN_COOLDOWN = timedelta(hours=48)
 
@@ -49,6 +49,24 @@ def ensure_utc(value: datetime | None) -> datetime | None:
     if value is None:
         return None
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def _has_current_consent(profile: LeaderboardProfile | None) -> bool:
+    return bool(
+        profile
+        and profile.consent_at is not None
+        and profile.consent_version == LEADERBOARD_CONSENT_VERSION
+    )
+
+
+def _basis_is_current(account: Account, profile: LeaderboardProfile | None) -> bool:
+    metadata_at = ensure_utc(account.ue_metadata_refreshed_at)
+    return bool(
+        profile
+        and profile.score_ects_basis
+        and metadata_at is not None
+        and ensure_utc(profile.score_basis_updated_at) == metadata_at
+    )
 
 
 def normalize_official_name_part(value: str | None) -> str | None:
@@ -227,15 +245,15 @@ def calculate_raw_pass_score(
     notes: list[Note],
     settings: list[UeSetting],
     *,
-    ects_snapshot: dict[str, float] | None = None,
+    ects_basis: dict[str, float] | None = None,
 ) -> LeaderboardScore:
     grouped: dict[str, list[Note]] = defaultdict(list)
     for note in notes:
         if note.source == "pass" and not note.archived:
             grouped[note.ue_code].append(note)
     ects_by_code = (
-        {code: float(value) for code, value in ects_snapshot.items()}
-        if ects_snapshot is not None
+        {code: float(value) for code, value in ects_basis.items()}
+        if ects_basis is not None
         else {
             setting.code: float(setting.credits_ects)
             for setting in settings
@@ -283,70 +301,129 @@ def calculate_raw_pass_score(
     )
 
 
-def account_leaderboard_score(db: Session, account_id: str) -> LeaderboardScore:
-    notes = list(
-        db.scalars(
-            select(Note).where(
-                Note.account_id == account_id,
-                Note.source == "pass",
-                Note.archived.is_(False),
-            )
-        )
-    )
-    settings = list(db.scalars(select(UeSetting).where(UeSetting.account_id == account_id)))
-    return calculate_raw_pass_score(notes, settings)
-
-
-def _current_ects_snapshot(db: Session, account_id: str) -> tuple[dict[str, float], list[str]]:
-    codes = sorted(
-        set(
+def _official_ects_basis(
+    db: Session,
+    account: Account,
+    codes: set[str] | None = None,
+) -> tuple[dict[str, float], list[str]]:
+    if codes is None:
+        codes = set(
             db.scalars(
                 select(Note.ue_code).where(
-                    Note.account_id == account_id,
+                    Note.account_id == account.id,
                     Note.source == "pass",
                     Note.archived.is_(False),
                 )
             )
         )
-    )
+    ordered_codes = sorted(codes)
     settings = {
         setting.code: setting
         for setting in db.scalars(
             select(UeSetting).where(
-                UeSetting.account_id == account_id,
-                UeSetting.code.in_(codes),
+                UeSetting.account_id == account.id,
+                UeSetting.code.in_(ordered_codes),
             )
         )
     }
-    snapshot: dict[str, float] = {}
+    generation_at = ensure_utc(account.ue_metadata_refreshed_at)
+    basis: dict[str, float] = {}
     missing: list[str] = []
-    for code in codes:
-        value = settings.get(code).credits_ects if settings.get(code) is not None else None
-        if value is None or float(value) <= 0:
+    for code in ordered_codes:
+        setting = settings.get(code)
+        value = setting.credits_ects if setting is not None else None
+        official_and_current = bool(
+            setting
+            and setting.metadata_source == "competences"
+            and generation_at is not None
+            and ensure_utc(setting.metadata_refreshed_at) == generation_at
+        )
+        if not official_and_current or value is None or float(value) <= 0:
             missing.append(code)
         else:
-            snapshot[code] = round(float(value), 2)
-    return snapshot, missing
+            basis[code] = round(float(value), 2)
+    return basis, missing
 
 
-def verify_leaderboard_score(
+def _official_leaderboard_score(
+    db: Session,
+    account: Account,
+) -> tuple[LeaderboardScore, dict[str, float], list[str]]:
+    notes = list(
+        db.scalars(
+            select(Note).where(
+                Note.account_id == account.id,
+                Note.source == "pass",
+                Note.archived.is_(False),
+            )
+        )
+    )
+    basis, missing = _official_ects_basis(db, account, {note.ue_code for note in notes})
+    return calculate_raw_pass_score(notes, [], ects_basis=basis), basis, missing
+
+
+def account_leaderboard_score(db: Session, account_id: str) -> LeaderboardScore:
+    account = db.get(Account, account_id)
+    if account is None:
+        raise ValueError("Compte introuvable")
+    score, _basis, _missing = _official_leaderboard_score(db, account)
+    return score
+
+
+def refresh_leaderboard_score_basis(
     db: Session,
     account: Account,
     profile: LeaderboardProfile,
-    *,
-    admin_user_id: str,
 ) -> None:
     if not profile.is_participating:
         raise ValueError("La participation au classement est inactive")
-    snapshot, missing = _current_ects_snapshot(db, account.id)
+    if not _has_current_consent(profile):
+        raise ValueError("Le consentement au classement doit être renouvelé")
+    basis, missing = _official_ects_basis(db, account)
     if missing:
         raise ValueError(
-            "Les ECTS doivent être renseignés avant validation : " + ", ".join(missing)
+            "Les ECTS officiels COMPETENCES doivent être à jour avant l'actualisation : "
+            + ", ".join(missing)
         )
-    profile.score_ects_snapshot = snapshot
-    profile.score_verified_at = utcnow()
-    profile.score_verified_by_admin_id = admin_user_id
-    profile.updated_at = utcnow()
+    now = utcnow()
+    profile.score_ects_basis = basis
+    profile.score_basis_updated_at = account.ue_metadata_refreshed_at
+    profile.updated_at = now
+
+
+def _reset_participation_for_reconsent(
+    profile: LeaderboardProfile,
+    *,
+    now: datetime,
+) -> None:
+    profile.is_participating = False
+    profile.joined_at = None
+    profile.ranking_visible_at = None
+    profile.left_at = now
+    profile.rejoin_after = None
+    profile.consent_version = None
+    profile.consent_at = None
+    profile.score_ects_basis = None
+    profile.score_basis_updated_at = None
+    profile.updated_at = now
+
+
+def reconcile_participating_leaderboard_basis(db: Session, account: Account) -> str:
+    profile = _profile_for(db, account)
+    if profile is None or not profile.is_participating:
+        return "unchanged"
+    now = utcnow()
+    if not _has_current_consent(profile):
+        _reset_participation_for_reconsent(profile, now=now)
+        return "withdrawn"
+    basis, missing = _official_ects_basis(db, account)
+    if missing:
+        _reset_participation_for_reconsent(profile, now=now)
+        return "withdrawn"
+    profile.score_ects_basis = basis
+    profile.score_basis_updated_at = account.ue_metadata_refreshed_at
+    profile.updated_at = now
+    return "refreshed"
 
 
 def _profile_for(db: Session, account: Account) -> LeaderboardProfile | None:
@@ -360,12 +437,13 @@ def rules_view() -> dict:
         "wait_hours": 48,
         "rejoin_cooldown_hours": 48,
         "source": "Notes brutes synchronisées depuis PASS uniquement",
-        "weighting": "Moyennes d'UE pondérées par un instantané ECTS figé et validé avant publication",
+        "weighting": "Moyennes d'UE pondérées par les ECTS officiels COMPETENCES courants",
         "segment": "Cursus de primo-inscription et année de sortie vérifiés par PASS",
         "excluded": [
             "notes manuelles",
             "corrections utilisateur",
             "masquage local des notes PASS",
+            "ECTS manuels ou issus d'une ancienne génération COMPETENCES",
         ],
         "ties": "Rang dense : un score identique reçoit le même rang",
         "freshness": "Recalcul à chaque lecture à partir du dernier état synchronisé",
@@ -373,32 +451,29 @@ def rules_view() -> dict:
     }
 
 
-def _state_for(profile: LeaderboardProfile | None, now: datetime) -> str:
+def _state_for(account: Account, profile: LeaderboardProfile | None, now: datetime) -> str:
     if profile is None:
         return "not_joined"
     if profile.suspended_at is not None:
         return "suspended"
     if profile.is_participating:
+        if not _has_current_consent(profile) or not _basis_is_current(account, profile):
+            return "not_joined"
         visible_at = ensure_utc(profile.ranking_visible_at)
-        verified_at = ensure_utc(profile.score_verified_at)
-        return (
-            "active"
-            if visible_at is not None and visible_at <= now and verified_at is not None
-            else "pending"
-        )
+        return "active" if visible_at is not None and visible_at <= now else "pending"
     rejoin_after = ensure_utc(profile.rejoin_after)
     if rejoin_after is not None and rejoin_after > now:
         return "cooldown"
     return "not_joined"
 
 
-def leaderboard_profile_state(profile: LeaderboardProfile | None) -> str:
-    return _state_for(profile, utcnow())
+def leaderboard_profile_state(account: Account, profile: LeaderboardProfile | None) -> str:
+    return _state_for(account, profile, utcnow())
 
 
 def _profile_view(account: Account, profile: LeaderboardProfile | None, score: LeaderboardScore) -> dict:
     now = utcnow()
-    state = _state_for(profile, now)
+    state = _state_for(account, profile, now)
     missing: list[str] = []
     if account.campus not in CAMPUSES:
         missing.append("campus")
@@ -436,8 +511,6 @@ def _profile_view(account: Account, profile: LeaderboardProfile | None, score: L
             "left_at": profile.left_at if profile else None,
             "rejoin_after": profile.rejoin_after if profile else None,
             "verification_status": profile.verification_status if profile else "standard",
-            "score_ects_snapshot": profile.score_ects_snapshot if profile else None,
-            "score_verified_at": profile.score_verified_at if profile else None,
         },
         "eligibility": {
             "eligible": not missing,
@@ -460,7 +533,7 @@ def _profile_view(account: Account, profile: LeaderboardProfile | None, score: L
                 and ensure_utc(profile.ranking_visible_at)
                 and ensure_utc(profile.ranking_visible_at) <= now
             ),
-            "ects_verified": bool(profile and profile.score_verified_at),
+            "score_ready": _basis_is_current(account, profile),
         },
     }
 
@@ -488,9 +561,9 @@ def _scores_for_profiles(
         profile.account_id: calculate_raw_pass_score(
             notes_by_account.get(profile.account_id, []),
             settings_by_account.get(profile.account_id, []),
-            ects_snapshot={
+            ects_basis={
                 str(code): float(value)
-                for code, value in (profile.score_ects_snapshot or {}).items()
+                for code, value in (profile.score_ects_basis or {}).items()
             },
         )
         for profile in profiles
@@ -515,7 +588,11 @@ def board_view(
             .where(
                 LeaderboardProfile.is_participating.is_(True),
                 LeaderboardProfile.suspended_at.is_(None),
-                LeaderboardProfile.score_verified_at.is_not(None),
+                LeaderboardProfile.score_ects_basis.is_not(None),
+                LeaderboardProfile.consent_version == LEADERBOARD_CONSENT_VERSION,
+                LeaderboardProfile.consent_at.is_not(None),
+                Account.ue_metadata_refreshed_at.is_not(None),
+                LeaderboardProfile.score_basis_updated_at == Account.ue_metadata_refreshed_at,
                 Account.is_disabled.is_(False),
                 Account.official_first_name.is_not(None),
                 Account.official_last_name.is_not(None),
@@ -592,7 +669,7 @@ def leaderboard_view(
     cohort_filter: str | None = None,
 ) -> dict:
     profile = _profile_for(db, account)
-    score = account_leaderboard_score(db, account.id)
+    score, _basis, _missing = _official_leaderboard_score(db, account)
     result = _profile_view(account, profile, score)
     selected_cohort = "official"
     if campus_filter not in CAMPUSES | {"all"}:
@@ -645,16 +722,19 @@ def join_leaderboard(
                 "Actualise PASS ou contacte l'administrateur."
             ),
         )
-    score = account_leaderboard_score(db, account.id)
+    score, basis, missing = _official_leaderboard_score(db, account)
     if score.note_count == 0:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Au moins une note PASS est nécessaire pour rejoindre le classement",
         )
-    if score.missing_ects_count:
+    if missing or score.missing_ects_count:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Renseigne les crédits ECTS de toutes tes UE PASS avant de rejoindre le classement",
+            detail=(
+                "Les ECTS officiels COMPETENCES de toutes tes UE PASS doivent être à jour "
+                "avant de rejoindre le classement"
+            ),
         )
     profile = _profile_for(db, account)
     if profile is None:
@@ -664,6 +744,10 @@ def join_leaderboard(
     now = utcnow()
     if profile.suspended_at is not None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Participation suspendue")
+    if profile.is_participating and (
+        not _has_current_consent(profile) or not _basis_is_current(account, profile)
+    ):
+        _reset_participation_for_reconsent(profile, now=now)
     if profile.is_participating:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Participation déjà active")
     if ensure_utc(profile.rejoin_after) and ensure_utc(profile.rejoin_after) > now:
@@ -679,15 +763,8 @@ def join_leaderboard(
     profile.consent_version = consent_version
     profile.consent_at = now
     profile.verification_status = "review" if account.classification_review_required else "standard"
-    snapshot, missing = _current_ects_snapshot(db, account.id)
-    if missing:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Renseigne les crédits ECTS de toutes tes UE PASS avant de rejoindre le classement",
-        )
-    profile.score_ects_snapshot = snapshot
-    profile.score_verified_at = None
-    profile.score_verified_by_admin_id = None
+    profile.score_ects_basis = basis
+    profile.score_basis_updated_at = account.ue_metadata_refreshed_at
     profile.updated_at = now
 
 
@@ -731,9 +808,8 @@ def delete_leaderboard_data(account: Account, profile: LeaderboardProfile) -> No
     profile.consent_version = None
     profile.consent_at = None
     profile.verification_status = "standard"
-    profile.score_ects_snapshot = None
-    profile.score_verified_at = None
-    profile.score_verified_by_admin_id = None
+    profile.score_ects_basis = None
+    profile.score_basis_updated_at = None
     profile.suspended_at = None
     profile.suspended_reason = None
     profile.rejoin_after = now + LEADERBOARD_REJOIN_COOLDOWN

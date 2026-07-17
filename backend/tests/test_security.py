@@ -1,5 +1,5 @@
 import pytest
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.routers import auth as auth_router
 from app.security import (
     CredentialCipher,
@@ -9,6 +9,21 @@ from app.security import (
     share_token_prefix,
 )
 from starlette.requests import Request
+
+
+def test_development_skips_only_production_mtls_files(tmp_path) -> None:
+    missing = tmp_path / "missing.pem"
+    common = {
+        "credential_key": "development-key",
+        "token_pepper": "development-pepper",
+        "backend_tls_cert": missing,
+        "backend_tls_key": missing,
+        "backend_tls_ca": missing,
+    }
+
+    Settings(environment="development", **common).validate_secrets()
+    with pytest.raises(RuntimeError, match="Required backend mTLS file is missing"):
+        Settings(environment="production", **common).validate_secrets()
 
 
 def test_credentials_are_context_bound() -> None:

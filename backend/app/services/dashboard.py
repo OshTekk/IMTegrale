@@ -90,6 +90,8 @@ def calculate_ues(notes: list[Note], settings: list[UeSetting]) -> list[dict]:
                 "title": setting.title if setting else "",
                 "year": (setting.year if setting else "") or ue_year(code),
                 "credits_ects": setting.credits_ects if setting else None,
+                "metadata_source": setting.metadata_source if setting else "manual",
+                "metadata_refreshed_at": setting.metadata_refreshed_at if setting else None,
                 "average": average,
                 "grade": grade.grade if grade else None,
                 "grade_description": grade.description if grade else None,

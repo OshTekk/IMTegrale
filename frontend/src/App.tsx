@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { lazy, Suspense, useEffect } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AppShell } from "./components/AppShell";
 import { Logo } from "./components/Logo";
@@ -21,6 +21,11 @@ const DemoPage = lazy(() => import("./pages/DemoPage").then((module) => ({ defau
 
 export default function App() {
   const location = useLocation();
+
+  useLayoutEffect(() => {
+    window.scrollTo(0, 0);
+  }, [location.pathname]);
+
   if (location.pathname.startsWith("/admin")) {
     return <Suspense fallback={<div className="route-loading skeleton" />}><AdminPortal /></Suspense>;
   }
@@ -42,6 +47,11 @@ export default function App() {
 function StudentApp() {
   const session = useSession();
   const queryClient = useQueryClient();
+  const authenticated = Boolean(session.data?.authenticated);
+
+  useLayoutEffect(() => {
+    if (authenticated) window.scrollTo(0, 0);
+  }, [authenticated]);
 
   useEffect(() => {
     const handleUnauthorized = () => {

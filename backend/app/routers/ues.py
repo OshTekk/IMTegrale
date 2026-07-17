@@ -27,6 +27,11 @@ def update_ue(
     if setting is None:
         setting = UeSetting(account_id=auth.account.id, code=normalized, year=ue_year(normalized))
         db.add(setting)
+    if setting.metadata_source == "competences" and {"title", "credits_ects"} & values.keys():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="L'intitulé et les ECTS officiels sont importés depuis COMPETENCES.",
+        )
     if "title" in values:
         setting.title = clean_text(values["title"])
     if "year" in values:
@@ -47,4 +52,6 @@ def update_ue(
         "title": setting.title,
         "year": setting.year,
         "credits_ects": setting.credits_ects,
+        "metadata_source": setting.metadata_source,
+        "metadata_refreshed_at": setting.metadata_refreshed_at,
     }

@@ -30,6 +30,8 @@ export interface UeItem {
   title: string;
   year: string;
   credits_ects: number | null;
+  metadata_source: "manual" | "competences";
+  metadata_refreshed_at: string | null;
   average: number | null;
   grade: string | null;
   grade_description: string | null;
@@ -235,8 +237,6 @@ export interface LeaderboardView {
     left_at: string | null;
     rejoin_after: string | null;
     verification_status: "standard" | "review" | "suspended";
-    score_ects_snapshot: Record<string, number> | null;
-    score_verified_at: string | null;
   };
   eligibility: {
     eligible: boolean;
@@ -255,7 +255,7 @@ export interface LeaderboardView {
   consent_version: string;
   publication: {
     wait_complete: boolean;
-    ects_verified: boolean;
+    score_ready: boolean;
   };
   rules: {
     version: string;
@@ -323,8 +323,8 @@ export interface AdminAccount {
     profile_refreshed_at: string | null;
     classification_review_required: boolean;
     verification_status: "standard" | "review" | "suspended";
-    score_ects_snapshot: Record<string, number> | null;
-    score_verified_at: string | null;
+    score_ects_basis: Record<string, number> | null;
+    score_basis_updated_at: string | null;
     ranking_visible_at: string | null;
     rejoin_after: string | null;
     suspended_at: string | null;

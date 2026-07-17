@@ -25,6 +25,7 @@ from app.services.imt import (
     MAX_NOTE_LABEL_LENGTH,
     MAX_PASS_ENTRIES,
     MAX_UE_CODE_LENGTH,
+    CompetencyUe,
     ImtAuthenticationError,
     ImtFetchError,
     PassEntry,
@@ -35,6 +36,7 @@ from app.services.leaderboard import (
     apply_detected_campus,
     apply_official_identity,
     normalize_detected_campus,
+    reconcile_participating_leaderboard_basis,
 )
 from app.services.pass_gateway import PassAccessRejected, perform_sync_operation
 from app.services.sync_control import (
@@ -280,6 +282,65 @@ def apply_pass_profile(account: Account, profile: PassProfile | None) -> None:
     account.profile_refresh_requested_at = None
 
 
+def apply_competency_ues(
+    db: Session,
+    account: Account,
+    entries: list[CompetencyUe] | None,
+    *,
+    actor: str = "system",
+) -> dict[str, int]:
+    if entries is None:
+        return {"total": 0, "updated": 0}
+    if len(entries) > MAX_UE_SETTINGS_PER_ACCOUNT:
+        raise ImtFetchError("COMPETENCES a fourni trop d'UE distinctes")
+
+    by_code = {
+        setting.code: setting
+        for setting in db.scalars(select(UeSetting).where(UeSetting.account_id == account.id))
+    }
+    incoming_codes = {ue_code(entry.ue_code) for entry in entries}
+    if len(by_code.keys() | incoming_codes) > MAX_UE_SETTINGS_PER_ACCOUNT:
+        raise ImtFetchError("La limite d'UE du compte serait dépassée")
+
+    now = utcnow()
+    updated = 0
+    for entry in entries:
+        code = ue_code(entry.ue_code)
+        title = clean_text(entry.title)
+        credits = float(entry.credits_ects)
+        if not code or len(code) > MAX_UE_CODE_LENGTH:
+            raise ImtFetchError("COMPETENCES a fourni un code UE invalide")
+        if not title or len(title) > 200:
+            raise ImtFetchError("COMPETENCES a fourni un intitulé d'UE invalide")
+        if not math.isfinite(credits) or not 0 < credits <= 60:
+            raise ImtFetchError("COMPETENCES a fourni des crédits ECTS invalides")
+
+        setting = by_code.get(code)
+        if setting is None:
+            setting = UeSetting(account_id=account.id, code=code, year=ue_year(code))
+            db.add(setting)
+            by_code[code] = setting
+        changed = setting.title != title or setting.credits_ects != credits
+        setting.title = title
+        setting.credits_ects = credits
+        setting.metadata_source = "competences"
+        setting.metadata_refreshed_at = now
+        setting.updated_at = now
+        updated += int(changed)
+
+    account.ue_metadata_refreshed_at = now
+    account.ue_metadata_refresh_requested_at = None
+    if entries:
+        record_event(
+            db,
+            account_id=account.id,
+            kind="ue:metadata_refreshed",
+            actor=actor,
+            payload={"total": len(entries), "updated": updated, "source": "competences"},
+        )
+    return {"total": len(entries), "updated": updated}
+
+
 def _notify_new_notes(db: Session, account: Account, inserted: list[Note]) -> None:
     if not inserted or not account.telegram_enabled:
         return
@@ -502,6 +563,25 @@ def execute_sync_request(
             )
             result = apply_pass_entries(db, account, gateway.entries, actor=request.actor)
             apply_pass_profile(account, gateway.profile)
+            competency_result = apply_competency_ues(
+                db,
+                account,
+                gateway.competency_ues,
+                actor=request.actor,
+            )
+            leaderboard_basis_result = (
+                reconcile_participating_leaderboard_basis(db, account)
+                if gateway.competency_ues is not None
+                else "unchanged"
+            )
+            if leaderboard_basis_result != "unchanged":
+                record_event(
+                    db,
+                    account_id=account.id,
+                    kind=f"leaderboard:basis_{leaderboard_basis_result}",
+                    actor=request.actor,
+                    payload={"source": "competences"},
+                )
             update_adaptive_cadence(
                 account,
                 changed=result["changed"],
@@ -531,6 +611,8 @@ def execute_sync_request(
                 "inserted": len(result["inserted"]),
                 "updated": result["updated"],
                 "archived": result["archived"],
+                "ue_metadata_updated": competency_result["updated"],
+                "leaderboard_basis": leaderboard_basis_result,
             }
             finalize_sync_request(
                 db,

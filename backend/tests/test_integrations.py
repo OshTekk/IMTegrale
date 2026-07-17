@@ -80,6 +80,18 @@ def test_imt_streaming_read_enforces_global_deadline(monkeypatch) -> None:
         client._read_limited(response, 100)
 
 
+def test_competencies_url_is_derived_only_from_validated_student_route() -> None:
+    client = ImtPassClient()
+    dashboard = fake_response(
+        url="https://hub.imt-atlantique.fr/comp2/etudiant/40419",
+        body=b'<a href="https://evil.example/ue">external</a>',
+    )
+
+    assert client._competency_ue_url(dashboard) == (
+        "https://hub.imt-atlantique.fr/comp2/etudiant/40419/ue"
+    )
+
+
 def test_telegram_messages_have_stable_chunk_and_note_limits() -> None:
     chunks = split_message("x" * 1000, limit=100, max_chunks=3)
     assert len(chunks) == 3

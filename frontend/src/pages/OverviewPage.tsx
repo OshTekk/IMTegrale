@@ -22,7 +22,7 @@ export function OverviewPage() {
 
   return (
     <div className="overview-grid">
-      {data.summary.missing_ects_count > 0 && <Link className="attention-banner" to="/ues"><TriangleAlert size={18} /><span><strong>{data.summary.missing_ects_count} UE sans crédits ECTS</strong>Complète-les pour fiabiliser la moyenne générale et le GPA.</span><ArrowRight size={18} /></Link>}
+      {data.summary.missing_ects_count > 0 && <Link className="attention-banner" to="/ues"><TriangleAlert size={18} /><span><strong>{data.summary.missing_ects_count} UE sans crédits ECTS</strong>Actualise les données IMT ou complète les valeurs encore absentes.</span><ArrowRight size={18} /></Link>}
 
       <section className="metric-grid" aria-label="Indicateurs principaux">
         <article className="metric-card average"><div className="metric-label"><span><GraduationCap size={18} /></span>Moyenne générale</div><strong>{formatNumber(data.summary.average, " /20")}</strong><p>{formatNumber(data.summary.average_credits, " ECTS")} pondérés</p></article>

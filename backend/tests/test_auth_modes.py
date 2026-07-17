@@ -69,9 +69,13 @@ def test_existing_imt_login_authenticates_without_fetching_notes(
         _self: ImtPassClient,
         *,
         include_profile: bool,
+        include_competencies: bool,
     ) -> list[PassEntry]:
         calls["fetch"] += 1
-        raise AssertionError(f"unexpected PASS fetch include_profile={include_profile}")
+        raise AssertionError(
+            "unexpected PASS fetch "
+            f"include_profile={include_profile} include_competencies={include_competencies}"
+        )
 
     monkeypatch.setattr(ImtPassClient, "authenticate", authenticate)
     monkeypatch.setattr(ImtPassClient, "fetch_entries_authenticated", forbidden_fetch)

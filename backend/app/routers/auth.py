@@ -55,7 +55,7 @@ from app.services.passkeys import (
     register_passkey,
     registration_options,
 )
-from app.services.sync import apply_pass_entries, apply_pass_profile
+from app.services.sync import apply_competency_ues, apply_pass_entries, apply_pass_profile
 from app.services.sync_control import set_login_sync_cooldown
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
@@ -202,6 +202,7 @@ async def login_imt(
             initial_import=True,
         )
         apply_pass_profile(account, gateway.profile)
+        apply_competency_ues(db, account, gateway.competency_ues, actor="owner")
     cleanup_sessions(db)
     web_session, session_token, csrf_token = create_web_session(
         db,

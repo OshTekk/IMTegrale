@@ -54,8 +54,8 @@ from app.services.leaderboard import (
     delete_leaderboard_data,
     leaderboard_profile_state,
     leave_leaderboard,
+    refresh_leaderboard_score_basis,
     update_leaderboard_classification,
-    verify_leaderboard_score,
 )
 from app.services.pass_gateway import (
     metrics_view,
@@ -264,7 +264,7 @@ def _account_view(
             for token in tokens
         ],
         "leaderboard": {
-            "state": leaderboard_profile_state(profile),
+            "state": leaderboard_profile_state(account, profile),
             "official_first_name": account.official_first_name,
             "official_last_name": account.official_last_name,
             "official_identity_at": account.official_identity_at,
@@ -279,8 +279,8 @@ def _account_view(
             "profile_refreshed_at": account.profile_refreshed_at,
             "classification_review_required": account.classification_review_required,
             "verification_status": profile.verification_status if profile else "standard",
-            "score_ects_snapshot": profile.score_ects_snapshot if profile else None,
-            "score_verified_at": profile.score_verified_at if profile else None,
+            "score_ects_basis": profile.score_ects_basis if profile else None,
+            "score_basis_updated_at": profile.score_basis_updated_at if profile else None,
             "ranking_visible_at": profile.ranking_visible_at if profile else None,
             "rejoin_after": profile.rejoin_after if profile else None,
             "suspended_at": profile.suspended_at if profile else None,
@@ -400,8 +400,7 @@ def manage_account(
     if payload.action in {
         "disable",
         "leaderboard_suspend",
-        "leaderboard_verify_score",
-        "leaderboard_request_score_review",
+        "leaderboard_refresh_score_basis",
         "auth_clear_cooldown",
     } and not reason:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Un motif est requis")
@@ -468,27 +467,16 @@ def manage_account(
     elif payload.action == "leaderboard_delete_data":
         if profile is not None:
             delete_leaderboard_data(account, profile)
-    elif payload.action == "leaderboard_verify_score":
+    elif payload.action == "leaderboard_refresh_score_basis":
         if profile is None:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Aucun profil leaderboard")
         try:
-            verify_leaderboard_score(
-                db,
-                account,
-                profile,
-                admin_user_id=auth.user.id,
-            )
+            refresh_leaderboard_score_basis(db, account, profile)
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=str(exc),
             ) from exc
-    elif payload.action == "leaderboard_request_score_review":
-        if profile is None:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Aucun profil leaderboard")
-        profile.score_verified_at = None
-        profile.score_verified_by_admin_id = None
-        profile.updated_at = now
     elif payload.action == "auth_clear_cooldown":
         clear_target_cooldown(db, target_reference(account.imt_username))
     elif payload.action == "profile_refresh":

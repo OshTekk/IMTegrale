@@ -242,7 +242,9 @@ class FakePassClient:
         self.session = FakeSession()
         self.request_count = 0
         self.last_profile: PassProfile | None = None
+        self.last_competency_ues = None
         self.include_profile_on_fetch = False
+        self.include_competencies_on_fetch = False
         self.instances.append(self)
 
     def fetch_entries(self, _username: str, _password: str) -> list[PassEntry]:
@@ -256,7 +258,12 @@ class FakePassClient:
         )
         return [PassEntry("SIT130", "Examen", 15, 1, False)]
 
-    def fetch_entries_authenticated(self, *, include_profile: bool) -> list[PassEntry]:
+    def fetch_entries_authenticated(
+        self,
+        *,
+        include_profile: bool,
+        include_competencies: bool,
+    ) -> list[PassEntry]:
         self.request_count = 2
         self.last_profile = (
             PassProfile(
@@ -310,9 +317,12 @@ def test_expired_cached_session_performs_one_full_authentication_fallback(monkey
 
     cached = FakePassClient.instances[0]
 
-    def expired(*, include_profile: bool) -> list[PassEntry]:
+    def expired(*, include_profile: bool, include_competencies: bool) -> list[PassEntry]:
         cached.request_count = 1
-        raise ImtAuthenticationError(f"expired include_profile={include_profile}")
+        raise ImtAuthenticationError(
+            f"expired include_profile={include_profile} "
+            f"include_competencies={include_competencies}"
+        )
 
     monkeypatch.setattr(cached, "fetch_entries_authenticated", expired)
     result = pass_gateway.perform_sync_operation(
