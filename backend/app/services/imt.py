@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
-from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, unquote, urlencode, urljoin, urlsplit, urlunsplit
 
 import requests
 from bs4 import BeautifulSoup, SoupStrainer
@@ -27,6 +27,11 @@ PASS_PROFILE_URL = (
     "?IdApplication=142&TypeAcces=MaFiche&IdLien=190"
 )
 COMPETENCIES_HOME_URL = "https://hub.imt-atlantique.fr/comp2/"
+COMPETENCIES_CSRF_URL = "https://hub.imt-atlantique.fr/comp2/back/sanctum/csrf-cookie"
+COMPETENCIES_LOGIN_URL = "https://hub.imt-atlantique.fr/comp2/back/api/login"
+COMPETENCIES_LOGOUT_URL = "https://hub.imt-atlantique.fr/comp2/back/api/logout"
+COMPETENCIES_USER_URL = "https://hub.imt-atlantique.fr/comp2/back/api/user"
+COMPETENCIES_RESULTS_BASE_URL = "https://hub.imt-atlantique.fr/comp2/back/api/resultat_ue"
 IMT_ATLANTIQUE_IDP_ENTITY_ID = "https://idp.imt-atlantique.fr/idp/shibboleth"
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) IMTegrale/3.4"
 
@@ -50,7 +55,13 @@ MAX_COMPETENCY_UES = 500
 MAX_UE_CODE_LENGTH = 32
 MAX_NOTE_LABEL_LENGTH = 240
 MAX_NOTE_COEFFICIENT = 100.0
+MAX_HUB_AUTH_BYTES = 128_000
+MAX_HUB_RESULTS_BYTES = 2_000_000
 REDIRECT_STATUSES = {301, 302, 303, 307, 308}
+OFFICIAL_GRADES = frozenset({"A", "B", "C", "D", "E", "FX", "F"})
+OFFICIAL_RESULT_STATUSES = frozenset(
+    {"non valide", "valide", "en cours de validation", "valide sur decision du jury"}
+)
 
 
 class ImtError(RuntimeError):
@@ -109,7 +120,7 @@ def _clean(value: str) -> str:
     return re.sub(r"\s+", " ", html_lib.unescape(value or "")).strip()
 
 
-def _decimal(value: str) -> float | None:
+def _decimal(value: object) -> float | None:
     try:
         return float(str(value).replace(",", ".").strip())
     except (TypeError, ValueError):
@@ -249,6 +260,7 @@ class ImtPassClient:
         url: str,
         *,
         data: Mapping[str, str] | Sequence[tuple[str, str]] | None = None,
+        headers: Mapping[str, str] | None = None,
         allowed_origins: Collection[Origin] = TRUSTED_IMT_ORIGINS,
         max_bytes: int = MAX_HTML_BYTES,
         sensitive: bool = False,
@@ -265,6 +277,7 @@ class ImtPassClient:
                 current_method,
                 current_url,
                 data=current_data,
+                headers=dict(headers) if headers else None,
                 timeout=self._request_timeout(),
                 allow_redirects=False,
                 stream=True,
@@ -301,24 +314,35 @@ class ImtPassClient:
         self,
         url: str,
         *,
+        headers: Mapping[str, str] | None = None,
         allowed_origins: Collection[Origin] = TRUSTED_IMT_ORIGINS,
         max_bytes: int = MAX_HTML_BYTES,
     ) -> requests.Response:
-        return self._request("GET", url, allowed_origins=allowed_origins, max_bytes=max_bytes)
+        return self._request(
+            "GET",
+            url,
+            headers=headers,
+            allowed_origins=allowed_origins,
+            max_bytes=max_bytes,
+        )
 
     def _post(
         self,
         url: str,
         *,
         data: Mapping[str, str] | Sequence[tuple[str, str]],
+        headers: Mapping[str, str] | None = None,
         allowed_origins: Collection[Origin] = TRUSTED_IMT_ORIGINS,
+        max_bytes: int = MAX_HTML_BYTES,
         sensitive: bool = False,
     ) -> requests.Response:
         return self._request(
             "POST",
             url,
             data=data,
+            headers=headers,
             allowed_origins=allowed_origins,
+            max_bytes=max_bytes,
             sensitive=sensitive,
         )
 
@@ -744,51 +768,41 @@ class ImtPassClient:
             raise ImtFetchError("La session IMT n'a pas pu ouvrir COMPETENCES")
         return response
 
+    @classmethod
+    def _hub_json(cls, response: requests.Response, *, label: str) -> object:
+        cls._ensure_success(response)
+        media_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().casefold()
+        if media_type != "application/json" and not media_type.endswith("+json"):
+            raise ImtFetchError(f"COMPETENCES a renvoyé un format inattendu pour {label}")
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise ImtFetchError(f"COMPETENCES a renvoyé un JSON invalide pour {label}") from exc
+
+    def _hub_xsrf_token(self) -> str:
+        values = {
+            unquote(cookie.value)
+            for cookie in self.session.cookies
+            if cookie.name == "XSRF-TOKEN"
+            and (cookie.domain or "").lstrip(".").casefold() == HUB_ORIGIN[1]
+        }
+        if len(values) != 1:
+            raise ImtFetchError("COMPETENCES n'a pas fourni de protection CSRF exploitable")
+        token = values.pop()
+        if not 16 <= len(token) <= 4096 or any(char in token for char in "\r\n\0"):
+            raise ImtFetchError("COMPETENCES a fourni une protection CSRF invalide")
+        return token
+
     @staticmethod
-    def _competency_ue_url(response: requests.Response) -> str | None:
-        current = urlsplit(response.url)
-        if re.fullmatch(r"/comp2/etudiant/\d{1,12}/ue/?", current.path, re.IGNORECASE):
-            return validate_imt_url(response.url, {HUB_ORIGIN})
-        if re.fullmatch(r"/comp2/etudiant/\d{1,12}/home/?", current.path, re.IGNORECASE):
-            derived = urlunsplit(
-                (
-                    current.scheme,
-                    current.netloc,
-                    f"{current.path.rstrip('/').removesuffix('/home')}/ue",
-                    "",
-                    "",
-                )
-            )
-            return validate_imt_url(derived, {HUB_ORIGIN})
-        if re.fullmatch(r"/comp2/etudiant/\d{1,12}/?", current.path, re.IGNORECASE):
-            derived = urlunsplit(
-                (current.scheme, current.netloc, f"{current.path.rstrip('/')}/ue", "", "")
-            )
-            return validate_imt_url(derived, {HUB_ORIGIN})
-        soup = BeautifulSoup(response.text, "html.parser")
-        for link in soup.find_all("a", href=True):
-            href = link.get("href")
-            if not isinstance(href, str):
-                continue
-            try:
-                candidate = validate_imt_url(urljoin(response.url, href), {HUB_ORIGIN})
-            except ImtFetchError:
-                continue
-            if re.fullmatch(
-                r"/comp2/etudiant/\d{1,12}/ue/?",
-                urlsplit(candidate).path,
-                re.IGNORECASE,
-            ):
-                return candidate
-        route_match = re.search(
-            r"/comp2/etudiant/(\d{1,12})/(?:home|ue)/?",
-            response.text,
-            re.IGNORECASE,
-        )
-        if route_match:
-            derived = urljoin(response.url, f"/comp2/etudiant/{route_match.group(1)}/ue")
-            return validate_imt_url(derived, {HUB_ORIGIN})
-        return None
+    def _hub_api_headers(*, authorization: str | None = None) -> dict[str, str]:
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "Referer": "https://hub.imt-atlantique.fr/comp2/login",
+        }
+        if authorization is not None:
+            headers["Authorization"] = authorization
+        return headers
 
     def fetch_competency_ues_authenticated(
         self,
@@ -797,31 +811,89 @@ class ImtPassClient:
     ) -> list[CompetencyUe]:
         with self._operation():
             response = self._get(COMPETENCIES_HOME_URL)
-            response = self._complete_hub_sso(response, credentials)
-            ue_url = self._competency_ue_url(response)
-            if ue_url is None:
-                soup = BeautifulSoup(response.text, "html.parser")
-                access_link = next(
-                    (
-                        link
-                        for link in soup.find_all("a", href=True)
-                        if "acces competences" in _fold(_clean(link.get_text(" ", strip=True)))
-                    ),
-                    None,
+            self._complete_hub_sso(response, credentials)
+
+            csrf_response = self._get(
+                COMPETENCIES_CSRF_URL,
+                headers={
+                    "Accept": "application/json",
+                    "Referer": "https://hub.imt-atlantique.fr/comp2/login",
+                },
+                allowed_origins={HUB_ORIGIN},
+                max_bytes=MAX_HUB_AUTH_BYTES,
+            )
+            self._ensure_success(csrf_response)
+            login_headers = self._hub_api_headers()
+            login_headers.update(
+                {
+                    "Origin": "https://hub.imt-atlantique.fr",
+                    "X-XSRF-TOKEN": self._hub_xsrf_token(),
+                }
+            )
+            login_response = self._post(
+                COMPETENCIES_LOGIN_URL,
+                data=(),
+                headers=login_headers,
+                allowed_origins={HUB_ORIGIN},
+                max_bytes=MAX_HUB_AUTH_BYTES,
+            )
+            login_payload = self._hub_json(login_response, label="l'authentification")
+            token = login_payload.get("token") if isinstance(login_payload, Mapping) else None
+            if (
+                not isinstance(token, str)
+                or not 16 <= len(token) <= 2048
+                or any(ord(char) < 0x21 or ord(char) > 0x7E for char in token)
+            ):
+                raise ImtFetchError("COMPETENCES n'a pas fourni de jeton d'accès valide")
+
+            authorization = f"Bearer {token}"
+            api_headers = self._hub_api_headers(authorization=authorization)
+            try:
+                user_response = self._get(
+                    COMPETENCIES_USER_URL,
+                    headers=api_headers,
+                    allowed_origins={HUB_ORIGIN},
+                    max_bytes=MAX_HUB_AUTH_BYTES,
                 )
-                href = access_link.get("href") if access_link is not None else None
-                if not isinstance(href, str):
-                    raise ImtFetchError("COMPETENCES n'a pas fourni l'accès aux UE")
-                access_url = validate_imt_url(urljoin(response.url, href), {HUB_ORIGIN})
-                if not urlsplit(access_url).path.casefold().startswith("/comp2/"):
-                    raise ImtFetchError("Le chemin COMPETENCES a été refusé")
-                response = self._complete_hub_sso(self._get(access_url), credentials)
-                ue_url = self._competency_ue_url(response)
-            if ue_url is None:
-                raise ImtFetchError("COMPETENCES n'a pas fourni la liste des UE")
-            if response.url != ue_url:
-                response = self._complete_hub_sso(self._get(ue_url), credentials)
-            return parse_competency_ues(response.text)
+                user_payload = self._hub_json(user_response, label="le profil étudiant")
+                student = user_payload.get("etudiant") if isinstance(user_payload, Mapping) else None
+                student_id = student.get("etudiant_id") if isinstance(student, Mapping) else None
+                if (
+                    isinstance(student_id, bool)
+                    or not isinstance(student_id, int)
+                    or not 1 <= student_id <= 10**12
+                ):
+                    raise ImtFetchError("COMPETENCES n'a pas fourni un identifiant étudiant valide")
+
+                results_url = validate_imt_url(
+                    f"{COMPETENCIES_RESULTS_BASE_URL}/{student_id}",
+                    {HUB_ORIGIN},
+                )
+                results_response = self._get(
+                    results_url,
+                    headers=api_headers,
+                    allowed_origins={HUB_ORIGIN},
+                    max_bytes=MAX_HUB_RESULTS_BYTES,
+                )
+                results_payload = self._hub_json(results_response, label="les résultats d'UE")
+                entries = parse_competency_api_payload(results_payload)
+            finally:
+                logout_headers = dict(api_headers)
+                logout_headers.update(
+                    {
+                        "Origin": "https://hub.imt-atlantique.fr",
+                        "X-XSRF-TOKEN": login_headers["X-XSRF-TOKEN"],
+                    }
+                )
+                logout_response = self._post(
+                    COMPETENCIES_LOGOUT_URL,
+                    data=(),
+                    headers=logout_headers,
+                    allowed_origins={HUB_ORIGIN},
+                    max_bytes=MAX_HUB_AUTH_BYTES,
+                )
+                self._ensure_success(logout_response)
+            return entries
 
 
 class _PassRowCounter(HTMLParser):
@@ -908,85 +980,84 @@ def _fold(value: str) -> str:
     return "".join(char for char in normalized if not unicodedata.combining(char)).casefold()
 
 
-def parse_competency_ues(content: str) -> list[CompetencyUe]:
-    if len(content.encode("utf-8")) > MAX_HTML_BYTES:
-        raise ImtFetchError("La liste des UE COMPETENCES dépasse la taille autorisée")
-
-    soup = BeautifulSoup(content, "html.parser", parse_only=SoupStrainer("tr"))
-    rows = soup.find_all("tr", limit=MAX_COMPETENCY_UES + 2)
-    if len(rows) > MAX_COMPETENCY_UES + 1:
-        raise ImtFetchError("COMPETENCES a fourni trop d'UE")
-
-    code_pattern = re.compile(
+def _competency_code(official_code: str) -> str:
+    match = re.search(
         r"(?:^|[-\s])([A-Z]{2,6}\d{3}[A-Z0-9]{0,8})(?=-|\s|$)",
+        official_code,
         re.IGNORECASE,
     )
-    semester_pattern = re.compile(r"\bsemestre\s*(\d{1,2})\b", re.IGNORECASE)
-    official_grades = frozenset({"A", "B", "C", "D", "E", "FX", "F"})
+    if match is None:
+        raise ImtFetchError("COMPETENCES a fourni une référence d'UE invalide")
+    code = match.group(1).upper()
+    if len(code) > MAX_UE_CODE_LENGTH:
+        raise ImtFetchError("COMPETENCES a fourni un code UE trop long")
+    return code
+
+
+def _competency_semester(value: object) -> str | None:
+    if value is None or not str(value).strip():
+        return None
+    match = re.fullmatch(r"(?:semestre\s*|s)?(\d{1,2})", _clean(str(value)), re.IGNORECASE)
+    if match is None or not 1 <= int(match.group(1)) <= 20:
+        raise ImtFetchError("COMPETENCES a fourni un semestre invalide")
+    return f"S{int(match.group(1))}"
+
+
+def parse_competency_api_payload(payload: object) -> list[CompetencyUe]:
+    rows = payload.get("data") if isinstance(payload, Mapping) else None
+    if not isinstance(rows, list):
+        raise ImtFetchError("COMPETENCES n'a pas fourni une liste d'UE valide")
+    if len(rows) > MAX_COMPETENCY_UES:
+        raise ImtFetchError("COMPETENCES a fourni trop d'UE")
+
     entries: dict[str, CompetencyUe] = {}
     for row in rows:
-        cells = [
-            _clean(cell.get_text(" ", strip=True))
-            for cell in row.find_all(("th", "td"), recursive=False)
-        ]
-        cells = [cell for cell in cells if cell and cell != "\xa0"]
-        if len(cells) < 4:
+        if not isinstance(row, Mapping):
+            raise ImtFetchError("COMPETENCES a fourni une UE mal formée")
+        status_value = row.get("valide")
+        semester_value = row.get("semestre")
+        if (
+            not isinstance(status_value, str)
+            or _fold(_clean(status_value)) not in OFFICIAL_RESULT_STATUSES
+            or semester_value is None
+            or not str(semester_value).strip()
+        ):
             continue
-        code_index = -1
-        code = ""
-        for index, cell in enumerate(cells):
-            match = code_pattern.search(cell)
-            if match:
-                code_index = index
-                code = match.group(1).upper()
-                break
-        if code_index < 1:
-            continue
-        if len(code) > MAX_UE_CODE_LENGTH:
-            raise ImtFetchError("COMPETENCES a fourni un code UE trop long")
+        semester = _competency_semester(semester_value)
 
-        official_code = cells[code_index].upper()
-        if len(official_code) > 80:
-            raise ImtFetchError("COMPETENCES a fourni une référence d'UE trop longue")
-
-        semester: str | None = None
-        for cell in cells:
-            semester_match = semester_pattern.search(cell)
-            if semester_match:
-                semester_number = int(semester_match.group(1))
-                if not 1 <= semester_number <= 20:
-                    raise ImtFetchError("COMPETENCES a fourni un semestre invalide")
-                semester = f"S{semester_number}"
-                break
-
-        grade = next(
-            (
-                normalized
-                for cell in cells[code_index + 1 :]
-                if (normalized := cell.strip().upper()) in official_grades
-            ),
-            None,
-        )
-
-        numeric_values = [
-            value
-            for value in (_decimal(cell) for cell in cells[code_index + 1 :])
-            if value is not None
-        ]
-        if not numeric_values:
-            raise ImtFetchError("COMPETENCES n'a pas fourni les crédits d'une UE")
-        credits = numeric_values[-1]
-        if not math.isfinite(credits) or not 0 < credits <= 60:
-            raise ImtFetchError("COMPETENCES a fourni des crédits ECTS invalides")
-
-        title = cells[0]
+        title_value = row.get("nom")
+        official_code_value = row.get("code")
+        if not isinstance(title_value, str) or not isinstance(official_code_value, str):
+            raise ImtFetchError("COMPETENCES a fourni une UE incomplète")
+        title = _clean(title_value)
+        official_code = _clean(official_code_value).upper()
         if not title or len(title) > 200:
             raise ImtFetchError("COMPETENCES a fourni un intitulé d'UE invalide")
-        earned_credits = numeric_values[-2] if len(numeric_values) >= 2 else None
+        if not official_code or len(official_code) > 80:
+            raise ImtFetchError("COMPETENCES a fourni une référence d'UE invalide")
+        code = _competency_code(official_code)
+
+        grade_value = row.get("grade_calcule")
+        grade = _clean(str(grade_value)).upper() if grade_value is not None else None
+        if grade is not None and _fold(grade) in {"", "-", "n/a", "non renseigne", "en cours"}:
+            grade = None
+        if grade is not None and grade not in OFFICIAL_GRADES:
+            raise ImtFetchError("COMPETENCES a fourni un grade invalide")
+
+        credits = _decimal(row.get("credit_presente"))
+        if credits is None or not math.isfinite(credits) or not 0 < credits <= 60:
+            raise ImtFetchError("COMPETENCES a fourni des crédits ECTS invalides")
+        earned_value = row.get("credit_calcule")
+        earned_credits = (
+            None
+            if earned_value is None or str(earned_value).strip() == ""
+            else _decimal(earned_value)
+        )
         if earned_credits is not None and (
             not math.isfinite(earned_credits) or not 0 <= earned_credits <= credits
         ):
             raise ImtFetchError("COMPETENCES a fourni des crédits obtenus invalides")
+
         entry = CompetencyUe(
             ue_code=code,
             official_code=official_code,

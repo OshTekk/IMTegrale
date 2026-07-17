@@ -1,9 +1,7 @@
 import pytest
-import requests
 from app.services.imt import (
     ImtFetchError,
-    ImtPassClient,
-    parse_competency_ues,
+    parse_competency_api_payload,
     parse_pass_export,
     parse_pass_profile,
     validate_imt_url,
@@ -47,38 +45,35 @@ def test_imt_url_policy_accepts_exact_https_origin() -> None:
 
 
 def test_imt_url_policy_accepts_exact_competencies_origin() -> None:
-    url = "https://hub.imt-atlantique.fr/comp2/etudiant/40419/ue"
+    url = "https://hub.imt-atlantique.fr/comp2/back/api/resultat_ue/40419"
     assert validate_imt_url(url) == url
 
 
-def test_competencies_home_route_derives_the_official_ue_route() -> None:
-    response = requests.Response()
-    response.url = "https://hub.imt-atlantique.fr/comp2/etudiant/40419/home"
-    response._content = b"<html></html>"
-
-    assert ImtPassClient._competency_ue_url(response) == (
-        "https://hub.imt-atlantique.fr/comp2/etudiant/40419/ue"
-    )
-
-
 def test_competencies_parser_imports_official_titles_and_attempted_credits() -> None:
-    content = """
-    <table>
-      <thead><tr><th>UE</th><th>Semestre</th><th>Code</th><th>Grade</th><th>Obtenus</th><th>Tentés</th></tr></thead>
-      <tbody>
-        <tr>
-          <td>Outils physiques pour l'ingénieur S5</td><td>Semestre 1</td>
-          <td>FIP-SIT140-BR-2025</td><td>E</td><td>3.00</td><td>3.00</td>
-        </tr>
-        <tr>
-          <td>Projet en cours</td><td>Semestre 2</td>
-          <td>FIP-PRJ120-BR-2026</td><td>FX</td><td>0.00</td><td>5.00</td>
-        </tr>
-      </tbody>
-    </table>
-    """
-
-    entries = parse_competency_ues(content)
+    entries = parse_competency_api_payload(
+        {
+            "data": [
+                {
+                    "nom": "Outils physiques pour l'ingénieur S5",
+                    "semestre": "Semestre 1",
+                    "valide": "Validé",
+                    "code": "FIP-SIT140-BR-2025",
+                    "grade_calcule": "E",
+                    "credit_calcule": "3.00",
+                    "credit_presente": "3.00",
+                },
+                {
+                    "nom": "Projet en cours",
+                    "semestre": "Semestre 2",
+                    "valide": "En cours de validation",
+                    "code": "FIP-PRJ120-BR-2026",
+                    "grade_calcule": "FX",
+                    "credit_calcule": "0.00",
+                    "credit_presente": "5.00",
+                },
+            ]
+        }
+    )
 
     assert entries[0].ue_code == "SIT140"
     assert entries[0].official_code == "FIP-SIT140-BR-2025"
@@ -95,21 +90,70 @@ def test_competencies_parser_imports_official_titles_and_attempted_credits() -> 
 
 
 def test_competencies_parser_rejects_conflicting_duplicate_codes() -> None:
-    content = """
-    <table>
-      <tr>
-        <td>UE initiale</td><td>Semestre 1</td><td>FIP-SIT140-BR-2025</td>
-        <td>B</td><td>3</td><td>3</td>
-      </tr>
-      <tr>
-        <td>UE modifiée</td><td>Semestre 1</td><td>FIP-SIT140-BR-2025</td>
-        <td>B</td><td>4</td><td>4</td>
-      </tr>
-    </table>
-    """
-
     with pytest.raises(ImtFetchError, match="contradictoires"):
-        parse_competency_ues(content)
+        parse_competency_api_payload(
+            {
+                "data": [
+                    {
+                        "nom": "UE initiale",
+                        "semestre": "Semestre 1",
+                        "valide": "Validé",
+                        "code": "FIP-SIT140-BR-2025",
+                        "grade_calcule": "B",
+                        "credit_calcule": 3,
+                        "credit_presente": 3,
+                    },
+                    {
+                        "nom": "UE modifiée",
+                        "semestre": "Semestre 1",
+                        "valide": "Validé",
+                        "code": "FIP-SIT140-BR-2025",
+                        "grade_calcule": "B",
+                        "credit_calcule": 4,
+                        "credit_presente": 4,
+                    },
+                ]
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"data": "not-a-list"},
+        {"data": [None]},
+        {
+            "data": [
+                {
+                    "nom": "UE invalide",
+                    "semestre": "Semestre 99",
+                    "valide": "Validé",
+                    "code": "FIP-SIT140-BR-2025",
+                    "grade_calcule": "Z",
+                    "credit_calcule": 3,
+                    "credit_presente": 3,
+                }
+            ]
+        },
+    ],
+)
+def test_competencies_parser_rejects_malformed_payloads(payload: object) -> None:
+    with pytest.raises(ImtFetchError):
+        parse_competency_api_payload(payload)
+
+
+def test_competencies_parser_ignores_rows_hidden_by_the_official_ui() -> None:
+    entries = parse_competency_api_payload(
+        {
+            "data": [
+                {"semestre": None, "valide": "Validé"},
+                {"semestre": "Semestre 1", "valide": "Hors périmètre"},
+            ]
+        }
+    )
+
+    assert entries == []
 
 
 @pytest.mark.parametrize("score, coefficient", [("NaN", "1"), ("12", "Infinity"), ("12", "101")])

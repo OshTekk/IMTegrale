@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 import requests
 from app.services.imt import (
     CAS_LOGIN_URL,
+    COMPETENCIES_CSRF_URL,
+    COMPETENCIES_HOME_URL,
+    COMPETENCIES_LOGIN_URL,
+    COMPETENCIES_LOGOUT_URL,
+    COMPETENCIES_RESULTS_BASE_URL,
+    COMPETENCIES_USER_URL,
     IMT_ATLANTIQUE_IDP_ENTITY_ID,
     ImtFetchError,
     ImtPassClient,
@@ -32,6 +40,14 @@ def fake_response(
     response._content = body
     response._content_consumed = True
     return response
+
+
+def fake_json_response(payload: object, *, url: str) -> requests.Response:
+    return fake_response(
+        url=url,
+        body=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json; charset=utf-8"},
+    )
 
 
 def test_cas_password_form_cannot_forward_credentials_to_untrusted_action(monkeypatch) -> None:
@@ -85,16 +101,119 @@ def test_imt_streaming_read_enforces_global_deadline(monkeypatch) -> None:
         client._read_limited(response, 100)
 
 
-def test_competencies_url_is_derived_only_from_validated_student_route() -> None:
+def test_competencies_api_uses_csrf_bearer_and_current_student_only(monkeypatch) -> None:
     client = ImtPassClient()
-    dashboard = fake_response(
-        url="https://hub.imt-atlantique.fr/comp2/etudiant/40419",
-        body=b'<a href="https://evil.example/ue">external</a>',
+    dashboard = fake_response(url=COMPETENCIES_HOME_URL, body=b"student dashboard")
+    csrf = fake_response(status=204, url=COMPETENCIES_CSRF_URL, body=b"")
+    login = fake_json_response(
+        {"token": "42|abcdefghijklmnopqrstuvwxyz"},
+        url=COMPETENCIES_LOGIN_URL,
+    )
+    logout = fake_response(status=204, url=COMPETENCIES_LOGOUT_URL, body=b"")
+    user = fake_json_response(
+        {"roles": [{"name": "etudiant"}], "etudiant": {"etudiant_id": 40419}},
+        url=COMPETENCIES_USER_URL,
+    )
+    results_url = f"{COMPETENCIES_RESULTS_BASE_URL}/40419"
+    results = fake_json_response(
+        {
+            "data": [
+                {
+                    "nom": "Outils mathématiques pour l'ingénieur S5",
+                    "semestre": "Semestre 1",
+                    "valide": "Validé",
+                    "code": "FIP-SIT130-BR-2025",
+                    "grade_calcule": "E",
+                    "credit_calcule": "4.00",
+                    "credit_presente": "4.00",
+                }
+            ]
+        },
+        url=results_url,
+    )
+    gets: list[tuple[str, dict]] = []
+    posts: list[tuple[str, tuple, dict]] = []
+
+    def get(url: str, **kwargs) -> requests.Response:
+        gets.append((url, kwargs))
+        if url == COMPETENCIES_HOME_URL:
+            return dashboard
+        if url == COMPETENCIES_CSRF_URL:
+            client.session.cookies.set(
+                "XSRF-TOKEN",
+                "opaque%7Ccsrf-token-1234567890",
+                domain="hub.imt-atlantique.fr",
+                path="/",
+            )
+            return csrf
+        if url == COMPETENCIES_USER_URL:
+            return user
+        if url == results_url:
+            return results
+        raise AssertionError(f"unexpected GET {url}")
+
+    def post(url: str, *, data: tuple, **kwargs) -> requests.Response:
+        posts.append((url, data, kwargs))
+        if url == COMPETENCIES_LOGIN_URL:
+            return login
+        if url == COMPETENCIES_LOGOUT_URL:
+            return logout
+        raise AssertionError(f"unexpected POST {url}")
+
+    monkeypatch.setattr(client, "_get", get)
+    monkeypatch.setattr(client, "_post", post)
+    monkeypatch.setattr(client, "_complete_hub_sso", lambda response, _credentials: response)
+
+    entries = client.fetch_competency_ues_authenticated(credentials=("student", "secret"))
+
+    assert entries[0].ue_code == "SIT130"
+    assert entries[0].semester == "S1"
+    assert entries[0].grade == "E"
+    assert posts[0][0] == COMPETENCIES_LOGIN_URL
+    assert posts[0][1] == ()
+    assert posts[0][2]["headers"]["X-XSRF-TOKEN"] == "opaque|csrf-token-1234567890"
+    assert posts[0][2]["headers"]["Origin"] == "https://hub.imt-atlantique.fr"
+    assert gets[-2][0] == COMPETENCIES_USER_URL
+    assert gets[-1][0] == results_url
+    assert gets[-1][1]["headers"]["Authorization"] == "Bearer 42|abcdefghijklmnopqrstuvwxyz"
+    assert posts[-1][0] == COMPETENCIES_LOGOUT_URL
+    assert posts[-1][2]["headers"]["Authorization"] == "Bearer 42|abcdefghijklmnopqrstuvwxyz"
+    assert "Authorization" not in client.session.headers
+
+
+def test_competencies_api_rejects_a_non_json_user_response(monkeypatch) -> None:
+    client = ImtPassClient()
+    dashboard = fake_response(url=COMPETENCIES_HOME_URL, body=b"student dashboard")
+    csrf = fake_response(status=204, url=COMPETENCIES_CSRF_URL, body=b"")
+    login = fake_json_response(
+        {"token": "42|abcdefghijklmnopqrstuvwxyz"},
+        url=COMPETENCIES_LOGIN_URL,
+    )
+    html_user = fake_response(
+        url=COMPETENCIES_USER_URL,
+        body=b"<html>unexpected</html>",
+        headers={"Content-Type": "text/html"},
     )
 
-    assert client._competency_ue_url(dashboard) == (
-        "https://hub.imt-atlantique.fr/comp2/etudiant/40419/ue"
-    )
+    def get(url: str, **_kwargs) -> requests.Response:
+        if url == COMPETENCIES_HOME_URL:
+            return dashboard
+        if url == COMPETENCIES_CSRF_URL:
+            client.session.cookies.set(
+                "XSRF-TOKEN",
+                "opaque-csrf-token-1234567890",
+                domain="hub.imt-atlantique.fr",
+                path="/",
+            )
+            return csrf
+        return html_user
+
+    monkeypatch.setattr(client, "_get", get)
+    monkeypatch.setattr(client, "_post", lambda *_args, **_kwargs: login)
+    monkeypatch.setattr(client, "_complete_hub_sso", lambda response, _credentials: response)
+
+    with pytest.raises(ImtFetchError, match="format inattendu"):
+        client.fetch_competency_ues_authenticated(credentials=("student", "secret"))
 
 
 def test_hub_sso_uses_current_credentials_when_cas_requests_login(monkeypatch) -> None:
