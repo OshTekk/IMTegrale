@@ -278,6 +278,88 @@ def test_cas_rejects_an_untrusted_action_only_saml_relay(monkeypatch) -> None:
     assert called is False
 
 
+def test_cas_follows_an_official_idp_proceed_link(monkeypatch) -> None:
+    client = ImtPassClient()
+    consent = fake_response(
+        url="https://idp.imt-atlantique.fr/idp/profile/SAML2/Redirect/SSO?execution=e1s2",
+        body=(
+            b'<a href="/idp/profile/SAML2/Redirect/SSO?execution=e1s2&amp;'
+            b'_eventId=proceed&amp;csrf=opaque">Continuer</a>'
+        ),
+    )
+    dashboard = fake_response(
+        url="https://hub.imt-atlantique.fr/comp2/etudiant/40419",
+        body=b"student dashboard",
+    )
+    gets: list[str] = []
+
+    def get(url: str, **_kwargs) -> requests.Response:
+        gets.append(url)
+        return dashboard
+
+    monkeypatch.setattr(client, "_get", get)
+
+    assert client._complete_cas(consent, "student", "secret") is dashboard
+    assert gets == [
+        "https://idp.imt-atlantique.fr/idp/profile/SAML2/Redirect/SSO"
+        "?execution=e1s2&_eventId=proceed&csrf=opaque"
+    ]
+
+
+def test_cas_accepts_an_eventid_proceed_button(monkeypatch) -> None:
+    client = ImtPassClient()
+    consent = fake_response(
+        url="https://idp.imt-atlantique.fr/idp/profile/SAML2/POST/SSO?execution=e1s2",
+        body=(
+            b'<form action="?execution=e1s2">'
+            b'<input type="hidden" name="csrf" value="opaque">'
+            b'<button name="_eventId" value="proceed">Continuer</button></form>'
+        ),
+    )
+    dashboard = fake_response(
+        url="https://hub.imt-atlantique.fr/comp2/etudiant/40419",
+        body=b"student dashboard",
+    )
+    posts: list[tuple[str, list[tuple[str, str]]]] = []
+
+    def post(url: str, *, data: list[tuple[str, str]], **_kwargs) -> requests.Response:
+        posts.append((url, data))
+        return dashboard
+
+    monkeypatch.setattr(client, "_post", post)
+
+    assert client._complete_cas(consent, "student", "secret") is dashboard
+    assert posts == [
+        (
+            "https://idp.imt-atlantique.fr/idp/profile/SAML2/POST/SSO?execution=e1s2",
+            [("csrf", "opaque"), ("_eventId", "proceed")],
+        )
+    ]
+
+
+def test_cas_rejects_an_untrusted_idp_proceed_link(monkeypatch) -> None:
+    client = ImtPassClient()
+    consent = fake_response(
+        url="https://idp.imt-atlantique.fr/idp/profile/SAML2/Redirect/SSO?execution=e1s2",
+        body=(
+            b'<a href="https://evil.example/idp/profile/SAML2/Redirect/SSO?'
+            b'_eventId=proceed">Continuer</a>'
+        ),
+    )
+    called = False
+
+    def unexpected_get(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("the IdP continuation must remain on the official origin")
+
+    monkeypatch.setattr(client, "_get", unexpected_get)
+
+    with pytest.raises(ImtFetchError):
+        client._complete_cas(consent, "student", "secret")
+    assert called is False
+
+
 def test_telegram_messages_have_stable_chunk_and_note_limits() -> None:
     chunks = split_message("x" * 1000, limit=100, max_chunks=3)
     assert len(chunks) == 3

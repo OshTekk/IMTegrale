@@ -404,6 +404,10 @@ class ImtPassClient:
         current = self._select_imt_identity_provider(response)
         credentials_submitted = False
         for _ in range(8):
+            selected = self._select_imt_identity_provider(current)
+            if selected is not current:
+                current = selected
+                continue
             soup = BeautifulSoup(current.text, "html.parser")
             login_form = next(
                 (
@@ -444,15 +448,28 @@ class ImtPassClient:
                 controls = form.find_all(("input", "button"))
                 names = {item.get("name") for item in controls}
                 action = form.get("action")
+                action_parameters = parse_qsl(
+                    urlsplit(urljoin(current.url, action or "")).query,
+                    keep_blank_values=True,
+                )
                 has_saml_payload = bool(
                     names & {"SAMLResponse", "SAMLRequest"}
                 ) or "saml2/post/sso" in (action or "").casefold()
                 has_proceed_control = any(
                     "proceed" in (item.get("name") or "").casefold()
                     or "accept" in (item.get("value") or "").casefold()
+                    or (
+                        (item.get("name") or "").casefold() == "_eventid"
+                        and (item.get("value") or "").casefold() == "proceed"
+                    )
                     for item in controls
                 )
-                if not has_saml_payload and not has_proceed_control:
+                has_proceed_action = any(
+                    key.casefold() == "_eventid" and value.casefold() == "proceed"
+                    or key.casefold() == "_eventid_proceed"
+                    for key, value in action_parameters
+                )
+                if not has_saml_payload and not has_proceed_control and not has_proceed_action:
                     continue
                 allowed_origins = TRUSTED_IMT_ORIGINS if has_saml_payload else {IDP_ORIGIN}
                 target = _form_action(current.url, action, allowed_origins)
@@ -465,6 +482,11 @@ class ImtPassClient:
                 break
 
             if continuation_form is None:
+                proceed_url = self._idp_proceed_url(current)
+                if proceed_url is not None:
+                    current = self._get(proceed_url)
+                    self._ensure_success(current)
+                    continue
                 return current
 
             payload: list[tuple[str, str]] = []
@@ -481,13 +503,45 @@ class ImtPassClient:
                 value = item.get("value", "")
                 if item_type == "radio" and selected_radios.get(name) != value:
                     continue
-                if item_type == "submit" and "proceed" not in name.lower() and "accept" not in value.lower():
+                if (
+                    item_type == "submit"
+                    and "proceed" not in name.casefold()
+                    and "proceed" not in value.casefold()
+                    and "accept" not in value.casefold()
+                ):
                     continue
                 payload.append((name, value))
             current = self._post(continuation_url, data=payload, sensitive=True)
             self._ensure_success(current)
 
         raise ImtFetchError("Le parcours d'authentification IMT est anormalement long")
+
+    @staticmethod
+    def _idp_proceed_url(response: requests.Response) -> str | None:
+        if _url_origin(response.url) != IDP_ORIGIN:
+            return None
+        soup = BeautifulSoup(response.text, "html.parser")
+        for element, attribute in (
+            *((link, "href") for link in soup.find_all("a", href=True)),
+            *((frame, "src") for frame in soup.find_all("iframe", src=True)),
+        ):
+            raw_url = element.get(attribute)
+            if not isinstance(raw_url, str):
+                continue
+            parameters = parse_qsl(urlsplit(urljoin(response.url, raw_url)).query, keep_blank_values=True)
+            is_proceed = any(
+                key.casefold() == "_eventid" and value.casefold() == "proceed"
+                or key.casefold() == "_eventid_proceed"
+                for key, value in parameters
+            )
+            if not is_proceed:
+                continue
+            candidate = validate_imt_url(urljoin(response.url, raw_url), {IDP_ORIGIN})
+            path = urlsplit(candidate).path.casefold()
+            if not path.startswith("/idp/profile/saml2/") or not path.endswith("/sso"):
+                raise ImtFetchError("La continuation SSO IMT a fourni un chemin inattendu")
+            return candidate
+        return None
 
     def _select_imt_identity_provider(self, response: requests.Response) -> requests.Response:
         if _url_origin(response.url) != IDP_ORIGIN:
@@ -657,6 +711,27 @@ class ImtPassClient:
             response = self._complete_cas(response, *credentials)
             self._ensure_success(response)
         if _url_origin(response.url) != HUB_ORIGIN or self._contains_password_form(response.text):
+            parsed = urlsplit(response.url)
+            route = re.sub(r"/\d{1,12}(?=/|$)", "/:id", parsed.path)[:160]
+            soup = BeautifulSoup(response.text, "html.parser")
+            controls = soup.find_all(("input", "button"))
+            logger.warning(
+                "COMPETENCES SSO stopped host=%s route=%s forms=%d password=%s saml=%s proceed=%s",
+                parsed.hostname,
+                route,
+                len(soup.find_all("form")),
+                any((item.get("type") or "").casefold() == "password" for item in controls),
+                any(item.get("name") in {"SAMLRequest", "SAMLResponse"} for item in controls),
+                any(
+                    "proceed" in (item.get("name") or "").casefold()
+                    or "accept" in (item.get("value") or "").casefold()
+                    or (
+                        (item.get("name") or "").casefold() == "_eventid"
+                        and (item.get("value") or "").casefold() == "proceed"
+                    )
+                    for item in controls
+                ),
+            )
             raise ImtFetchError("La session IMT n'a pas pu ouvrir COMPETENCES")
         return response
 
