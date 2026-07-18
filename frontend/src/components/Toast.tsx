@@ -18,9 +18,9 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={value}>
       {children}
-      <div className="toast-region" aria-live="polite">
+      <div className="toast-region" aria-label="Notifications">
         {toasts.map((toast) => (
-          <div className={`toast toast-${toast.kind}`} key={toast.id}>
+          <div className={`toast toast-${toast.kind}`} key={toast.id} role={toast.kind === "error" ? "alert" : "status"}>
             {toast.kind === "success" ? <CheckCircle2 size={18} /> : <XCircle size={18} />}
             <span>{toast.message}</span>
             <button type="button" aria-label="Masquer" onClick={() => setToasts((items) => items.filter((item) => item.id !== toast.id))}><X size={15} /></button>

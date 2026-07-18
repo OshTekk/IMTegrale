@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { BookOpenCheck, Ellipsis, Gauge, KeyRound, LogOut, NotebookPen, RefreshCw, Settings, ShieldCheck, Trophy } from "lucide-react";
+import { BookOpenCheck, ChevronDown, Ellipsis, Gauge, KeyRound, LogOut, NotebookPen, RefreshCw, Settings, ShieldCheck, Trophy } from "lucide-react";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
@@ -125,13 +125,14 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
 
   return (
     <div className="app-shell">
+      <a className="skip-link" href="#main-content">Aller au contenu</a>
       <aside className="sidebar">
         <div className="sidebar-brand"><Logo /></div>
         <nav className="sidebar-nav" aria-label="Navigation principale">
           {visibleNav.map((item) => <NavLink key={item.to} to={item.to} end={item.to === "/"} viewTransition onMouseEnter={() => preloadRoute(item.to)} onFocus={() => preloadRoute(item.to)} className={({ isActive }) => isActive ? "active" : ""}><item.icon size={19} /><span>{item.label}</span></NavLink>)}
         </nav>
         {session.role !== "owner" && <div className="access-badge"><ShieldCheck size={17} /><div><strong>Lecture seule</strong><span>Accès partagé</span></div></div>}
-        <div className="sidebar-status"><span className={`live-dot ${live}`} /><div><strong>{live === "connected" ? "Données en direct" : "Reconnexion…"}</strong><span>{dashboard.data?.account.last_sync_at ? `Sync ${new Date(dashboard.data.account.last_sync_at).toLocaleDateString("fr-FR")}` : "En attente de sync"}</span></div></div>
+        <div className="sidebar-status" role="status" aria-live="polite"><span className={`live-dot ${live}`} /><div><strong>{live === "connected" ? "Données en direct" : "Reconnexion…"}</strong><span>{dashboard.data?.account.last_sync_at ? `Sync ${new Date(dashboard.data.account.last_sync_at).toLocaleDateString("fr-FR")}` : "En attente de sync"}</span></div></div>
       </aside>
 
       <div className="workspace">
@@ -141,15 +142,16 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
             {session.role === "owner" && <button className="secondary-button sync-button" type="button" onClick={runSync} disabled={sync.isPending || !manualSync?.can_start} aria-label={syncMessage} title={syncMessage}><RefreshCw size={17} className={sync.isPending || manualSync?.state === "in_progress" ? "spin" : ""} /><span>{syncButtonLabel}</span></button>}
             <ThemeToggle />
             <div className="profile-wrap" ref={profileWrap}>
-              <button className="profile-button" type="button" onClick={() => setProfileOpen((value) => !value)} aria-expanded={profileOpen} aria-label={`Ouvrir le profil de ${session.account?.display_name ?? "l'utilisateur"}`}>
+              <button className="profile-button" type="button" onClick={() => setProfileOpen((value) => !value)} aria-expanded={profileOpen} aria-controls="profile-menu" aria-haspopup="menu" aria-label={`Ouvrir le profil de ${session.account?.display_name ?? "l'utilisateur"}`}>
                 <span className="avatar">{session.account?.display_name.slice(0, 2).toUpperCase()}</span>
                 <span className="profile-copy"><strong>{session.account?.display_name}</strong><small>{session.auth_method === "imt" ? "Compte IMT" : "Accès partagé"}</small></span>
+                <ChevronDown className="profile-chevron" size={15} aria-hidden="true" />
               </button>
-              {profileOpen && <div className="profile-menu"><button type="button" onClick={logout}><LogOut size={17} /> Se déconnecter</button></div>}
+              {profileOpen && <div className="profile-menu" id="profile-menu" role="menu"><button type="button" role="menuitem" onClick={logout}><LogOut size={17} /> Se déconnecter</button></div>}
             </div>
           </div>
         </header>
-        <main className="page-content"><Suspense fallback={<PageRouteLoading />}><Outlet /></Suspense></main>
+        <main className="page-content" id="main-content"><Suspense fallback={<PageRouteLoading />}><Outlet /></Suspense></main>
         <footer className="product-footer"><SourceNotice compact /></footer>
       </div>
 

@@ -34,12 +34,31 @@ const studentRouteLoaders: Record<string, () => Promise<unknown>> = {
   "/settings": loadSettingsPage,
 };
 
+const documentTitles: Record<string, string> = {
+  "/": "Vue d'ensemble",
+  "/notes": "Notes",
+  "/ues": "UE & ECTS",
+  "/leaderboard": "Classement",
+  "/sharing": "Partage",
+  "/settings": "Paramètres",
+  "/confiance": "Confiance",
+  "/demo": "Démo",
+  "/admin": "Administration",
+};
+
 function preloadStudentRoute(path: string) {
   void studentRouteLoaders[path]?.();
 }
 
 export default function App() {
   const location = useLocation();
+
+  useEffect(() => {
+    const route = location.pathname.startsWith("/admin") ? "/admin" : location.pathname;
+    if (route !== "/admin" && route !== "/confiance" && route !== "/demo") return;
+    const title = documentTitles[route];
+    document.title = title ? `${title} · IMTégrale` : "IMTégrale";
+  }, [location.pathname]);
 
   useLayoutEffect(() => {
     window.scrollTo(0, 0);
@@ -64,9 +83,15 @@ export default function App() {
 }
 
 function StudentApp() {
+  const location = useLocation();
   const session = useSession();
   const queryClient = useQueryClient();
   const authenticated = Boolean(session.data?.authenticated);
+
+  useEffect(() => {
+    const title = authenticated ? documentTitles[location.pathname] : "Connexion";
+    document.title = title ? `${title} · IMTégrale` : "IMTégrale";
+  }, [authenticated, location.pathname]);
 
   useLayoutEffect(() => {
     if (authenticated) window.scrollTo(0, 0);
