@@ -1,5 +1,9 @@
 # Changements
 
+## 4.5.3 - 18 juillet 2026
+
+- correction du filtre de semestres sur mobile : libellé compact, boutons non compressibles et défilement horizontal jusqu'à S10.
+
 ## 4.5.2 - 18 juillet 2026
 
 - accueil et page Confiance alignés sur le modèle sans mot de passe IMT stocké ;

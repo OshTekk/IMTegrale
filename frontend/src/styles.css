@@ -1852,13 +1852,28 @@ select:disabled {
 }
 
 .semester-tabs {
+  display: flex;
   width: max-content;
   max-width: 100%;
-  grid-template-columns: repeat(auto-fit, minmax(54px, 1fr));
   margin: 0;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scroll-snap-type: inline proximity;
+  scrollbar-width: none;
+}
+
+.semester-tabs::-webkit-scrollbar { display: none; }
+
+.semester-tabs button {
+  min-width: 54px;
+  flex: 0 0 auto;
+  padding: 0 12px;
+  scroll-snap-align: start;
+  white-space: nowrap;
 }
 
 .semester-tabs button:first-child { min-width: 132px; }
+.semester-label-compact { display: none; }
 
 .semester-filter-band > p {
   display: inline-flex;
@@ -5553,7 +5568,9 @@ select:disabled {
   .semester-overview-values > div { min-height: 82px; border-right: 0; border-bottom: 1px solid var(--line); }
   .semester-overview-values > div:last-child { border-bottom: 0; }
   .semester-tabs { width: 100%; }
-  .semester-tabs button:first-child { min-width: 0; }
+  .semester-tabs button:first-child { min-width: 64px; }
+  .semester-label-wide { display: none; }
+  .semester-label-compact { display: inline; }
   .metric-card { min-height: 124px; }
   .attention-banner { align-items: flex-start; }
   .attention-banner > svg:last-child { display: none; }

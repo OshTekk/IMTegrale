@@ -1,6 +1,6 @@
 # Données, consentements et cadre d'utilisation
 
-Ce document décrit le comportement du logiciel IMTégrale `4.5.2`. Il aide un étudiant à comprendre le service et un exploitant à préparer son propre déploiement. Il ne remplace ni la charte informatique de l'établissement, ni une analyse juridique adaptée à l'instance réellement ouverte.
+Ce document décrit le comportement du logiciel IMTégrale `4.5.3`. Il aide un étudiant à comprendre le service et un exploitant à préparer son propre déploiement. Il ne remplace ni la charte informatique de l'établissement, ni une analyse juridique adaptée à l'instance réellement ouverte.
 
 ## Principes
 
