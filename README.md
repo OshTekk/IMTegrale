@@ -31,12 +31,6 @@ Pour COMPETENCES, le jeton API créé depuis la session Shibboleth reste en mém
 
 PASS ne fournit pas ici de délégation OAuth. Le worker doit donc pouvoir déchiffrer une session PASS/HUB active pour synchroniser ; une compromission simultanée de l'application et de sa clé maître permettrait de l'utiliser jusqu'à son expiration ou sa révocation, mais pas de retrouver le mot de passe IMT. Une instance auto-hébergée peut, de façon explicite, réserver à son unique compte propriétaire un secret local hors base et hors dépôt, lisible seulement par l'utilisateur système du service. Cette exception est désactivée par défaut et n'est jamais proposée aux comptes publics. Ces limites sont expliquées dans la [page de confiance](https://imtegrale.tail4fed99.ts.net/confiance).
 
-## Consentement et cadre d'usage
-
-Le choix d'un étudiant permet à IMTégrale de traiter ses données pour les fonctions demandées. Il ne transforme pas le projet en service officiel et ne remplace ni l'autorisation de l'exploitant de PASS, ni la charte informatique signée par l'étudiant. Le [règlement intérieur d'IMT Atlantique](https://www.imt-atlantique.fr/sites/default/files/ecole/ddrs/odd/ODD%2016/REGLEMENT-INTERIEUR-IMT%20A%202023-version-suite-CE-14-avril-2023.pdf) rend cette charte applicable ; la [charte RENATER](https://www.renater.fr/wp-content/uploads/2022/01/charte-de-bon-usage-de-linformatique-et-du-reseau-renater.pdf) citée par l'école rappelle notamment le caractère personnel de l'accès et l'usage rationnel des ressources.
-
-L'exploitant d'une instance décide du fonctionnement et des finalités du service : le consentement utilisateur ne lui transfère donc pas toute la responsabilité. Avant une ouverture publique, il doit vérifier les règles de l'établissement, définir une base légale par finalité, publier son identité et un contact, annoncer les durées de conservation et organiser l'exercice des droits. La [cartographie des données et des choix](docs/data-and-usage.md) décrit ce que le logiciel fait réellement ; elle ne constitue pas un avis juridique ni une homologation par IMT Atlantique.
-
 ## Stack
 
 - React 19, TypeScript, Vite, TanStack Query, Recharts et FullCalendar ;

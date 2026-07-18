@@ -1,5 +1,10 @@
 # Changements
 
+## 4.5.6 - 19 juillet 2026
+
+- retrait du bloc éditorial « Consentement et cadre d'usage » du README et de la page Confiance ;
+- documentation publique recentrée sur le fonctionnement technique, les choix utilisateur et l'effacement des données.
+
 ## 4.5.5 - 19 juillet 2026
 
 - rendu de toutes les modales dans un portail racine afin qu'elles couvrent réellement la navigation mobile et les autres contextes d'empilement.

@@ -8,7 +8,6 @@ import {
   KeyRound,
   LockKeyhole,
   RefreshCw,
-  Scale,
   Server,
   ShieldAlert,
   ShieldCheck,
@@ -35,13 +34,6 @@ const choices = [
   { icon: KeyRound, title: "Partage", status: "Facultatif", text: "Chaque token possède un rôle et une expiration. Son secret n'est pas conservé en clair et peut être révoqué." },
   { icon: Trophy, title: "Classement", status: "Publication choisie", text: "Identité et scores sont publiés aux participants actifs après accord séparé. Le retrait reste immédiat." },
 ];
-
-const officialLinks = {
-  imtRules: "https://www.imt-atlantique.fr/sites/default/files/ecole/ddrs/odd/ODD%2016/REGLEMENT-INTERIEUR-IMT%20A%202023-version-suite-CE-14-avril-2023.pdf",
-  renaterCharter: "https://www.renater.fr/wp-content/uploads/2022/01/charte-de-bon-usage-de-linformatique-et-du-reseau-renater.pdf",
-  cnilConsent: "https://www.cnil.fr/fr/les-bases-legales/consentement",
-  cnilTransparency: "https://www.cnil.fr/fr/conformite-rgpd-information-des-personnes-et-transparence",
-} as const;
 
 export function TrustPage() {
   return (
@@ -93,33 +85,7 @@ export function TrustPage() {
         </article>
       </section>
 
-      <section className="trust-policy" id="cadre-utilisation">
-        <header>
-          <span><Scale size={24} /></span>
-          <div><span className="section-kicker">Cadre d'utilisation</span><h2>Ton choix compte, mais il ne remplace pas les règles du SI.</h2><p>La protection des données et l'autorisation d'utiliser un service informatique sont deux sujets différents.</p></div>
-        </header>
-        <div className="trust-policy-grid">
-          <article>
-            <span className="section-kicker">Ce que tu autorises</span>
-            <h3>Le traitement demandé</h3>
-            <p>Tu choisis les finalités facultatives une par une. Ton accord doit rester libre, compréhensible et retirable aussi simplement qu'il a été donné.</p>
-            <a href={officialLinks.cnilConsent} target="_blank" rel="noreferrer">Repères de la CNIL <ExternalLink size={13} /></a>
-          </article>
-          <article>
-            <span className="section-kicker">Ce que cela ne remplace pas</span>
-            <h3>La charte informatique IMT</h3>
-            <p>IMTégrale n'est ni homologué par la DISI, ni autorisé par l'école. Le règlement IMT rend sa charte informatique applicable ; la charte RENATER citée par l'école encadre aussi l'accès personnel et l'usage rationnel des ressources.</p>
-            <div className="trust-policy-links"><a href={officialLinks.imtRules} target="_blank" rel="noreferrer">Règlement IMT <ExternalLink size={13} /></a><a href={officialLinks.renaterCharter} target="_blank" rel="noreferrer">Charte RENATER <ExternalLink size={13} /></a></div>
-          </article>
-          <article>
-            <span className="section-kicker">Qui reste responsable</span>
-            <h3>L'exploitant et l'étudiant</h3>
-            <p>L'exploitant choisit le fonctionnement du service et protège les données. L'étudiant reste titulaire de son accès IMT. Aucun consentement ne transfère toute la responsabilité à l'autre partie.</p>
-            <a href={officialLinks.cnilTransparency} target="_blank" rel="noreferrer">Obligations de transparence <ExternalLink size={13} /></a>
-          </article>
-        </div>
-        <div className="trust-retention"><Trash2 size={18} /><p><strong>Retrait et effacement.</strong> Une publication au classement disparaît immédiatement sur demande. Pour supprimer tout le compte, contacte l'administrateur de l'instance : le compte et ses données académiques actives sont effacés. Une trace administrative minimale peut être conservée ; les sauvegardes chiffrées expirent selon leur cycle de 30 jours.</p></div>
-      </section>
+      <section className="trust-retention"><Trash2 size={18} /><p><strong>Retrait et effacement.</strong> Une publication au classement disparaît immédiatement sur demande. Pour supprimer tout le compte, contacte l'administrateur de l'instance : le compte et ses données académiques actives sont effacés. Une trace administrative minimale peut être conservée ; les sauvegardes chiffrées expirent selon leur cycle de 30 jours.</p></section>
 
       <section className="trust-source-band">
         <span><GitHubMark size={25} /></span>

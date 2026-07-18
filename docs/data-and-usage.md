@@ -1,6 +1,6 @@
-# Données, consentements et cadre d'utilisation
+# Données et choix utilisateur
 
-Ce document décrit le comportement du logiciel IMTégrale `4.5.5`. Il aide un étudiant à comprendre le service et un exploitant à préparer son propre déploiement. Il ne remplace ni la charte informatique de l'établissement, ni une analyse juridique adaptée à l'instance réellement ouverte.
+Ce document décrit le comportement du logiciel IMTégrale `4.5.6`. Il aide un étudiant à comprendre les données utilisées par le service et les choix qui restent sous son contrôle.
 
 ## Principes
 
@@ -40,22 +40,6 @@ L'activation publie immédiatement l'identité et les deux scores aux participan
 
 Ces trois fonctions sont indépendantes. Les deux premières ajoutent un secret chiffré nécessaire à un service externe. Le partage crée un token auquel l'étudiant attribue un rôle et, éventuellement, une expiration. Toute révocation ferme les sessions issues de ce token.
 
-## Responsabilités distinctes
-
-Le consentement concerne le traitement des données personnelles. Selon la [CNIL](https://www.cnil.fr/fr/les-bases-legales/consentement), il doit être libre, spécifique, éclairé, univoque, prouvable et aussi simple à retirer qu'à donner. Cela ne constitue pas une autorisation donnée par IMT Atlantique d'automatiser ses portails.
-
-Le [règlement intérieur d'IMT Atlantique](https://www.imt-atlantique.fr/sites/default/files/ecole/ddrs/odd/ODD%2016/REGLEMENT-INTERIEUR-IMT%20A%202023-version-suite-CE-14-avril-2023.pdf) intègre une charte d'utilisation des ressources informatiques et subordonne l'ouverture du compte à sa signature. La [charte RENATER](https://www.renater.fr/wp-content/uploads/2022/01/charte-de-bon-usage-de-linformatique-et-du-reseau-renater.pdf), également citée par l'école, encadre un accès personnel et incessible ainsi qu'une consommation rationnelle des ressources. La version exacte de la charte IMT signée par l'étudiant doit être consultée sur l'intranet.
-
-L'exploitant de l'instance choisit les finalités et les moyens du traitement. Avant une ouverture publique, il doit au minimum :
-
-- identifier clairement l'exploitant et fournir un contact privé ;
-- documenter une base légale pour chaque finalité ;
-- annoncer les données, destinataires, durées et droits applicables ;
-- permettre l'accès, la rectification lorsque la source le permet, l'effacement et le retrait des consentements ;
-- tenir un registre adapté, documenter les incidents et prévoir la notification des violations lorsque le RGPD l'exige ;
-- vérifier les règles de PASS, COMPETENCES, INPASS, Telegram et de son hébergeur ;
-- arrêter le service ou la synchronisation si l'établissement retire son autorisation ou demande l'arrêt des appels.
-
 ## Limite technique persistante
 
-Même sans mot de passe stocké, les requêtes PASS et Hub partent du serveur IMTégrale. Les quotas par compte, le verrou global, le repos inter-requêtes et le circuit breaker réduisent la charge ; ils ne rendent pas le trafic distribué par adresse IP et ne garantissent pas son acceptation par la DISI.
+Même sans mot de passe stocké, les requêtes PASS et Hub partent du serveur IMTégrale. Les quotas par compte, le verrou global, le repos inter-requêtes et le circuit breaker limitent la charge et suspendent les synchronisations en cas d'instabilité.

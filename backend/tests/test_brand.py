@@ -44,7 +44,9 @@ def test_public_explanations_match_the_service_session_model() -> None:
     security = read("SECURITY.md")
 
     assert "Mot de passe IMT jamais conservé" in login
-    assert "il ne remplace pas les règles du SI" in trust
+    assert "Retrait et effacement" in trust
+    assert "il ne remplace pas les règles du SI" not in trust
+    assert "charte RENATER" not in trust
     assert "Accès & partage" in demo
     assert "Simulations" in demo
     assert "Agenda" in demo
