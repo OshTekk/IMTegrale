@@ -18,6 +18,7 @@ IMTégrale est un projet étudiant indépendant. Il n'est ni affilié, ni approu
 - jusqu'à cinq simulations GPA et cinq simulations de notes privées, avec import académique, autosauvegarde, comparaison et hypothèses par semestre ;
 - agenda de cours personnel importé depuis un lien iCalendar INPASS, conservé chiffré et actualisé chaque heure ;
 - calendrier d'alternance 2026-2027 pour les FIP 2027, 2028 et 2029, avec périodes école, entreprise et mobilité ;
+- relevé académique personnel en PDF, filtrable par semestre, avec provenance PASS/COMPETENCES, annexe facultative et lien vers le code source ;
 - leaderboard facultatif par promotion, avec deux classements : GPA par défaut et moyenne générale.
 
 Le leaderboard utilise la moyenne calculée depuis les notes brutes PASS, le grade COMPETENCES lorsqu'il existe et les ECTS officiels. Lorsqu'un étudiant le rejoint, son identité PASS et ses deux scores deviennent immédiatement visibles par les participants actifs, tandis qu'il attend 48 heures avant de voir le moindre classement, rang ou nombre de participants. Il peut retirer ou effacer sa participation immédiatement puis revenir à tout moment ; chaque nouvelle activation relance intégralement les 48 heures d'attente avant consultation.
@@ -81,6 +82,7 @@ pnpm audit --prod
 - [classement, confidentialité et modération](docs/leaderboard.md) ;
 - [simulations GPA et simulations de notes privées](docs/simulations.md) ;
 - [agenda INPASS et calendrier de formation FIP](docs/calendars.md) ;
+- [relevé académique personnel et transparence](docs/academic-report.md) ;
 - [actualisation automatique](docs/automatic-sync.md) et [synchronisation manuelle](docs/manual-sync.md) ;
 - [déploiement et rollback](deploy/README.md) ;
 - [politique de sécurité](SECURITY.md) et [guide de contribution](CONTRIBUTING.md).

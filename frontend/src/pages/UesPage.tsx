@@ -1,9 +1,10 @@
 import { Fragment, useMemo, useState } from "react";
-import { BadgeCheck, BookOpenCheck, CheckCircle2, ChevronDown, CircleDashed, TriangleAlert } from "lucide-react";
+import { BadgeCheck, BookOpenCheck, CheckCircle2, ChevronDown, CircleDashed, FileDown, TriangleAlert } from "lucide-react";
+import { Link } from "react-router-dom";
 import { EmptyState } from "../components/EmptyState";
 import { GradeBadge } from "../components/GradeBadge";
 import { formatDate, formatNumber, yearLabel } from "../lib/format";
-import { useDashboard } from "../lib/queries";
+import { useDashboard, useSession } from "../lib/queries";
 import type { UeItem } from "../types";
 
 function UeStatus({ ue }: { ue: UeItem }) {
@@ -24,6 +25,7 @@ function UeStatus({ ue }: { ue: UeItem }) {
 
 export function UesPage() {
   const dashboard = useDashboard();
+  const session = useSession();
   const [year, setYear] = useState("all");
   const [semester, setSemester] = useState("all");
   const [expandedCode, setExpandedCode] = useState<string | null>(null);
@@ -45,6 +47,7 @@ export function UesPage() {
   if (dashboard.isError || !dashboard.data) return <div className="error-panel"><TriangleAlert size={22} />{dashboard.error?.message}</div>;
   const years = dashboard.data.years;
   const semesters = dashboard.data.semesters;
+  const canDownloadReport = session.data?.role === "owner" && session.data.auth_method !== "token";
 
   return (
     <div className="page-stack">
@@ -58,7 +61,7 @@ export function UesPage() {
       <section className="grade-scale-band" aria-label="Échelle des grades">{dashboard.data.grade_scale.map((item) => <div key={item.grade}><GradeBadge grade={item.grade} description={item.description} /><strong>{formatNumber(item.gpa)}</strong></div>)}</section>
 
       <section className="data-section">
-        <header className="section-heading"><div><h2>Unités d'enseignement</h2><p>{ues.length} UE · {ues.filter((ue) => ue.validated).length} validées</p></div><span className="official-data-label"><BadgeCheck size={16} /> PASS + COMPETENCES</span></header>
+        <header className="section-heading"><div><h2>Unités d'enseignement</h2><p>{ues.length} UE · {ues.filter((ue) => ue.validated).length} validées</p></div><div className="section-heading-actions"><span className="official-data-label"><BadgeCheck size={16} /> PASS + COMPETENCES</span>{canDownloadReport && <Link className="secondary-button" to="/ues/releve" viewTransition><FileDown size={16} /> Relevé académique</Link>}</div></header>
         {ues.length ? <div className="table-wrap"><table className="data-table ue-table"><thead><tr><th>Unité d'enseignement</th><th>Semestre</th><th>Moyenne PASS</th><th>Grade</th><th>GPA</th><th>ECTS</th><th>État</th><th><span className="sr-only">Détails</span></th></tr></thead><tbody>{ues.map((ue) => {
           const notes = notesByUe.get(ue.code) ?? [];
           const detailsId = `ue-notes-${ue.code.replace(/[^A-Za-z0-9_-]/g, "-")}`;

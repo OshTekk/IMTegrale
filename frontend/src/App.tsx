@@ -13,6 +13,7 @@ import { broadcastSessionChange, subscribeToSessionChanges } from "./lib/session
 const loadOverviewPage = () => import("./pages/OverviewPage");
 const loadNotesPage = () => import("./pages/NotesPage");
 const loadUesPage = () => import("./pages/UesPage");
+const loadAcademicReportPage = () => import("./pages/AcademicReportPage");
 const loadSharingPage = () => import("./pages/SharingPage");
 const loadSettingsPage = () => import("./pages/SettingsPage");
 const loadLeaderboardPage = () => import("./pages/LeaderboardPage");
@@ -22,6 +23,7 @@ const loadCalendarPage = () => import("./pages/CalendarPage");
 const OverviewPage = lazy(() => loadOverviewPage().then((module) => ({ default: module.OverviewPage })));
 const NotesPage = lazy(() => loadNotesPage().then((module) => ({ default: module.NotesPage })));
 const UesPage = lazy(() => loadUesPage().then((module) => ({ default: module.UesPage })));
+const AcademicReportPage = lazy(() => loadAcademicReportPage().then((module) => ({ default: module.AcademicReportPage })));
 const SharingPage = lazy(() => loadSharingPage().then((module) => ({ default: module.SharingPage })));
 const SettingsPage = lazy(() => loadSettingsPage().then((module) => ({ default: module.SettingsPage })));
 const LeaderboardPage = lazy(() => loadLeaderboardPage().then((module) => ({ default: module.LeaderboardPage })));
@@ -37,6 +39,7 @@ const studentRouteLoaders: Record<string, () => Promise<unknown>> = {
   "/notes": loadNotesPage,
   "/calendar": loadCalendarPage,
   "/ues": loadUesPage,
+  "/ues/releve": loadAcademicReportPage,
   "/leaderboard": loadLeaderboardPage,
   "/simulations": loadSimulationsPage,
   "/simulations/gpa": loadSimulationsPage,
@@ -50,6 +53,7 @@ const documentTitles: Record<string, string> = {
   "/notes": "Notes",
   "/calendar": "Agenda",
   "/ues": "UE & ECTS",
+  "/ues/releve": "Relevé académique",
   "/leaderboard": "Classement",
   "/simulations": "Simulations",
   "/sharing": "Partage",
@@ -146,6 +150,7 @@ function StudentApp() {
           <Route path="notes" element={<NotesPage />} />
           <Route path="calendar" element={isPrimaryOwner ? <CalendarPage /> : <Navigate to="/" replace />} />
           <Route path="ues" element={<UesPage />} />
+          <Route path="ues/releve" element={isPrimaryOwner ? <AcademicReportPage /> : <Navigate to="/ues" replace />} />
           <Route path="leaderboard" element={isOwner ? <LeaderboardPage /> : <Navigate to="/" replace />} />
           <Route path="simulations" element={isPrimaryOwner ? <SimulationLayout /> : <Navigate to="/" replace />}>
             <Route index element={<Navigate to="gpa" replace />} />

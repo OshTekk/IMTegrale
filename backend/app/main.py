@@ -14,6 +14,7 @@ from app.admin_security import require_admin_network
 from app.config import get_settings
 from app.database import SessionLocal
 from app.routers import (
+    academic_reports,
     admin,
     auth,
     calendars,
@@ -102,8 +103,7 @@ async def security_headers(request: Request, call_next):  # noqa: ANN001
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = (
-        "camera=(), microphone=(), geolocation=(), payment=(), "
-        "publickey-credentials-get=(self)"
+        "camera=(), microphone=(), geolocation=(), payment=(), publickey-credentials-get=(self)"
     )
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
@@ -143,6 +143,7 @@ def health_ready() -> dict:
 
 for api_router in (
     admin.router,
+    academic_reports.router,
     auth.router,
     calendars.router,
     dashboard.router,

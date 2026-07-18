@@ -105,3 +105,30 @@ export function adminApi<T>(path: string, options: RequestInit = {}): Promise<T>
     "botnote:admin-unauthorized"
   );
 }
+
+function downloadFilename(header: string | null): string {
+  const match = header?.match(/filename="([^"]+)"/i);
+  return match?.[1] ?? "document.pdf";
+}
+
+export async function downloadFile(path: string): Promise<{ blob: Blob; filename: string }> {
+  const response = await fetch(path, {
+    method: "GET",
+    headers: { Accept: "application/pdf" },
+    credentials: "same-origin"
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+    const detail = typeof payload.detail === "string"
+      ? payload.detail
+      : `Erreur HTTP ${response.status}`;
+    if (response.status === 401) {
+      window.dispatchEvent(new CustomEvent("botnote:unauthorized"));
+    }
+    throw new ApiError(detail, response.status);
+  }
+  return {
+    blob: await response.blob(),
+    filename: downloadFilename(response.headers.get("Content-Disposition"))
+  };
+}

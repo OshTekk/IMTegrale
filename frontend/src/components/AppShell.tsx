@@ -30,6 +30,7 @@ const titles: Record<string, [string, string]> = {
   "/notes": ["Notes", "Détail des évaluations officielles importées depuis PASS"],
   "/calendar": ["Agenda", "Tes cours et ton rythme de formation au même endroit"],
   "/ues": ["UE & ECTS", "Moyennes, grades et pondération par crédits"],
+  "/ues/releve": ["Relevé académique", "Prépare un document personnel clair et partageable"],
   "/simulations/gpa": ["Simulations", "Projette ton GPA sans modifier tes données officielles"],
   "/simulations/notes": ["Simulations", "Teste tes prochaines notes et leur impact sur ta moyenne"],
   "/leaderboard": ["Classement", "Deux classements privés, calculés depuis PASS"],
