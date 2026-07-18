@@ -393,7 +393,7 @@ function PersonalCalendar({ status }: { status: CalendarStatus }) {
           </div>
         </div>
       </Modal>
-      <Modal open={selectedEvent !== null} title={selectedEvent?.title ?? "Cours"} description="Détail importé depuis INPASS" onClose={() => setSelectedEvent(null)} size="small">
+      <Modal open={selectedEvent !== null} title={selectedEvent?.title ?? "Cours"} description="Détail importé depuis INPASS" onClose={() => setSelectedEvent(null)} size="small" className="calendar-event-modal">
         {selectedEvent && <div className="calendar-event-detail"><div><Clock3 size={19} /><span><strong>Horaire</strong><p>{eventDateLabel(selectedEvent)}</p></span></div><div><MapPin size={19} /><span><strong>Lieu</strong><p>{selectedEvent.location || "Non indiqué dans INPASS"}</p></span></div></div>}
       </Modal>
       <div className="calendar-data-controls">

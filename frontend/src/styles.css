@@ -2687,6 +2687,7 @@ select:disabled {
   width: min(100%, 560px);
   max-height: calc(100vh - 40px);
   overflow-y: auto;
+  overscroll-behavior: contain;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface);
@@ -5578,8 +5579,14 @@ select:disabled {
   .panel-heading > a { font-size: 0; }
   .panel-heading > a svg { width: 18px; height: 18px; }
   .two-columns { grid-template-columns: 1fr; }
-  .modal-backdrop { align-items: end; padding: 0; }
-  .modal { width: 100%; max-height: 92vh; border-radius: 8px 8px 0 0; }
+  .modal-backdrop { align-items: end; padding: max(8px, env(safe-area-inset-top)) 0 0; }
+  .modal {
+    width: 100%;
+    max-height: 92vh;
+    max-height: calc(100dvh - max(8px, env(safe-area-inset-top)));
+    padding-bottom: env(safe-area-inset-bottom);
+    border-radius: 8px 8px 0 0;
+  }
   .modal-form { padding: 18px; }
   .modal-actions { margin-right: 0; margin-bottom: 0; margin-left: 0; padding: 12px 18px; }
   .modal-form > .modal-actions { margin-right: -18px; margin-bottom: -18px; margin-left: -18px; }
@@ -7906,6 +7913,20 @@ html[data-theme="dark"] .token-list-panel {
   padding: 8px 22px 22px;
 }
 
+.calendar-event-modal {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.calendar-event-modal .calendar-event-detail {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+}
+
 .calendar-event-detail > div {
   display: grid;
   grid-template-columns: 34px minmax(0, 1fr);
@@ -7919,7 +7940,7 @@ html[data-theme="dark"] .token-list-panel {
 .calendar-event-detail > div > svg { margin-top: 1px; color: var(--green); }
 .calendar-event-detail span { display: grid; gap: 3px; }
 .calendar-event-detail strong { font-size: var(--text-xs); text-transform: uppercase; }
-.calendar-event-detail p { color: var(--muted); font-size: var(--text-md); line-height: 1.5; }
+.calendar-event-detail p { overflow-wrap: anywhere; color: var(--muted); font-size: var(--text-md); line-height: 1.5; }
 
 .calendar-disconnect-dialog > p { padding: 20px 22px; color: var(--muted); font-size: var(--text-md); }
 .calendar-disconnect-dialog .modal-actions { margin: 0; }

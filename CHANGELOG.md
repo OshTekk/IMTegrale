@@ -1,5 +1,9 @@
 # Changements
 
+## 4.5.4 - 18 juillet 2026
+
+- correction de la sheet de détail d'un cours sur mobile : hauteur dynamique, safe area et défilement tactile jusqu'au lieu.
+
 ## 4.5.3 - 18 juillet 2026
 
 - correction du filtre de semestres sur mobile : libellé compact, boutons non compressibles et défilement horizontal jusqu'à S10.
