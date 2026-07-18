@@ -1,4 +1,6 @@
 export type Role = "owner" | "editor" | "viewer";
+export type AcademicSemester = "S5" | "S6" | "S7" | "S8" | "S9" | "S10";
+export type SimulationSemester = AcademicSemester;
 
 export interface Session {
   authenticated: boolean;
@@ -30,7 +32,7 @@ export interface UeItem {
   code: string;
   title: string;
   year: string;
-  semester: string | null;
+  semester: AcademicSemester | null;
   official_code: string | null;
   credits_ects: number | null;
   earned_credits_ects: number | null;
@@ -138,8 +140,8 @@ export interface Dashboard {
     ue_count: number;
   }>;
   semesters: Array<{
-    semester: string;
-    label: string;
+    semester: AcademicSemester;
+    label: AcademicSemester;
     average: number | null;
     average_credits: number;
     gpa: number | null;
@@ -155,7 +157,6 @@ export interface Dashboard {
 }
 
 export type SimulationGrade = "A" | "B" | "C" | "D" | "E" | "FX" | "F";
-export type SimulationSemester = "S5" | "S6" | "S7" | "S8" | "S9" | "S10";
 
 export interface SimulationFormula {
   version: string;

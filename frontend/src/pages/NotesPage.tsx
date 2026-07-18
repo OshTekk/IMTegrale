@@ -28,7 +28,7 @@ export function NotesPage() {
     <div className="page-stack">
       <section className="toolbar-band">
         <div className="search-field"><Search size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Rechercher une UE ou une évaluation" aria-label="Rechercher une note" /></div>
-        <div className="filter-group"><Filter size={17} /><select value={year} onChange={(event) => setYear(event.target.value)} aria-label="Filtrer par année"><option value="all">Toutes les années</option>{years.map((item) => <option key={item} value={item}>{yearLabel(item)}</option>)}</select>{semesters.length > 0 && <select value={semester} onChange={(event) => setSemester(event.target.value)} aria-label="Filtrer par semestre"><option value="all">Tous les semestres</option>{semesters.map((item) => <option key={item.semester} value={item.semester}>{item.label}</option>)}</select>}</div>
+        <div className="filter-group"><Filter size={17} /><select value={year} onChange={(event) => setYear(event.target.value)} aria-label="Filtrer par année"><option value="all">Toutes les années</option>{years.map((item) => <option key={item} value={item}>{yearLabel(item)}</option>)}</select>{semesters.length > 0 && <select value={semester} onChange={(event) => setSemester(event.target.value)} aria-label="Filtrer par semestre"><option value="all">Tous les semestres</option>{semesters.map((item) => <option key={item.semester} value={item.semester}>{item.semester}</option>)}</select>}</div>
       </section>
 
       <section className="data-section">

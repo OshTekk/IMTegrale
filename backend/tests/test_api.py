@@ -150,6 +150,8 @@ def test_registration_imports_competencies_metadata(client: TestClient, monkeypa
     assert dashboard["ues"][0]["grade"] == "B"
     assert dashboard["ues"][0]["grade_source"] == "competences"
     assert dashboard["ues"][0]["metadata_source"] == "competences"
+    assert dashboard["semesters"][0]["semester"] == "S5"
+    assert dashboard["semesters"][0]["label"] == "S5"
     assert dashboard["semesters"][0]["gpa"] == 3.8
 
 

@@ -55,7 +55,7 @@ Les événements techniques enregistrent uniquement l'identifiant du scénario e
 
 ## Semestres
 
-IMTégrale affiche les semestres du cursus ingénieur selon la convention académique globale : `S5` à `S10`. Lorsque COMPETENCES fournit `Semestre 1` à `Semestre 6`, la valeur brute est conservée pour la traçabilité puis convertie respectivement en `S5` à `S10`. Un semestre présent dans l'intitulé officiel de l'UE sert de contrôle ; une contradiction fait échouer l'import au lieu d'enregistrer une donnée ambiguë.
+IMTégrale affiche exclusivement les semestres du cursus ingénieur selon la convention académique globale : `S5` à `S10`, dans les vues, filtres, calculs, simulations et réponses API. Lorsque COMPETENCES fournit sa numérotation interne de `1` à `6`, la valeur brute reste confinée à la couche d'import pour la traçabilité puis est convertie en `S5` à `S10`. Un semestre présent dans l'intitulé officiel de l'UE sert de contrôle ; une contradiction fait échouer l'import au lieu d'enregistrer une donnée ambiguë.
 
 ## Limites
 

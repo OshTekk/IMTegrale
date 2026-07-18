@@ -220,7 +220,7 @@ def dashboard_snapshot(
         semesters.append(
             {
                 "semester": semester,
-                "label": f"Semestre {str(semester)[1:]}",
+                "label": semester,
                 "average": semester_average,
                 "average_credits": semester_average_credits,
                 "gpa": semester_gpa,
