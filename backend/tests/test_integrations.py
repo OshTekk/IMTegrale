@@ -184,7 +184,7 @@ def test_competencies_api_uses_csrf_bearer_and_current_student_only(monkeypatch)
     entries = client.fetch_competency_ues_authenticated(credentials=("student", "secret"))
 
     assert entries[0].ue_code == "SIT130"
-    assert entries[0].semester == "S1"
+    assert entries[0].semester == "S5"
     assert entries[0].grade == "E"
     assert posts[0][0] == COMPETENCIES_LOGIN_URL
     assert posts[0][1] == ()

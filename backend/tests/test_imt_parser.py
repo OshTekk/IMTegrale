@@ -78,15 +78,36 @@ def test_competencies_parser_imports_official_titles_and_attempted_credits() -> 
     assert entries[0].ue_code == "SIT140"
     assert entries[0].official_code == "FIP-SIT140-BR-2025"
     assert entries[0].title == "Outils physiques pour l'ingénieur S5"
-    assert entries[0].semester == "S1"
+    assert entries[0].semester == "S5"
+    assert entries[0].source_semester == "Semestre 1"
     assert entries[0].grade == "E"
     assert entries[0].credits_ects == 3
     assert entries[0].earned_credits_ects == 3
     assert entries[1].ue_code == "PRJ120"
-    assert entries[1].semester == "S2"
+    assert entries[1].semester == "S6"
+    assert entries[1].source_semester == "Semestre 2"
     assert entries[1].grade == "FX"
     assert entries[1].credits_ects == 5
     assert entries[1].earned_credits_ects == 0
+
+
+def test_competencies_parser_rejects_source_and_title_semester_mismatch() -> None:
+    with pytest.raises(ImtFetchError, match="contradictoires"):
+        parse_competency_api_payload(
+            {
+                "data": [
+                    {
+                        "nom": "Outils physiques pour l'ingénieur S6",
+                        "semestre": "Semestre 1",
+                        "valide": "Validé",
+                        "code": "FIP-SIT140-BR-2025",
+                        "grade_calcule": "B",
+                        "credit_calcule": 3,
+                        "credit_presente": 3,
+                    }
+                ]
+            }
+        )
 
 
 def test_competencies_parser_rejects_conflicting_duplicate_codes() -> None:

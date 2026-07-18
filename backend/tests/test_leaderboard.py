@@ -382,7 +382,7 @@ def test_official_competencies_grade_has_priority_for_gpa(
                 "Outils mathematiques",
                 4,
                 official_code="FIP-SIT130-BR-2025",
-                semester="S1",
+                semester="S5",
                 grade="A",
                 earned_credits_ects=4,
             )

@@ -324,8 +324,10 @@ def apply_competency_ues(
             not math.isfinite(earned_credits) or not 0 <= earned_credits <= credits
         ):
             raise ImtFetchError("COMPETENCES a fourni des crédits obtenus invalides")
-        if entry.semester is not None and not re.fullmatch(r"S(?:[1-9]|1\d|20)", entry.semester):
+        if entry.semester is not None and not re.fullmatch(r"S(?:[5-9]|10)", entry.semester):
             raise ImtFetchError("COMPETENCES a fourni un semestre invalide")
+        if entry.source_semester is not None and len(entry.source_semester) > 32:
+            raise ImtFetchError("COMPETENCES a fourni un libellé de semestre invalide")
         if entry.grade is not None and entry.grade not in {"A", "B", "C", "D", "E", "FX", "F"}:
             raise ImtFetchError("COMPETENCES a fourni un grade invalide")
 
@@ -340,6 +342,7 @@ def apply_competency_ues(
                 setting.credits_ects != credits,
                 setting.earned_credits_ects != earned_credits,
                 setting.semester != entry.semester,
+                setting.source_semester != entry.source_semester,
                 setting.official_code != entry.official_code,
                 setting.official_grade != entry.grade,
             )
@@ -348,6 +351,7 @@ def apply_competency_ues(
         setting.credits_ects = credits
         setting.earned_credits_ects = earned_credits
         setting.semester = entry.semester
+        setting.source_semester = entry.source_semester
         setting.official_code = entry.official_code
         setting.official_grade = entry.grade
         setting.metadata_source = "competences"

@@ -18,7 +18,7 @@ const navItems = [
   { to: "/", label: "Vue d'ensemble", short: "Accueil", icon: Gauge, ownerOnly: false },
   { to: "/notes", label: "Notes", short: "Notes", icon: NotebookPen, ownerOnly: false },
   { to: "/ues", label: "UE & ECTS", short: "UE", icon: BookOpenCheck, ownerOnly: false },
-  { to: "/simulations", label: "Simulations", short: "Simuler", icon: FlaskConical, ownerOnly: true, primaryOwnerOnly: true },
+  { to: "/simulations/gpa", label: "Simulations", short: "Simuler", icon: FlaskConical, ownerOnly: true, primaryOwnerOnly: true },
   { to: "/leaderboard", label: "Classement", short: "Rangs", icon: Trophy, ownerOnly: true },
   { to: "/sharing", label: "Partage", short: "Partage", icon: KeyRound, ownerOnly: true },
   { to: "/settings", label: "Paramètres", short: "Réglages", icon: Settings, ownerOnly: false }
@@ -28,7 +28,8 @@ const titles: Record<string, [string, string]> = {
   "/": ["Vue d'ensemble", "Ta situation académique en un coup d'œil"],
   "/notes": ["Notes", "Détail des évaluations officielles importées depuis PASS"],
   "/ues": ["UE & ECTS", "Moyennes, grades et pondération par crédits"],
-  "/simulations": ["Simulations", "Projette ton GPA sans modifier tes données officielles"],
+  "/simulations/gpa": ["Simulations", "Projette ton GPA sans modifier tes données officielles"],
+  "/simulations/notes": ["Simulations", "Teste tes prochaines notes et leur impact sur ta moyenne"],
   "/leaderboard": ["Classement", "Deux classements privés, calculés depuis PASS"],
   "/sharing": ["Partage", "Accès révocables liés à ton compte"],
   "/settings": ["Paramètres", "Compte, synchronisation et notifications"]
@@ -60,7 +61,7 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
     (!item.ownerOnly || session.role === "owner") && (!item.primaryOwnerOnly || primaryOwner)
   )), [primaryOwner, session.role]);
   const mobilePrimaryPaths = useMemo(() => primaryOwner
-    ? ["/", "/notes", "/simulations", "/leaderboard"]
+    ? ["/", "/notes", "/simulations/gpa", "/leaderboard"]
     : ["/", "/notes", "/ues"], [primaryOwner]);
   const mobilePrimaryNav = useMemo(() => visibleNav.filter((item) => mobilePrimaryPaths.includes(item.to)), [mobilePrimaryPaths, visibleNav]);
   const mobileSecondaryNav = useMemo(() => visibleNav.filter((item) => !mobilePrimaryPaths.includes(item.to)), [mobilePrimaryPaths, visibleNav]);
@@ -185,7 +186,7 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
       <aside className="sidebar">
         <div className="sidebar-brand"><Logo /></div>
         <nav className="sidebar-nav" aria-label="Navigation principale">
-          {visibleNav.map((item) => <NavLink key={item.to} to={item.to} end={item.to === "/"} viewTransition onMouseEnter={() => preloadRoute(item.to)} onFocus={() => preloadRoute(item.to)} className={({ isActive }) => isActive ? "active" : ""}><item.icon size={19} /><span>{item.label}</span></NavLink>)}
+          {visibleNav.map((item) => <NavLink key={item.to} to={item.to} end={item.to === "/"} viewTransition onMouseEnter={() => preloadRoute(item.to)} onFocus={() => preloadRoute(item.to)} className={({ isActive }) => isActive || (item.to.startsWith("/simulations") && location.pathname.startsWith("/simulations")) ? "active" : ""}><item.icon size={19} /><span>{item.label}</span></NavLink>)}
         </nav>
         {session.role !== "owner" && <div className="access-badge"><ShieldCheck size={17} /><div><strong>Lecture seule</strong><span>Accès partagé</span></div></div>}
         <div className="sidebar-status" role="status" aria-live="polite"><span className={`live-dot ${live}`} /><div><strong>{live === "connected" ? "Données en direct" : "Reconnexion…"}</strong><span>{dashboard.data?.account.last_sync_at ? `Sync ${new Date(dashboard.data.account.last_sync_at).toLocaleDateString("fr-FR")}` : "En attente de sync"}</span></div></div>
@@ -212,7 +213,7 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
       </div>
 
       <nav className="mobile-nav" aria-label="Navigation mobile">
-        {mobilePrimaryNav.map((item) => <NavLink key={item.to} to={item.to} end={item.to === "/"} viewTransition onTouchStart={() => preloadRoute(item.to)} onFocus={() => preloadRoute(item.to)} className={({ isActive }) => isActive ? "active" : ""}><item.icon size={20} /><span>{item.short}</span></NavLink>)}
+        {mobilePrimaryNav.map((item) => <NavLink key={item.to} to={item.to} end={item.to === "/"} viewTransition onTouchStart={() => preloadRoute(item.to)} onFocus={() => preloadRoute(item.to)} className={({ isActive }) => isActive || (item.to.startsWith("/simulations") && location.pathname.startsWith("/simulations")) ? "active" : ""}><item.icon size={20} /><span>{item.short}</span></NavLink>)}
         {mobileSecondaryNav.length > 0 && <button className={mobileSecondaryNav.some((item) => item.to === location.pathname) ? "active" : ""} type="button" onClick={() => setMobileMenuOpen(true)} aria-label="Ouvrir les autres pages" aria-expanded={mobileMenuOpen}><Ellipsis size={21} /><span>Plus</span></button>}
       </nav>
 

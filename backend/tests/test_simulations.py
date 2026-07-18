@@ -20,7 +20,7 @@ def fake_academic_data(
             "Outils mathematiques",
             4,
             official_code="FIP-SIT130-BR-2025",
-            semester="S1",
+            semester="S5",
             grade="B",
             earned_credits_ects=4,
         ),
@@ -29,7 +29,7 @@ def fake_academic_data(
             "Conception et programmation objet",
             6,
             official_code="FIP-INF110-BR-2026",
-            semester="S2",
+            semester="S6",
             grade="C",
             earned_credits_ects=6,
         ),
@@ -38,7 +38,7 @@ def fake_academic_data(
             "Bases physiques pour les telecoms",
             6,
             official_code="FIP-ELP110-BR-2026",
-            semester="S2",
+            semester="S6",
             grade="FX",
             earned_credits_ects=0,
         ),
@@ -144,21 +144,21 @@ def test_blank_scenario_autosave_keeps_pending_grade_out_of_gpa(
             "name": "Semestre futur",
             "entries": [
                 {
-                    "semester": "S3",
+                    "semester": "S7",
                     "ue_code": "FUT130",
                     "title": "UE estimee",
                     "credits_ects": 4,
                     "grade": "B",
                 },
                 {
-                    "semester": "S3",
+                    "semester": "S7",
                     "ue_code": "FUT140",
                     "title": "UE en attente",
                     "credits_ects": 6,
                     "grade": None,
                 },
                 {
-                    "semester": "S4",
+                    "semester": "S8",
                     "ue_code": "FUT210",
                     "title": "Hypothese de rattrapage",
                     "credits_ects": 2,
@@ -176,8 +176,8 @@ def test_blank_scenario_autosave_keeps_pending_grade_out_of_gpa(
     assert result["pending_count"] == 1
     assert result["status"] == "partial"
     assert result["semesters"] == [
-        {"semester": "S3", "gpa": 3.8, "credits_included": 4.0, "ue_count": 2},
-        {"semester": "S4", "gpa": 0.0, "credits_included": 2.0, "ue_count": 1},
+        {"semester": "S7", "gpa": 3.8, "credits_included": 4.0, "ue_count": 2},
+        {"semester": "S8", "gpa": 0.0, "credits_included": 2.0, "ue_count": 1},
     ]
 
     persisted = client.get(f"/api/v1/simulations/{scenario['id']}")
@@ -309,7 +309,7 @@ def test_rebase_updates_untouched_rows_and_preserves_hypotheses(
                 title="Nouvelle UE officielle",
                 credits_ects=2,
                 earned_credits_ects=2,
-                semester="S3",
+                semester="S7",
                 official_grade="D",
                 metadata_source="competences",
             )
@@ -364,7 +364,7 @@ def test_duplicate_compare_reset_delete_and_account_isolation(
     entries[0]["grade"] = "A"
     entries.append(
         {
-            "semester": "S3",
+            "semester": "S7",
             "ue_code": "FUTURE",
             "title": "UE future",
             "credits_ects": 3,

@@ -181,6 +181,7 @@ class UeSetting(Base):
     title: Mapped[str] = mapped_column(String(200), default="")
     year: Mapped[str] = mapped_column(String(16), default="")
     semester: Mapped[str | None] = mapped_column(String(16))
+    source_semester: Mapped[str | None] = mapped_column(String(32))
     official_code: Mapped[str | None] = mapped_column(String(80))
     official_grade: Mapped[str | None] = mapped_column(String(4))
     metadata_source: Mapped[str] = mapped_column(String(24), default="manual")
@@ -194,11 +195,21 @@ class SimulationScenario(Base):
     __tablename__ = "simulation_scenarios"
     __table_args__ = (
         Index("ix_simulation_scenarios_account_updated", "account_id", "updated_at"),
+        Index(
+            "ix_simulation_scenarios_account_kind_updated",
+            "account_id",
+            "kind",
+            "updated_at",
+        ),
         CheckConstraint(
             "created_from IN ('blank', 'academic')",
             name="ck_simulation_scenarios_created_from",
         ),
         CheckConstraint("version >= 1", name="ck_simulation_scenarios_version"),
+        CheckConstraint(
+            "kind IN ('gpa', 'notes')",
+            name="ck_simulation_scenarios_kind",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
@@ -206,6 +217,7 @@ class SimulationScenario(Base):
         ForeignKey("accounts.id", ondelete="CASCADE"), index=True
     )
     name: Mapped[str] = mapped_column(String(80))
+    kind: Mapped[str] = mapped_column(String(16), default="gpa")
     created_from: Mapped[str] = mapped_column(String(16), default="blank")
     formula_version: Mapped[str] = mapped_column(String(32), default="gpa-ects-v1")
     source_revision: Mapped[str | None] = mapped_column(String(64))
@@ -221,6 +233,11 @@ class SimulationScenario(Base):
         back_populates="scenario",
         cascade="all, delete-orphan",
         order_by="SimulationEntry.position, SimulationEntry.created_at, SimulationEntry.id",
+    )
+    score_ues: Mapped[list[ScoreSimulationUe]] = relationship(
+        back_populates="scenario",
+        cascade="all, delete-orphan",
+        order_by="ScoreSimulationUe.position, ScoreSimulationUe.created_at, ScoreSimulationUe.id",
     )
 
 
@@ -282,6 +299,128 @@ class SimulationEntry(Base):
     )
 
     scenario: Mapped[SimulationScenario] = relationship(back_populates="entries")
+
+
+class ScoreSimulationUe(Base):
+    __tablename__ = "score_simulation_ues"
+    __table_args__ = (
+        UniqueConstraint(
+            "scenario_id",
+            "lineage_key",
+            name="uq_score_simulation_ues_lineage",
+        ),
+        Index("ix_score_simulation_ues_scenario_position", "scenario_id", "position"),
+        CheckConstraint(
+            "origin IN ('imported', 'simulated')",
+            name="ck_score_simulation_ues_origin",
+        ),
+        CheckConstraint(
+            "source_status IN ('current', 'conflict', 'unavailable')",
+            name="ck_score_simulation_ues_source_status",
+        ),
+        CheckConstraint(
+            "credits_ects IS NULL OR (credits_ects > 0 AND credits_ects <= 60)",
+            name="ck_score_simulation_ues_credits",
+        ),
+        CheckConstraint(
+            "base_credits_ects IS NULL OR (base_credits_ects > 0 AND base_credits_ects <= 60)",
+            name="ck_score_simulation_ues_base_credits",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    scenario_id: Mapped[str] = mapped_column(
+        ForeignKey("simulation_scenarios.id", ondelete="CASCADE"), index=True
+    )
+    lineage_key: Mapped[str] = mapped_column(String(80))
+    source_ue_code: Mapped[str | None] = mapped_column(String(32))
+    origin: Mapped[str] = mapped_column(String(16), default="simulated")
+    source_status: Mapped[str] = mapped_column(String(16), default="current")
+    semester: Mapped[str | None] = mapped_column(String(16))
+    ue_code: Mapped[str | None] = mapped_column(String(32))
+    title: Mapped[str] = mapped_column(String(200), default="")
+    credits_ects: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
+    base_semester: Mapped[str | None] = mapped_column(String(16))
+    base_ue_code: Mapped[str | None] = mapped_column(String(32))
+    base_title: Mapped[str | None] = mapped_column(String(200))
+    base_credits_ects: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
+    source_observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    scenario: Mapped[SimulationScenario] = relationship(back_populates="score_ues")
+    assessments: Mapped[list[ScoreSimulationAssessment]] = relationship(
+        back_populates="ue",
+        cascade="all, delete-orphan",
+        order_by=(
+            "ScoreSimulationAssessment.position, "
+            "ScoreSimulationAssessment.created_at, ScoreSimulationAssessment.id"
+        ),
+    )
+
+
+class ScoreSimulationAssessment(Base):
+    __tablename__ = "score_simulation_assessments"
+    __table_args__ = (
+        UniqueConstraint(
+            "ue_id",
+            "lineage_key",
+            name="uq_score_simulation_assessments_lineage",
+        ),
+        Index("ix_score_simulation_assessments_ue_position", "ue_id", "position"),
+        CheckConstraint(
+            "origin IN ('imported', 'simulated')",
+            name="ck_score_simulation_assessments_origin",
+        ),
+        CheckConstraint(
+            "source_status IN ('current', 'conflict', 'unavailable')",
+            name="ck_score_simulation_assessments_source_status",
+        ),
+        CheckConstraint(
+            "score IS NULL OR (score >= 0 AND score <= 20)",
+            name="ck_score_simulation_assessments_score",
+        ),
+        CheckConstraint(
+            "base_score IS NULL OR (base_score >= 0 AND base_score <= 20)",
+            name="ck_score_simulation_assessments_base_score",
+        ),
+        CheckConstraint(
+            "coefficient > 0 AND coefficient <= 100",
+            name="ck_score_simulation_assessments_coefficient",
+        ),
+        CheckConstraint(
+            "base_coefficient IS NULL OR (base_coefficient > 0 AND base_coefficient <= 100)",
+            name="ck_score_simulation_assessments_base_coefficient",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    ue_id: Mapped[str] = mapped_column(
+        ForeignKey("score_simulation_ues.id", ondelete="CASCADE"), index=True
+    )
+    lineage_key: Mapped[str] = mapped_column(String(120))
+    source_note_key: Mapped[str | None] = mapped_column(String(96))
+    origin: Mapped[str] = mapped_column(String(16), default="simulated")
+    source_status: Mapped[str] = mapped_column(String(16), default="current")
+    label: Mapped[str] = mapped_column(String(240), default="")
+    score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    coefficient: Mapped[Decimal] = mapped_column(Numeric(6, 2), default=Decimal("1"))
+    is_resit: Mapped[bool] = mapped_column(Boolean, default=False)
+    base_label: Mapped[str | None] = mapped_column(String(240))
+    base_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    base_coefficient: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
+    base_is_resit: Mapped[bool | None] = mapped_column(Boolean)
+    source_observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    ue: Mapped[ScoreSimulationUe] = relationship(back_populates="assessments")
 
 
 class Event(Base):

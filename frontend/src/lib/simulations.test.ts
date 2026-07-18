@@ -30,7 +30,7 @@ const scenario: SimulationScenario = {
     pending_count: 0,
     missing_ects_count: 0,
     completion_rate: 100,
-    semesters: [{ semester: "S1", gpa: 3.8, credits_included: 4, ue_count: 1 }],
+    semesters: [{ semester: "S5", gpa: 3.8, credits_included: 4, ue_count: 1 }],
     warnings: [],
     formula: {
       version: "gpa-ects-v1",
@@ -45,7 +45,7 @@ const scenario: SimulationScenario = {
   entries: [{
     id: "entry-id",
     lineage_key: "source:SIT130",
-    semester: "S1",
+    semester: "S5",
     ue_code: "SIT130",
     title: "Mathématiques",
     credits_ects: 4,
@@ -54,7 +54,7 @@ const scenario: SimulationScenario = {
     status: "validated",
     nature: "imported",
     source: { ue_code: "SIT130", status: "current", grade_source: "competences", observed_at: "2026-07-18T10:00:00Z" },
-    baseline: { semester: "S1", ue_code: "SIT130", title: "Mathématiques", credits_ects: 4, grade: "B" },
+    baseline: { semester: "S5", ue_code: "SIT130", title: "Mathématiques", credits_ects: 4, grade: "B" },
     created_at: "2026-07-18T10:00:00Z",
     updated_at: "2026-07-18T10:00:00Z",
   }],
@@ -70,7 +70,7 @@ describe("simulation drafts", () => {
       name: "Projection",
       entries: [{
         id: "entry-id",
-        semester: "S1",
+        semester: "S5",
         ue_code: "SIT130",
         title: "Mathématiques",
         credits_ects: 4,
@@ -82,7 +82,7 @@ describe("simulation drafts", () => {
   it("keeps edits made during a save and attaches the returned server id", () => {
     vi.stubGlobal("crypto", { randomUUID: () => "local-id" });
     const draft = scenarioToDraft({ ...scenario, entries: [] });
-    const local = createDraftEntry("S2");
+    const local = createDraftEntry("S6");
     local.title = "UE future";
     local.credits_ects = "6";
     draft.entries.push(local);
@@ -110,11 +110,11 @@ describe("simulation drafts", () => {
 
   it("weights grades by ECTS and excludes a pending grade", () => {
     const draft = scenarioToDraft(scenario);
-    const failed = createDraftEntry("S2");
+    const failed = createDraftEntry("S6");
     failed.title = "UE non validee";
     failed.credits_ects = "2";
     failed.grade = "FX";
-    const pending = createDraftEntry("S2");
+    const pending = createDraftEntry("S6");
     pending.title = "UE en attente";
     pending.credits_ects = "6";
     draft.entries.push(failed, pending);

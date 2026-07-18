@@ -155,7 +155,7 @@ export interface Dashboard {
 }
 
 export type SimulationGrade = "A" | "B" | "C" | "D" | "E" | "FX" | "F";
-export type SimulationSemester = "S1" | "S2" | "S3" | "S4" | "S5" | "S6" | "S7" | "S8" | "S9" | "S10";
+export type SimulationSemester = "S5" | "S6" | "S7" | "S8" | "S9" | "S10";
 
 export interface SimulationFormula {
   version: string;
@@ -260,6 +260,154 @@ export interface SimulationComparison {
   gpa_delta: number | null;
   differences: SimulationComparisonDifference[];
   formula: SimulationFormula;
+}
+
+export interface NoteSimulationFormula {
+  version: string;
+  label: string;
+  scale: string;
+  rounding: string;
+  scope: string;
+  ue_expression: string;
+  average_expression: string;
+  gpa_expression: string;
+  official: false;
+}
+
+export interface NoteSimulationAssessment {
+  id: string;
+  lineage_key: string;
+  label: string;
+  score: number | null;
+  coefficient: number;
+  is_resit: boolean;
+  nature: "imported" | "modified" | "simulated";
+  source: {
+    note_key: string | null;
+    status: "current" | "conflict" | "unavailable";
+    observed_at: string | null;
+  } | null;
+  baseline: {
+    label: string | null;
+    score: number | null;
+    coefficient: number | null;
+    is_resit: boolean | null;
+  } | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NoteSimulationUeProjection {
+  average: number | null;
+  grade: SimulationGrade | null;
+  gpa_points: number | null;
+  used_resit: boolean;
+  coefficient_total: number;
+  assessment_count: number;
+  scored_count: number;
+  pending_count: number;
+}
+
+export interface NoteSimulationUe {
+  id: string;
+  lineage_key: string;
+  semester: SimulationSemester | null;
+  ue_code: string | null;
+  title: string;
+  credits_ects: number | null;
+  nature: "imported" | "modified" | "simulated";
+  projection: NoteSimulationUeProjection;
+  source: {
+    ue_code: string | null;
+    status: "current" | "conflict" | "unavailable";
+    observed_at: string | null;
+  } | null;
+  baseline: {
+    semester: SimulationSemester | null;
+    ue_code: string | null;
+    title: string | null;
+    credits_ects: number | null;
+  } | null;
+  assessments: NoteSimulationAssessment[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NoteSimulationAggregate {
+  status: "empty" | "partial" | "ready";
+  average: number | null;
+  gpa: number | null;
+  credits_entered: number;
+  credits_included: number;
+  ue_count: number;
+  calculated_ue_count: number;
+  assessment_count: number;
+  scored_count: number;
+  pending_count: number;
+  missing_ects_count: number;
+  completion_rate: number;
+  semesters: Array<{
+    semester: SimulationSemester;
+    average: number | null;
+    gpa: number | null;
+    credits_included: number;
+    ue_count: number;
+    calculated_ue_count: number;
+    assessment_count: number;
+    scored_count: number;
+    pending_count: number;
+  }>;
+  warnings: Array<{ code: string; count: number; message: string }>;
+  formula: NoteSimulationFormula;
+}
+
+export interface NoteSimulationSourceSummary {
+  revision: string;
+  captured_at: string;
+  ue_count: number;
+  assessment_count: number;
+  scored_count: number;
+}
+
+export interface NoteSimulationScenarioSummary {
+  id: string;
+  name: string;
+  created_from: "blank" | "academic";
+  formula_version: string;
+  version: number;
+  source_revision: string | null;
+  source_captured_at: string | null;
+  rebase_available: boolean;
+  created_at: string;
+  updated_at: string;
+  result: NoteSimulationAggregate;
+}
+
+export interface NoteSimulationScenario extends NoteSimulationScenarioSummary {
+  ues: NoteSimulationUe[];
+}
+
+export interface NoteSimulationList {
+  limit: number;
+  source: NoteSimulationSourceSummary;
+  scenarios: NoteSimulationScenarioSummary[];
+}
+
+export interface NoteSimulationComparisonDifference {
+  lineage_key: string;
+  kind: "changed" | "left_only" | "right_only";
+  left: NoteSimulationUe | null;
+  right: NoteSimulationUe | null;
+  fields: Array<"presence" | "semester" | "ue" | "credits_ects" | "assessments">;
+}
+
+export interface NoteSimulationComparison {
+  left: NoteSimulationScenarioSummary;
+  right: NoteSimulationScenarioSummary;
+  average_delta: number | null;
+  gpa_delta: number | null;
+  differences: NoteSimulationComparisonDifference[];
+  formula: NoteSimulationFormula;
 }
 
 export interface ShareToken {

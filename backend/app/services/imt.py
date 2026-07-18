@@ -112,6 +112,7 @@ class CompetencyUe:
     credits_ects: float
     official_code: str = ""
     semester: str | None = None
+    source_semester: str | None = None
     grade: str | None = None
     earned_credits_ects: float | None = None
 
@@ -1020,13 +1021,35 @@ def _competency_code(official_code: str) -> str:
     return code
 
 
-def _competency_semester(value: object) -> str | None:
+def _competency_semester(value: object, title: str) -> tuple[str | None, str | None]:
     if value is None or not str(value).strip():
-        return None
-    match = re.fullmatch(r"(?:semestre\s*|s)?(\d{1,2})", _clean(str(value)), re.IGNORECASE)
-    if match is None or not 1 <= int(match.group(1)) <= 20:
+        return None, None
+    source = _clean(str(value))
+    match = re.fullmatch(r"(?:(semestre)\s*|s)?(\d{1,2})", source, re.IGNORECASE)
+    if match is None:
         raise ImtFetchError("COMPETENCES a fourni un semestre invalide")
-    return f"S{int(match.group(1))}"
+    number = int(match.group(2))
+    from_source: str | None = None
+    if match.group(1):
+        if not 1 <= number <= 6:
+            raise ImtFetchError("COMPETENCES a fourni un semestre ingénieur invalide")
+        from_source = f"S{number + 4}"
+    elif 5 <= number <= 10:
+        from_source = f"S{number}"
+    elif 1 <= number <= 6:
+        from_source = f"S{number + 4}"
+
+    title_semesters = {
+        f"S{item}" for item in re.findall(r"S(10|[5-9])(?!\d)", title, re.IGNORECASE)
+    }
+    if len(title_semesters) > 1:
+        raise ImtFetchError("COMPETENCES a fourni plusieurs semestres dans un intitulé d'UE")
+    from_title = next(iter(title_semesters), None)
+    if from_source is None and from_title is None:
+        raise ImtFetchError("COMPETENCES a fourni un semestre ingénieur invalide")
+    if from_source and from_title and from_source != from_title:
+        raise ImtFetchError("COMPETENCES a fourni des semestres contradictoires pour une UE")
+    return from_title or from_source, source
 
 
 def parse_competency_api_payload(payload: object) -> list[CompetencyUe]:
@@ -1049,8 +1072,6 @@ def parse_competency_api_payload(payload: object) -> list[CompetencyUe]:
             or not str(semester_value).strip()
         ):
             continue
-        semester = _competency_semester(semester_value)
-
         title_value = row.get("nom")
         official_code_value = row.get("code")
         if not isinstance(title_value, str) or not isinstance(official_code_value, str):
@@ -1061,6 +1082,7 @@ def parse_competency_api_payload(payload: object) -> list[CompetencyUe]:
             raise ImtFetchError("COMPETENCES a fourni un intitulé d'UE invalide")
         if not official_code or len(official_code) > 80:
             raise ImtFetchError("COMPETENCES a fourni une référence d'UE invalide")
+        semester, source_semester = _competency_semester(semester_value, title)
         code = _competency_code(official_code)
 
         grade_value = row.get("grade_calcule")
@@ -1089,6 +1111,7 @@ def parse_competency_api_payload(payload: object) -> list[CompetencyUe]:
             official_code=official_code,
             title=title,
             semester=semester,
+            source_semester=source_semester,
             grade=grade,
             credits_ects=float(credits),
             earned_credits_ects=float(earned_credits) if earned_credits is not None else None,

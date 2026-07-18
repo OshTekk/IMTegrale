@@ -22,6 +22,7 @@ from app.services.dashboard import calculate_ues
 from app.services.events import record_event
 
 FORMULA_VERSION = "gpa-ects-v1"
+SCENARIO_KIND = "gpa"
 FORMULA_DEFINITION = {
     "version": FORMULA_VERSION,
     "label": "Projection GPA par ECTS",
@@ -231,6 +232,7 @@ def _scenario_query(account_id: str, scenario_id: str, *, lock: bool = False):  
         .where(
             SimulationScenario.id == scenario_id,
             SimulationScenario.account_id == account_id,
+            SimulationScenario.kind == SCENARIO_KIND,
         )
     )
     return statement.with_for_update() if lock else statement
@@ -443,6 +445,7 @@ def list_scenarios(db: Session, account: Account) -> dict[str, Any]:
             select(SimulationScenario)
             .options(selectinload(SimulationScenario.entries))
             .where(SimulationScenario.account_id == account.id)
+            .where(SimulationScenario.kind == SCENARIO_KIND)
             .order_by(SimulationScenario.updated_at.desc(), SimulationScenario.id.desc())
         )
     )
@@ -472,7 +475,10 @@ def _ensure_capacity(db: Session, account_id: str) -> None:
     count = db.scalar(
         select(func.count())
         .select_from(SimulationScenario)
-        .where(SimulationScenario.account_id == account_id)
+        .where(
+            SimulationScenario.account_id == account_id,
+            SimulationScenario.kind == SCENARIO_KIND,
+        )
     )
     if int(count or 0) >= MAX_SIMULATION_SCENARIOS_PER_ACCOUNT:
         raise SimulationLimitReached("Cinq simulations sont déjà actives sur ce compte")
@@ -492,6 +498,7 @@ def create_scenario(
     scenario = SimulationScenario(
         account_id=account.id,
         name=name,
+        kind=SCENARIO_KIND,
         created_from="academic" if import_current else "blank",
         formula_version=FORMULA_VERSION,
     )
@@ -589,6 +596,7 @@ def duplicate_scenario(
     duplicate = SimulationScenario(
         account_id=account.id,
         name=duplicate_name[:80],
+        kind=SCENARIO_KIND,
         created_from=source_scenario.created_from,
         formula_version=source_scenario.formula_version,
         source_revision=source_scenario.source_revision,

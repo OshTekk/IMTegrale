@@ -20,7 +20,7 @@ def fake_notes(_self: ImtPassClient, username: str, _password: str) -> list[Pass
             "Systèmes numériques",
             4,
             official_code="FIP-SIT130-BR-2025",
-            semester="S1",
+            semester="S5",
             grade="B",
             earned_credits_ects=4,
         )
@@ -132,7 +132,7 @@ def test_registration_imports_competencies_metadata(client: TestClient, monkeypa
                 "Outils mathématiques pour l'ingénieur",
                 4,
                 official_code="FIP-SIT130-BR-2025",
-                semester="S1",
+                semester="S5",
                 grade="B",
                 earned_credits_ects=4,
             ),
@@ -146,7 +146,7 @@ def test_registration_imports_competencies_metadata(client: TestClient, monkeypa
     assert dashboard["summary"]["missing_ects_count"] == 0
     assert dashboard["ues"][0]["title"] == "Outils mathématiques pour l'ingénieur"
     assert dashboard["ues"][0]["credits_ects"] == 4
-    assert dashboard["ues"][0]["semester"] == "S1"
+    assert dashboard["ues"][0]["semester"] == "S5"
     assert dashboard["ues"][0]["grade"] == "B"
     assert dashboard["ues"][0]["grade_source"] == "competences"
     assert dashboard["ues"][0]["metadata_source"] == "competences"

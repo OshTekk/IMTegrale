@@ -16,10 +16,6 @@ export const SIMULATION_GRADES: Array<{ grade: SimulationGrade; points: number }
 ];
 
 export const SIMULATION_SEMESTERS: SimulationSemester[] = [
-  "S1",
-  "S2",
-  "S3",
-  "S4",
   "S5",
   "S6",
   "S7",

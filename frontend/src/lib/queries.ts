@@ -1,7 +1,7 @@
 import { type QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef } from "react";
 import { api, ApiError } from "./api";
-import type { Dashboard, LeaderboardMetric, LeaderboardView, Session, SettingsView, ShareToken, SimulationList, SimulationScenario, SyncStartResponse } from "../types";
+import type { Dashboard, LeaderboardMetric, LeaderboardView, NoteSimulationList, NoteSimulationScenario, Session, SettingsView, ShareToken, SimulationList, SimulationScenario, SyncStartResponse } from "../types";
 
 export const queryKeys = {
   session: ["session"] as const,
@@ -12,6 +12,9 @@ export const queryKeys = {
   simulations: (accountId: string) => ["account", accountId, "simulations"] as const,
   simulation: (accountId: string, scenarioId: string) =>
     ["account", accountId, "simulations", scenarioId] as const,
+  noteSimulations: (accountId: string) => ["account", accountId, "note-simulations"] as const,
+  noteSimulation: (accountId: string, scenarioId: string) =>
+    ["account", accountId, "note-simulations", scenarioId] as const,
   leaderboardRoot: (accountId: string) => ["account", accountId, "leaderboard"] as const,
   leaderboard: (accountId: string, metric: string, campus: string, cohort: string) =>
     ["account", accountId, "leaderboard", metric, campus, cohort] as const
@@ -98,6 +101,28 @@ export function useSimulation(scenarioId: string | null) {
   return useQuery({
     queryKey: queryKeys.simulation(accountId, scenarioId ?? "none"),
     queryFn: () => api<SimulationScenario>(`/api/v1/simulations/${scenarioId}`),
+    enabled: Boolean(scenarioId),
+    staleTime: 0
+  });
+}
+
+export function useNoteSimulations(enabled = true) {
+  const client = useQueryClient();
+  const accountId = currentAccountId(client);
+  return useQuery({
+    queryKey: queryKeys.noteSimulations(accountId),
+    queryFn: () => api<NoteSimulationList>("/api/v1/note-simulations"),
+    enabled,
+    staleTime: 20_000
+  });
+}
+
+export function useNoteSimulation(scenarioId: string | null) {
+  const client = useQueryClient();
+  const accountId = currentAccountId(client);
+  return useQuery({
+    queryKey: queryKeys.noteSimulation(accountId, scenarioId ?? "none"),
+    queryFn: () => api<NoteSimulationScenario>(`/api/v1/note-simulations/${scenarioId}`),
     enabled: Boolean(scenarioId),
     staleTime: 0
   });

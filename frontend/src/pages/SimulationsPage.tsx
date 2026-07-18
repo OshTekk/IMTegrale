@@ -503,7 +503,7 @@ export function SimulationsPage() {
       try {
         return await api<SimulationScenario>(`/api/v1/simulations/${created.id}`, { method: "PUT", body: JSON.stringify(body) });
       } catch (error) {
-        await api(`/api/v1/simulations/${created.id}`, { method: "DELETE" }).catch(() => undefined);
+        await api(`/api/v1/simulations/${created.id}?${new URLSearchParams({ version: String(created.version) })}`, { method: "DELETE" }).catch(() => undefined);
         throw error;
       }
     },
