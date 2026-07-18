@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.database import SessionLocal
-from app.models import Account, Event, Note, ShareToken, UeSetting, WebSession
+from app.models import Account, Event, ShareToken, UeSetting, WebSession
 from app.security import session_is_active
 from app.services.events import record_event
 from app.services.imt import CompetencyUe, ImtPassClient, PassEntry
@@ -14,6 +14,17 @@ from tests.conftest import csrf_headers
 
 def fake_notes(_self: ImtPassClient, username: str, _password: str) -> list[PassEntry]:
     base = 10 if username.startswith("other") else 14
+    _self.last_competency_ues = [
+        CompetencyUe(
+            "SIT130",
+            "Systèmes numériques",
+            4,
+            official_code="FIP-SIT130-BR-2025",
+            semester="S1",
+            grade="B",
+            earned_credits_ects=4,
+        )
+    ]
     return [
         PassEntry("SIT130", "Projet", base + 2, 2, False),
         PassEntry("SIT130", "Examen", base, 1, False),
@@ -35,15 +46,12 @@ def test_owner_flow_calculation_and_csrf(client: TestClient, monkeypatch) -> Non
     assert session["role"] == "owner"
     assert client.get("/api/v1/auth/session").json()["authenticated"] is True
 
-    rejected = client.patch("/api/v1/ues/SIT130", json={"credits_ects": 4})
-    assert rejected.status_code == 403
-
-    updated = client.patch(
+    unavailable = client.patch(
         "/api/v1/ues/SIT130",
         json={"credits_ects": 4, "title": "Systèmes numériques", "year": "1"},
         headers=csrf_headers(client),
     )
-    assert updated.status_code == 200
+    assert unavailable.status_code == 405
 
     dashboard = client.get("/api/v1/dashboard").json()
     assert dashboard["summary"]["average"] == 15.33
@@ -68,8 +76,8 @@ def test_official_pass_notes_are_read_only(client: TestClient, monkeypatch) -> N
     )
 
     assert note["editable"] is False
-    assert updated.status_code == 409
-    assert removed.status_code == 409
+    assert updated.status_code == 405
+    assert removed.status_code == 405
     assert client.get("/api/v1/notes").json()[0]["score"] == note["score"]
 
 
@@ -98,14 +106,14 @@ def test_official_competencies_metadata_is_read_only_for_account_editors(
         json={"credits_ects": 6},
         headers=csrf_headers(client),
     )
-    assert rejected.status_code == 409
+    assert rejected.status_code == 405
 
     year_rejected = client.patch(
         "/api/v1/ues/SIT130",
         json={"year": "2"},
         headers=csrf_headers(client),
     )
-    assert year_rejected.status_code == 409
+    assert year_rejected.status_code == 405
     ue = client.get("/api/v1/dashboard").json()["ues"][0]
     assert ue["title"] == "Outils mathématiques"
     assert ue["credits_ects"] == 4
@@ -279,7 +287,7 @@ def test_hashed_viewer_token_and_account_isolation(client: TestClient, monkeypat
         json={"ue_code": "TEST100", "label": "Test", "score": 20, "coefficient": 1},
         headers=csrf_headers(viewer),
     )
-    assert denied.status_code == 403
+    assert denied.status_code == 405
 
     other = TestClient(client.app, base_url="https://testserver")
     login_owner(other, "other@imt-atlantique.fr")
@@ -326,12 +334,24 @@ def _delegated_client(
     return delegated, created.json()
 
 
-def test_editor_cannot_start_owner_credential_sync(client: TestClient, monkeypatch) -> None:
+def test_editor_share_tokens_cannot_be_created(client: TestClient, monkeypatch) -> None:
     monkeypatch.setattr(ImtPassClient, "fetch_entries", fake_notes)
     login_owner(client)
-    editor, _token = _delegated_client(client, "editor", name="Editor")
+    response = client.post(
+        "/api/v1/tokens",
+        json={"name": "Editor", "role": "editor", "expires_in_days": 7},
+        headers=csrf_headers(client),
+    )
 
-    response = editor.post("/api/v1/sync", json={}, headers=csrf_headers(editor))
+    assert response.status_code == 422
+
+
+def test_viewer_cannot_start_owner_credential_sync(client: TestClient, monkeypatch) -> None:
+    monkeypatch.setattr(ImtPassClient, "fetch_entries", fake_notes)
+    login_owner(client)
+    viewer, _token = _delegated_client(client, "viewer", name="Viewer sync")
+
+    response = viewer.post("/api/v1/sync", json={}, headers=csrf_headers(viewer))
 
     assert response.status_code == 403
 
@@ -361,29 +381,30 @@ def test_viewer_dashboard_filters_owner_events_and_sensitive_payloads(
     assert note_event["payload"] == {"ue_code": "SIT130"}
 
 
-def test_manual_note_quota_is_reusable_after_delete(client: TestClient, monkeypatch) -> None:
+def test_note_mutation_routes_are_not_exposed(client: TestClient, monkeypatch) -> None:
     monkeypatch.setattr(ImtPassClient, "fetch_entries", fake_notes)
-    monkeypatch.setattr("app.routers.notes.MAX_MANUAL_NOTES_PER_ACCOUNT", 1)
     login_owner(client)
     payload = {"ue_code": "TEST100", "label": "Test", "score": 12, "coefficient": 1}
 
     created = client.post("/api/v1/notes", json=payload, headers=csrf_headers(client))
-    rejected = client.post("/api/v1/notes", json=payload, headers=csrf_headers(client))
-    deleted = client.delete(f"/api/v1/notes/{created.json()['id']}", headers=csrf_headers(client))
-    recreated = client.post("/api/v1/notes", json=payload, headers=csrf_headers(client))
+    updated = client.patch(
+        "/api/v1/notes/unavailable",
+        json={"score": 20},
+        headers=csrf_headers(client),
+    )
+    deleted = client.delete(
+        "/api/v1/notes/unavailable",
+        headers=csrf_headers(client),
+    )
 
-    assert created.status_code == 201
-    assert rejected.status_code == 409
-    assert deleted.status_code == 200
-    assert recreated.status_code == 201
-    with SessionLocal() as db:
-        manual = list(db.scalars(select(Note).where(Note.source == "manual")))
-        assert len(manual) == 1
+    assert created.status_code == 405
+    assert updated.status_code == 405
+    assert deleted.status_code == 405
+    assert all(note["source"] == "pass" for note in client.get("/api/v1/notes").json())
 
 
-def test_empty_ue_patch_is_rejected_and_new_ue_quota_is_enforced(client: TestClient, monkeypatch) -> None:
+def test_ue_mutation_route_is_not_exposed(client: TestClient, monkeypatch) -> None:
     monkeypatch.setattr(ImtPassClient, "fetch_entries", fake_notes)
-    monkeypatch.setattr("app.services.quotas.MAX_UE_SETTINGS_PER_ACCOUNT", 1)
     login_owner(client)
 
     empty = client.patch("/api/v1/ues/SIT130", json={}, headers=csrf_headers(client))
@@ -393,8 +414,8 @@ def test_empty_ue_patch_is_rejected_and_new_ue_quota_is_enforced(client: TestCli
         headers=csrf_headers(client),
     )
 
-    assert empty.status_code == 400
-    assert overflow.status_code == 409
+    assert empty.status_code == 405
+    assert overflow.status_code == 405
 
 
 def test_share_token_sessions_are_bounded(client: TestClient, monkeypatch) -> None:

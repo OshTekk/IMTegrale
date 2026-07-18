@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, Clipboard, Clock3, KeyRound, Plus, ShieldCheck, ShieldOff, Trash2, UserPen, Users } from "lucide-react";
+import { Check, Clipboard, Clock3, KeyRound, Plus, ShieldCheck, ShieldOff, Trash2, Users } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { EmptyState } from "../components/EmptyState";
 import { Modal } from "../components/Modal";
@@ -23,7 +23,7 @@ async function copyText(value: string) {
 
 function roleLabel(role: ShareToken["role"]): string {
   if (role === "owner") return "Propriétaire";
-  return role === "viewer" ? "Lecture" : "Édition";
+  return role === "editor" ? "Lecture (ancien accès)" : "Lecture";
 }
 
 function TokenReveal({ token, onClose }: { token: ShareToken; onClose: () => void }) {
@@ -41,11 +41,10 @@ export function SharingPage() {
   const queryClient = useQueryClient();
   const { showToast } = useToast();
   const [name, setName] = useState("");
-  const [role, setRole] = useState<"viewer" | "editor">("viewer");
   const [expiry, setExpiry] = useState("30");
   const [created, setCreated] = useState<ShareToken | null>(null);
   const create = useMutation({
-    mutationFn: () => api<ShareToken>("/api/v1/tokens", { method: "POST", body: JSON.stringify({ name, role, expires_in_days: expiry === "never" ? null : Number(expiry) }) }),
+    mutationFn: () => api<ShareToken>("/api/v1/tokens", { method: "POST", body: JSON.stringify({ name, role: "viewer", expires_in_days: expiry === "never" ? null : Number(expiry) }) }),
     onSuccess: (token) => {
       setCreated(token);
       setName("");
@@ -73,7 +72,7 @@ export function SharingPage() {
         <form className="create-token-panel" onSubmit={submit}>
           <header><span><Plus size={18} /></span><div><h2>Créer un accès</h2><p>Génère un token lié à ton compte.</p></div></header>
           <label>Nom de la personne ou de l'appareil<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Justine · iPhone" required /></label>
-          <fieldset><legend>Droits accordés</legend><label className={`access-choice ${role === "viewer" ? "selected" : ""}`}><input type="radio" name="role" value="viewer" checked={role === "viewer"} onChange={() => setRole("viewer")} /><ShieldCheck size={19} /><span><strong>Lecture seule</strong><small>Consulter notes, GPA et ECTS</small></span><i /></label><label className={`access-choice ${role === "editor" ? "selected" : ""}`}><input type="radio" name="role" value="editor" checked={role === "editor"} onChange={() => setRole("editor")} /><UserPen size={19} /><span><strong>Édition</strong><small>Ajouter et modifier les données</small></span><i /></label></fieldset>
+          <div className="shared-access-scope"><ShieldCheck size={19} /><span><strong>Lecture seule</strong><small>Consulter les notes PASS, les GPA et les ECTS sans pouvoir les modifier.</small></span></div>
           <label>Expiration<select value={expiry} onChange={(event) => setExpiry(event.target.value)}><option value="7">Dans 7 jours</option><option value="30">Dans 30 jours</option><option value="90">Dans 90 jours</option><option value="365">Dans 1 an</option><option value="never">Sans expiration</option></select></label>
           <button className="primary-button" type="submit" disabled={create.isPending}>{create.isPending ? <span className="spinner" /> : <KeyRound size={18} />} Générer le token</button>
         </form>

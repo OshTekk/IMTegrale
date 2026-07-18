@@ -264,12 +264,6 @@ def require_action(
     return auth
 
 
-def require_editor(auth: AuthContext = Depends(require_action)) -> AuthContext:
-    if auth.role not in {"owner", "editor"}:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Accès en lecture seule")
-    return auth
-
-
 def require_owner(auth: AuthContext = Depends(get_auth_context)) -> AuthContext:
     if auth.role != "owner":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Accès propriétaire requis")

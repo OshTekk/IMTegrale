@@ -99,8 +99,8 @@ function StudentApp() {
       <Routes>
         <Route element={<AppShell session={session.data} preloadRoute={preloadStudentRoute} />}>
           <Route index element={<OverviewPage />} />
-          <Route path="notes" element={<NotesPage role={session.data.role} />} />
-          <Route path="ues" element={<UesPage role={session.data.role} />} />
+          <Route path="notes" element={<NotesPage />} />
+          <Route path="ues" element={<UesPage />} />
           <Route path="leaderboard" element={isOwner ? <LeaderboardPage /> : <Navigate to="/" replace />} />
           <Route path="sharing" element={isOwner ? <SharingPage /> : <Navigate to="/" replace />} />
           <Route path="settings" element={<SettingsPage role={session.data.role} />} />

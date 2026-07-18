@@ -448,7 +448,7 @@ def manage_account(
     elif payload.action == "leaderboard_withdraw":
         if profile is None:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Aucun profil leaderboard")
-        leave_leaderboard(profile, enforce_lock=False)
+        leave_leaderboard(profile)
         profile.suspended_at = None
         profile.suspended_reason = None
         profile.verification_status = (
@@ -466,7 +466,7 @@ def manage_account(
         profile.updated_at = now
     elif payload.action == "leaderboard_delete_data":
         if profile is not None:
-            delete_leaderboard_data(account, profile, enforce_lock=False)
+            delete_leaderboard_data(account, profile)
     elif payload.action == "leaderboard_refresh_score_basis":
         if profile is None:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Aucun profil leaderboard")

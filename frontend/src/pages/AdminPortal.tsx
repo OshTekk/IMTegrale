@@ -285,7 +285,7 @@ function AccountDetail({
           <header><div><h3>Tokens d'accès</h3><p>Suppression ciblée et fermeture immédiate des sessions associées.</p></div><span className="admin-section-count">{account.tokens.length}</span></header>
           {account.tokens.length ? <div className="admin-token-list">{account.tokens.map((token) => {
             const active = !token.revoked_at && (!token.expires_at || new Date(token.expires_at) > new Date());
-            const role = token.role === "owner" ? "Personnel" : token.role === "editor" ? "Édition" : "Lecture";
+            const role = token.role === "owner" ? "Personnel" : token.role === "editor" ? "Lecture (ancien)" : "Lecture";
             return <div key={token.id} className={active ? "" : "is-inactive"}><span className="admin-token-icon"><KeyRound size={17} /></span><div><strong>{token.name}</strong><small>{role} · {token.prefix} · {active ? `Actif${token.last_used_at ? `, utilisé ${formatDate(token.last_used_at)}` : ""}` : "Révoqué ou expiré"}</small></div><button className="icon-button danger-icon" type="button" onClick={() => onDeleteToken(token)} aria-label={`Supprimer le token ${token.name}`} title="Supprimer définitivement"><Trash2 size={16} /></button></div>;
           })}</div> : <div className="admin-empty-inline"><KeyRound size={17} /> Aucun token partagé</div>}
         </section>

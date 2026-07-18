@@ -155,6 +155,7 @@ def dashboard_snapshot(db: Session, account: Account, *, role: str = "owner") ->
             select(Note)
             .where(
                 Note.account_id == account.id,
+                Note.source == "pass",
                 Note.archived.is_(False),
                 Note.hidden_by_user.is_(False),
             )
@@ -162,7 +163,11 @@ def dashboard_snapshot(db: Session, account: Account, *, role: str = "owner") ->
             .limit(MAX_DASHBOARD_NOTES)
         )
     )
-    settings = list(db.scalars(select(UeSetting).where(UeSetting.account_id == account.id)))
+    settings = [
+        setting
+        for setting in db.scalars(select(UeSetting).where(UeSetting.account_id == account.id))
+        if setting.metadata_source == "competences"
+    ]
     ues = calculate_ues(notes, settings)
     average, average_credits = weighted_average(ues, "average")
     gpa, gpa_credits = weighted_average(ues, "gpa")

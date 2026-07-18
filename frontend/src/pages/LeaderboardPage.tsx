@@ -75,7 +75,7 @@ function RulesModal({ view, open, onClose }: { view: LeaderboardView; open: bool
       <div className="leaderboard-rules">
         <section><span><BookOpenCheck size={18} /></span><div><strong>Source contrôlée</strong><p>{view.rules.source}. {view.rules.weighting}.</p></div></section>
         <section><span><ShieldCheck size={18} /></span><div><strong>Données académiques officielles</strong><p>La dernière génération complète COMPETENCES fournit les ECTS et, lorsqu'il existe, le grade. Un grade absent est calculé depuis les notes brutes PASS.</p></div></section>
-        <section><span><Clock3 size={18} /></span><div><strong>Engagement anti-consultation opportuniste</strong><p>Ton profil devient public dès l'activation. Tu accèdes au classement après {view.rules.wait_hours} heures, puis le retrait ordinaire s'ouvre {view.rules.withdrawal_lock_hours} heures plus tard.</p></div></section>
+        <section><span><Clock3 size={18} /></span><div><strong>Délai anti-consultation opportuniste</strong><p>Ton profil devient visible dès l'activation, mais tu n'accèdes au classement qu'après {view.rules.wait_hours} heures. Tu peux retirer ta participation à tout moment.</p></div></section>
         <section><span><Scale size={18} /></span><div><strong>Égalités</strong><p>{view.rules.ties}. Les deux métriques produisent deux classements indépendants.</p></div></section>
         <section><span><ShieldCheck size={18} /></span><div><strong>Classement nominatif</strong><p>Le prénom et le nom officiels PASS, le rang et le score figurent dans chaque ligne. Le cursus et la promotion définissent le segment ; le campus sert uniquement de filtre.</p></div></section>
         <section className="rules-exclusions"><span><EyeOff size={18} /></span><div><strong>Jamais comptabilisé</strong><ul>{view.rules.excluded.map((item) => <li key={item}>{item}</li>)}</ul></div></section>
@@ -159,7 +159,7 @@ function ParticipationPanel({
         <div className="privacy-flow">
           <div><span><UserRoundCheck size={18} /></span><div><strong>1. Ton identité PASS est utilisée</strong><p>Prénom, nom, campus, cursus et promotion ne sont pas modifiables ici.</p></div></div>
           <div><span><ShieldCheck size={18} /></span><div><strong>2. Tes coefficients sont officiels</strong><p>Les ECTS viennent de COMPETENCES et suivent automatiquement la dernière génération complète synchronisée.</p></div></div>
-          <div><span><Clock3 size={18} /></span><div><strong>3. Tu assumes une période d'engagement</strong><p>Tu es visible immédiatement, tu accèdes au classement après 48 heures, puis le retrait ordinaire devient possible 48 heures plus tard.</p></div></div>
+          <div><span><Clock3 size={18} /></span><div><strong>3. Tu observes un délai avant de consulter</strong><p>Tu es visible immédiatement et tu accèdes au classement après 48 heures. Tu peux te retirer à tout moment ; une réactivation attend ensuite 48 heures.</p></div></div>
         </div>
       </section>
 
@@ -180,7 +180,7 @@ function ParticipationPanel({
         <label className={`consent-check ${waitAccepted ? "checked" : ""}`}>
           <input type="checkbox" checked={waitAccepted} onChange={(event) => setWaitAccepted(event.target.checked)} />
           <i><Check size={14} /></i>
-          <span><strong>J'ai compris les deux délais de 48 heures</strong><small>48 heures avant de voir le classement, puis 48 heures d'exposition avec accès avant de pouvoir retirer ou effacer ma participation.</small></span>
+          <span><strong>J'ai compris le délai de consultation</strong><small>Pendant 48 heures, mon profil est publié mais aucun classement, rang ni nombre de participants ne m'est révélé. Je peux me retirer ou effacer ces données à tout moment.</small></span>
         </label>
         <button className="primary-button leaderboard-join-button" type="submit" disabled={!canSubmit || pending}>
           {pending ? <span className="spinner" /> : <Trophy size={18} />} Activer ma participation
@@ -197,7 +197,7 @@ function PendingView({ view, onManage }: { view: LeaderboardView; onManage: () =
       <section className="leaderboard-wait-banner">
         <div className="wait-icon"><Clock3 size={24} /></div>
         <div><span>Accès au classement dans</span><strong>{countdown.label}</strong><small>Prévu le {formatDate(view.profile.ranking_visible_at)}</small></div>
-        <div className="wait-privacy"><EyeOff size={18} /><span>Aucun classement, rang ou nombre de participants ne t'est révélé avant la fin du délai. Retrait ordinaire disponible le {formatDate(view.profile.withdraw_available_at)}.</span></div>
+        <div className="wait-privacy"><EyeOff size={18} /><span>Aucun classement, rang ou nombre de participants ne t'est révélé avant la fin du délai. Tu peux retirer ta participation ou effacer ses données à tout moment.</span></div>
       </section>
       <section className="leaderboard-pending-panel">
         <div><span className="status-dot" /><span>Participation publiée</span></div>
@@ -232,10 +232,8 @@ function ActiveLeaderboard({
   onManage: () => void;
 }) {
   const board = view.board;
-  const withdrawal = useCountdown(view.profile.withdraw_available_at);
   return (
     <>
-      {!view.can_withdraw && <section className="leaderboard-withdraw-lock"><Clock3 size={18} /><div><strong>Engagement visible encore {withdrawal.label}</strong><span>Tu peux consulter le classement, mais le retrait ordinaire reste verrouillé afin d'empêcher une activation uniquement destinée à observer les autres.</span></div></section>}
       <section className="leaderboard-toolbar">
         <div className="leaderboard-metric-tabs" role="group" aria-label="Métrique du classement">
           <button className={metric === "gpa" ? "active" : ""} type="button" onClick={() => setMetric("gpa")} aria-pressed={metric === "gpa"}><Gauge size={17} /> GPA</button>
@@ -290,12 +288,10 @@ function PrivacyModal({
   pending: boolean;
 }) {
   const [confirmation, setConfirmation] = useState("");
-  const withdrawal = useCountdown(view.profile.withdraw_available_at);
   useEffect(() => { if (!open) setConfirmation(""); }, [open]);
   return (
-    <Modal open={open} title="Confidentialité et participation" description="Tu gardes le contrôle de ta publication, même pendant le délai initial." onClose={onClose} size="large">
+    <Modal open={open} title="Confidentialité et participation" description="Ton profil disparaît immédiatement dès que tu retires ta participation." onClose={onClose} size="large">
       <div className="privacy-management">
-        {!view.can_withdraw && view.profile.withdraw_available_at && <section className="privacy-lock"><span><Clock3 size={20} /></span><div><h3>Période d'engagement en cours</h3><p>Le retrait et l'effacement ordinaires seront disponibles dans <strong>{withdrawal.label}</strong>. Pour une urgence de confidentialité, contacte l'administrateur qui peut retirer le profil immédiatement.</p></div></section>}
         {view.can_withdraw && <section><span><EyeOff size={20} /></span><div><h3>Me retirer du classement</h3><p>Ton profil disparaît immédiatement pour tout le monde. Une nouvelle activation sera impossible pendant 48 heures.</p><button className="danger-button armed" type="button" onClick={onWithdraw} disabled={pending}>{pending ? <span className="spinner" /> : <EyeOff size={16} />} Me retirer maintenant</button></div></section>}
         {view.can_delete_data && <section><span><Trash2 size={20} /></span><div><h3>Effacer mes données de classement</h3><p>La participation et le consentement sont effacés. Ton identité officielle PASS, tes notes privées et ton compte IMTégrale sont conservés.</p><label>Écris <strong>SUPPRIMER</strong> pour confirmer<input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} autoComplete="off" /></label><button className="danger-button armed" type="button" onClick={onDelete} disabled={pending || confirmation !== "SUPPRIMER"}><Trash2 size={16} /> Effacer ces données</button></div></section>}
       </div>
@@ -347,7 +343,7 @@ export function LeaderboardPage() {
     if (view.state === "active") return "Deux classements distincts, calculés uniquement depuis les données PASS.";
     if (view.state === "pending") return "Ton profil est publié ; ton accès au classement s'ouvrira après 48 heures.";
     if (view.state === "suspended") return "L'affichage du profil est suspendu pendant une vérification administrative.";
-    return "Une participation volontaire, nominative et encadrée par une période d'engagement claire.";
+    return "Une participation volontaire et nominative, avec 48 heures d'attente avant toute consultation.";
   }, [view]);
 
   if (leaderboard.isPending) return <div className="page-stack"><div className="skeleton leaderboard-hero-skeleton" /><div className="skeleton leaderboard-panel-skeleton" /></div>;

@@ -15,10 +15,9 @@ from app.database import utcnow
 from app.models import Account, LeaderboardProfile, Note, UeSetting
 
 LEADERBOARD_CONSENT_VERSION = "2026-07-17.3"
-LEADERBOARD_RULES_VERSION = "2026-07-17.3"
-LEADERBOARD_RULES_UPDATED_AT = "2026-07-17"
+LEADERBOARD_RULES_VERSION = "2026-07-18.1"
+LEADERBOARD_RULES_UPDATED_AT = "2026-07-18"
 LEADERBOARD_WAIT = timedelta(hours=48)
-LEADERBOARD_WITHDRAWAL_LOCK = timedelta(hours=48)
 LEADERBOARD_REJOIN_COOLDOWN = timedelta(hours=48)
 
 CAMPUSES = frozenset({"rennes", "brest", "nantes", "other"})
@@ -445,7 +444,7 @@ def rules_view() -> dict:
         "version": LEADERBOARD_RULES_VERSION,
         "updated_at": LEADERBOARD_RULES_UPDATED_AT,
         "wait_hours": 48,
-        "withdrawal_lock_hours": 48,
+        "withdrawal_lock_hours": 0,
         "rejoin_cooldown_hours": 48,
         "source": "Notes brutes PASS et grades officiels COMPETENCES lorsqu'ils sont disponibles",
         "weighting": (
@@ -499,11 +498,8 @@ def _profile_view(account: Account, profile: LeaderboardProfile | None, score: L
     if score.missing_ects_count:
         missing.append("ects")
     withdraw_available_at = (
-        ensure_utc(profile.ranking_visible_at) + LEADERBOARD_WITHDRAWAL_LOCK
-        if profile and profile.is_participating and profile.ranking_visible_at
-        else None
+        profile.joined_at if profile and profile.is_participating else None
     )
-    privacy_unlocked = bool(withdraw_available_at and withdraw_available_at <= now)
     return {
         "state": state,
         "profile": {
@@ -544,12 +540,8 @@ def _profile_view(account: Account, profile: LeaderboardProfile | None, score: L
                 "missing_ects_count": score.missing_ects_count,
             },
         },
-        "can_withdraw": bool(profile and profile.is_participating and privacy_unlocked),
-        "can_delete_data": bool(
-            profile
-            and profile.consent_at
-            and (not profile.is_participating or privacy_unlocked)
-        ),
+        "can_withdraw": bool(profile and profile.is_participating),
+        "can_delete_data": bool(profile and profile.consent_at),
         "consent_version": LEADERBOARD_CONSENT_VERSION,
         "publication": {
             "wait_complete": bool(
@@ -813,23 +805,8 @@ def update_leaderboard_classification(
         profile.updated_at = utcnow()
 
 
-def leave_leaderboard(
-    profile: LeaderboardProfile,
-    *,
-    enforce_lock: bool = True,
-) -> None:
+def leave_leaderboard(profile: LeaderboardProfile) -> None:
     now = utcnow()
-    withdraw_available_at = (
-        ensure_utc(profile.ranking_visible_at) + LEADERBOARD_WITHDRAWAL_LOCK
-        if profile.ranking_visible_at
-        else None
-    )
-    if enforce_lock and (
-        withdraw_available_at is None or withdraw_available_at > now
-    ):
-        raise ValueError(
-            "Le retrait ordinaire reste verrouillé pendant 48 heures après l'ouverture du classement"
-        )
     profile.is_participating = False
     profile.left_at = now
     profile.rejoin_after = now + LEADERBOARD_REJOIN_COOLDOWN
@@ -839,21 +816,8 @@ def leave_leaderboard(
 def delete_leaderboard_data(
     account: Account,
     profile: LeaderboardProfile,
-    *,
-    enforce_lock: bool = True,
 ) -> None:
     now = utcnow()
-    withdraw_available_at = (
-        ensure_utc(profile.ranking_visible_at) + LEADERBOARD_WITHDRAWAL_LOCK
-        if profile.ranking_visible_at
-        else None
-    )
-    if enforce_lock and profile.is_participating and (
-        withdraw_available_at is None or withdraw_available_at > now
-    ):
-        raise ValueError(
-            "L'effacement ordinaire reste verrouillé pendant la période d'engagement du classement"
-        )
     profile.is_participating = False
     profile.pseudonym = None
     profile.pseudonym_key = None

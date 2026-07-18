@@ -32,32 +32,9 @@ class PasskeyAuthenticationVerify(BaseModel):
     credential: dict
 
 
-class ManualNoteCreate(BaseModel):
-    ue_code: str = Field(min_length=2, max_length=32)
-    label: str = Field(min_length=1, max_length=240)
-    score: float = Field(ge=0, le=20)
-    coefficient: float = Field(gt=0, le=100)
-    is_resit: bool = False
-
-
-class NoteUpdate(BaseModel):
-    ue_code: str | None = Field(default=None, min_length=2, max_length=32)
-    label: str | None = Field(default=None, min_length=1, max_length=240)
-    score: float | None = Field(default=None, ge=0, le=20)
-    coefficient: float | None = Field(default=None, gt=0, le=100)
-    is_resit: bool | None = None
-    clear_overrides: bool = False
-
-
-class UeUpdate(BaseModel):
-    title: str | None = Field(default=None, max_length=200)
-    year: str | None = Field(default=None, max_length=16)
-    credits_ects: float | None = Field(default=None, ge=0, le=60)
-
-
 class ShareTokenCreate(BaseModel):
     name: str = Field(min_length=2, max_length=120)
-    role: Literal["owner", "viewer", "editor"] = "viewer"
+    role: Literal["owner", "viewer"] = "viewer"
     expires_in_days: int | None = Field(default=30, ge=1, le=365)
 
 

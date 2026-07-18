@@ -4,7 +4,7 @@ from datetime import timedelta
 
 import pytest
 from app.database import SessionLocal, utcnow
-from app.models import Account, LeaderboardProfile, Note
+from app.models import Account, LeaderboardProfile, Note, UeSetting
 from app.services.imt import CompetencyUe, ImtPassClient, PassEntry, PassProfile
 from app.services.leaderboard import (
     account_leaderboard_score,
@@ -112,14 +112,6 @@ def make_visible(account_id: str) -> None:
         profile = db.get(LeaderboardProfile, account_id)
         assert profile is not None
         profile.ranking_visible_at = utcnow() - timedelta(seconds=1)
-        db.commit()
-
-
-def make_withdrawable(account_id: str) -> None:
-    with SessionLocal() as db:
-        profile = db.get(LeaderboardProfile, account_id)
-        assert profile is not None
-        profile.ranking_visible_at = utcnow() - timedelta(hours=48, seconds=1)
         db.commit()
 
 
@@ -234,6 +226,9 @@ def test_opt_in_wait_visibility_withdrawal_and_dense_ties(
     beta_joined = join(beta)
     assert beta_joined["state"] == "pending"
     assert beta_joined["board"] is None
+    assert beta_joined["rules"]["withdrawal_lock_hours"] == 0
+    assert beta_joined["can_withdraw"] is True
+    assert beta_joined["can_delete_data"] is True
 
     visible_to_alpha = client.get("/api/v1/leaderboard?metric=gpa&cohort=1a").json()
     assert visible_to_alpha["board"]["participant_count"] == 2
@@ -245,17 +240,6 @@ def test_opt_in_wait_visibility_withdrawal_and_dense_ties(
 
     average = client.get("/api/v1/leaderboard?metric=average&cohort=1a").json()
     assert average["board"]["entries"][0]["score"] == 15.33
-
-    locked_withdrawal = beta.delete(
-        "/api/v1/leaderboard/participation",
-        headers=csrf_headers(beta),
-    )
-    assert locked_withdrawal.status_code == 409
-
-    make_withdrawable(beta_id)
-    unlocked = beta.get("/api/v1/leaderboard").json()
-    assert unlocked["state"] == "active"
-    assert unlocked["can_withdraw"] is True
 
     withdrawn = beta.delete(
         "/api/v1/leaderboard/participation",
@@ -301,6 +285,27 @@ def test_opt_in_wait_visibility_withdrawal_and_dense_ties(
     assert [entry["official_name"] for entry in final_board["entries"]] == [
         "Alpha STUDENT"
     ]
+
+
+def test_pending_participant_can_erase_leaderboard_data_immediately(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(ImtPassClient, "fetch_entries", leaderboard_notes)
+    account_id = prepare_owner(client, "privacy@imt-atlantique.fr")
+    pending = join(client)
+
+    assert pending["state"] == "pending"
+    erased = client.delete("/api/v1/leaderboard/data", headers=csrf_headers(client))
+
+    assert erased.status_code == 200
+    assert erased.json()["state"] == "cooldown"
+    assert erased.json()["can_delete_data"] is False
+    with SessionLocal() as db:
+        profile = db.get(LeaderboardProfile, account_id)
+        assert profile is not None
+        assert profile.is_participating is False
+        assert profile.consent_at is None
 
 
 def test_shared_token_cannot_join_or_read_leaderboard(client: TestClient, monkeypatch) -> None:
@@ -426,7 +431,7 @@ def test_official_ects_basis_cannot_be_changed_by_account_editors(
             f"/api/v1/ues/{code}",
             json={"credits_ects": credits},
             headers=csrf_headers(client),
-        ).status_code == 409
+        ).status_code == 405
     unchanged = client.get("/api/v1/leaderboard?metric=gpa").json()["board"]
     assert unchanged["entries"][0]["score"] == 3.08
 
@@ -497,12 +502,18 @@ def test_manual_ects_cannot_be_used_to_join_the_public_leaderboard(
         json={"username": "manual-ects@imt-atlantique.fr", "password": "correct-password"},
     )
     assert login.status_code == 200
-    for code, credits in (("SIT130", 1), ("NET100", 9)):
-        assert client.patch(
-            f"/api/v1/ues/{code}",
-            json={"credits_ects": credits},
-            headers=csrf_headers(client),
-        ).status_code == 200
+    with SessionLocal() as db:
+        for code, credits in (("SIT130", 1), ("NET100", 9)):
+            setting = db.scalar(
+                select(UeSetting).where(
+                    UeSetting.account_id == login.json()["account"]["id"],
+                    UeSetting.code == code,
+                )
+            )
+            assert setting is not None
+            setting.credits_ects = credits
+            setting.metadata_source = "manual"
+        db.commit()
 
     view = client.get("/api/v1/leaderboard").json()
     assert "ects" in view["eligibility"]["missing"]

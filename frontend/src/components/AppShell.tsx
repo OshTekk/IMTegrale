@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { BookOpenCheck, Ellipsis, Gauge, KeyRound, LogOut, NotebookPen, RefreshCw, Settings, ShieldCheck, SlidersHorizontal, Trophy } from "lucide-react";
+import { BookOpenCheck, Ellipsis, Gauge, KeyRound, LogOut, NotebookPen, RefreshCw, Settings, ShieldCheck, Trophy } from "lucide-react";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
@@ -24,7 +24,7 @@ const navItems = [
 
 const titles: Record<string, [string, string]> = {
   "/": ["Vue d'ensemble", "Ta situation académique en un coup d'œil"],
-  "/notes": ["Notes", "Détail des évaluations importées et manuelles"],
+  "/notes": ["Notes", "Détail des évaluations officielles importées depuis PASS"],
   "/ues": ["UE & ECTS", "Moyennes, grades et pondération par crédits"],
   "/leaderboard": ["Classement", "Deux classements privés, calculés depuis PASS"],
   "/sharing": ["Partage", "Accès révocables liés à ton compte"],
@@ -130,8 +130,7 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
         <nav className="sidebar-nav" aria-label="Navigation principale">
           {visibleNav.map((item) => <NavLink key={item.to} to={item.to} end={item.to === "/"} viewTransition onMouseEnter={() => preloadRoute(item.to)} onFocus={() => preloadRoute(item.to)} className={({ isActive }) => isActive ? "active" : ""}><item.icon size={19} /><span>{item.label}</span></NavLink>)}
         </nav>
-        {session.role === "viewer" && <div className="access-badge"><ShieldCheck size={17} /><div><strong>Lecture seule</strong><span>Accès partagé</span></div></div>}
-        {session.role === "editor" && <div className="access-badge editor"><SlidersHorizontal size={17} /><div><strong>Édition</strong><span>Accès partagé</span></div></div>}
+        {session.role !== "owner" && <div className="access-badge"><ShieldCheck size={17} /><div><strong>Lecture seule</strong><span>Accès partagé</span></div></div>}
         <div className="sidebar-status"><span className={`live-dot ${live}`} /><div><strong>{live === "connected" ? "Données en direct" : "Reconnexion…"}</strong><span>{dashboard.data?.account.last_sync_at ? `Sync ${new Date(dashboard.data.account.last_sync_at).toLocaleDateString("fr-FR")}` : "En attente de sync"}</span></div></div>
       </aside>
 

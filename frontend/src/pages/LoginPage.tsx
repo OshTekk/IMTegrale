@@ -85,7 +85,7 @@ export function LoginPage() {
           <form onSubmit={submit} className="login-form">
             {mode === "passkey" && <div className="passkey-login-choice"><span><Fingerprint size={28} /></span><div><strong>Connexion sans mot de passe</strong><p>Utilise Face ID, Touch ID, Windows Hello ou la sécurité de ton appareil.</p></div></div>}
             {mode === "imt" && <>
-              <label>Identifiant IMT<input autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} placeholder="prenom.nom" required autoFocus /></label>
+              <label>Identifiant CAS / IMT Atlantique<input autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} placeholder="Votre identifiant de connexion" required autoFocus /></label>
               <label>Mot de passe IMT<span className="password-field"><input type={showPassword ? "text" : "password"} autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required /><button type="button" className="field-icon" onClick={() => setShowPassword((value) => !value)} aria-label={showPassword ? "Masquer le mot de passe" : "Afficher le mot de passe"}>{showPassword ? <EyeOff size={18} /> : <Eye size={18} />}</button></span></label>
               <p className="field-note">La première connexion importe ton espace PASS. Les suivantes vérifient uniquement ton accès IMT ; la synchronisation reste une action distincte.</p>
             </>}
