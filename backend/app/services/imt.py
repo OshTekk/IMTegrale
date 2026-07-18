@@ -779,19 +779,53 @@ class ImtPassClient:
         except ValueError as exc:
             raise ImtFetchError(f"COMPETENCES a renvoyé un JSON invalide pour {label}") from exc
 
-    def _hub_xsrf_token(self) -> str:
-        values = {
-            unquote(cookie.value)
-            for cookie in self.session.cookies
-            if cookie.name == "XSRF-TOKEN"
-            and (cookie.domain or "").lstrip(".").casefold() == HUB_ORIGIN[1]
-        }
-        if len(values) != 1:
-            raise ImtFetchError("COMPETENCES n'a pas fourni de protection CSRF exploitable")
-        token = values.pop()
+    def _hub_xsrf_token(self) -> str | None:
+        cookies = [cookie for cookie in self.session.cookies if cookie.name == "XSRF-TOKEN"]
+        if not cookies:
+            return None
+        if len(cookies) != 1:
+            raise ImtFetchError("COMPETENCES a fourni une protection CSRF ambiguë")
+
+        cookie = cookies[0]
+        cookie_path = cookie.path or "/"
+        login_path = urlsplit(COMPETENCIES_LOGIN_URL).path
+        path_matches = login_path == cookie_path or login_path.startswith(
+            cookie_path.rstrip("/") + "/"
+        )
+        if (
+            (cookie.domain or "").lstrip(".").casefold() != HUB_ORIGIN[1]
+            or not cookie.secure
+            or not cookie_path.startswith("/")
+            or not path_matches
+            or not isinstance(cookie.value, str)
+        ):
+            raise ImtFetchError("COMPETENCES a fourni une protection CSRF invalide")
+
+        token = unquote(cookie.value)
         if not 16 <= len(token) <= 4096 or any(char in token for char in "\r\n\0"):
             raise ImtFetchError("COMPETENCES a fourni une protection CSRF invalide")
         return token
+
+    @staticmethod
+    def _hub_student_id(payload: object) -> int:
+        student = payload.get("etudiant") if isinstance(payload, Mapping) else None
+        raw_id = student.get("etudiant_id") if isinstance(student, Mapping) else None
+        if isinstance(raw_id, bool):
+            raise ImtFetchError("COMPETENCES n'a pas fourni un identifiant étudiant valide")
+        if isinstance(raw_id, int):
+            student_id = raw_id
+        elif (
+            isinstance(raw_id, str)
+            and 1 <= len(raw_id) <= 13
+            and raw_id.isascii()
+            and raw_id.isdecimal()
+        ):
+            student_id = int(raw_id)
+        else:
+            raise ImtFetchError("COMPETENCES n'a pas fourni un identifiant étudiant valide")
+        if not 1 <= student_id <= 10**12:
+            raise ImtFetchError("COMPETENCES n'a pas fourni un identifiant étudiant valide")
+        return student_id
 
     @staticmethod
     def _hub_api_headers(*, authorization: str | None = None) -> dict[str, str]:
@@ -824,12 +858,10 @@ class ImtPassClient:
             )
             self._ensure_success(csrf_response)
             login_headers = self._hub_api_headers()
-            login_headers.update(
-                {
-                    "Origin": "https://hub.imt-atlantique.fr",
-                    "X-XSRF-TOKEN": self._hub_xsrf_token(),
-                }
-            )
+            login_headers["Origin"] = "https://hub.imt-atlantique.fr"
+            xsrf_token = self._hub_xsrf_token()
+            if xsrf_token is not None:
+                login_headers["X-XSRF-TOKEN"] = xsrf_token
             login_response = self._post(
                 COMPETENCIES_LOGIN_URL,
                 data=(),
@@ -856,14 +888,7 @@ class ImtPassClient:
                     max_bytes=MAX_HUB_AUTH_BYTES,
                 )
                 user_payload = self._hub_json(user_response, label="le profil étudiant")
-                student = user_payload.get("etudiant") if isinstance(user_payload, Mapping) else None
-                student_id = student.get("etudiant_id") if isinstance(student, Mapping) else None
-                if (
-                    isinstance(student_id, bool)
-                    or not isinstance(student_id, int)
-                    or not 1 <= student_id <= 10**12
-                ):
-                    raise ImtFetchError("COMPETENCES n'a pas fourni un identifiant étudiant valide")
+                student_id = self._hub_student_id(user_payload)
 
                 results_url = validate_imt_url(
                     f"{COMPETENCIES_RESULTS_BASE_URL}/{student_id}",
@@ -882,9 +907,10 @@ class ImtPassClient:
                 logout_headers.update(
                     {
                         "Origin": "https://hub.imt-atlantique.fr",
-                        "X-XSRF-TOKEN": login_headers["X-XSRF-TOKEN"],
                     }
                 )
+                if xsrf_token is not None:
+                    logout_headers["X-XSRF-TOKEN"] = xsrf_token
                 logout_response = self._post(
                     COMPETENCIES_LOGOUT_URL,
                     data=(),

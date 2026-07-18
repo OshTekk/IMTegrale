@@ -144,6 +144,7 @@ def test_competencies_api_uses_csrf_bearer_and_current_student_only(monkeypatch)
                 "opaque%7Ccsrf-token-1234567890",
                 domain="hub.imt-atlantique.fr",
                 path="/",
+                secure=True,
             )
             return csrf
         if url == COMPETENCIES_USER_URL:
@@ -181,6 +182,101 @@ def test_competencies_api_uses_csrf_bearer_and_current_student_only(monkeypatch)
     assert "Authorization" not in client.session.headers
 
 
+def test_competencies_api_accepts_current_no_xsrf_flow_and_string_student_id(
+    monkeypatch,
+) -> None:
+    client = ImtPassClient()
+    dashboard = fake_response(url=COMPETENCIES_HOME_URL, body=b"student dashboard")
+    csrf = fake_response(status=204, url=COMPETENCIES_CSRF_URL, body=b"")
+    login = fake_json_response(
+        {"token": "42|abcdefghijklmnopqrstuvwxyz"},
+        url=COMPETENCIES_LOGIN_URL,
+    )
+    logout = fake_response(status=204, url=COMPETENCIES_LOGOUT_URL, body=b"")
+    user = fake_json_response(
+        {"etudiant": {"etudiant_id": "40419"}},
+        url=COMPETENCIES_USER_URL,
+    )
+    results_url = f"{COMPETENCIES_RESULTS_BASE_URL}/40419"
+    results = fake_json_response({"data": []}, url=results_url)
+    gets: list[str] = []
+    posts: list[tuple[str, dict]] = []
+
+    def get(url: str, **_kwargs) -> requests.Response:
+        gets.append(url)
+        return {
+            COMPETENCIES_HOME_URL: dashboard,
+            COMPETENCIES_CSRF_URL: csrf,
+            COMPETENCIES_USER_URL: user,
+            results_url: results,
+        }[url]
+
+    def post(url: str, *, data: tuple, **kwargs) -> requests.Response:
+        assert data == ()
+        posts.append((url, kwargs))
+        return login if url == COMPETENCIES_LOGIN_URL else logout
+
+    monkeypatch.setattr(client, "_get", get)
+    monkeypatch.setattr(client, "_post", post)
+    monkeypatch.setattr(client, "_complete_hub_sso", lambda response, _credentials: response)
+
+    assert client.fetch_competency_ues_authenticated(credentials=("student", "secret")) == []
+    assert gets[-1] == results_url
+    assert "X-XSRF-TOKEN" not in posts[0][1]["headers"]
+    assert "X-XSRF-TOKEN" not in posts[-1][1]["headers"]
+    assert posts[-1][1]["headers"]["Authorization"] == "Bearer 42|abcdefghijklmnopqrstuvwxyz"
+
+
+@pytest.mark.parametrize(
+    ("domain", "path", "secure"),
+    [
+        (".imt-atlantique.fr", "/", True),
+        ("hub.imt-atlantique.fr", "/other", True),
+        ("hub.imt-atlantique.fr", "/", False),
+    ],
+)
+def test_competencies_api_rejects_untrusted_xsrf_cookie(
+    domain: str,
+    path: str,
+    secure: bool,
+) -> None:
+    client = ImtPassClient()
+    client.session.cookies.set(
+        "XSRF-TOKEN",
+        "opaque-csrf-token-1234567890",
+        domain=domain,
+        path=path,
+        secure=secure,
+    )
+
+    with pytest.raises(ImtFetchError, match="protection CSRF invalide"):
+        client._hub_xsrf_token()
+
+
+def test_competencies_api_rejects_ambiguous_xsrf_cookies() -> None:
+    client = ImtPassClient()
+    for path in ("/", "/comp2"):
+        client.session.cookies.set(
+            "XSRF-TOKEN",
+            "opaque-csrf-token-1234567890",
+            domain="hub.imt-atlantique.fr",
+            path=path,
+            secure=True,
+        )
+
+    with pytest.raises(ImtFetchError, match="protection CSRF ambiguë"):
+        client._hub_xsrf_token()
+
+
+@pytest.mark.parametrize(
+    "student_id",
+    [True, 0, 10**12 + 1, 40419.0, "", "٤٠٤١٩", "40419/../1", None],
+)
+def test_competencies_api_rejects_invalid_student_ids(student_id: object) -> None:
+    with pytest.raises(ImtFetchError, match="identifiant étudiant valide"):
+        ImtPassClient._hub_student_id({"etudiant": {"etudiant_id": student_id}})
+
+
 def test_competencies_api_rejects_a_non_json_user_response(monkeypatch) -> None:
     client = ImtPassClient()
     dashboard = fake_response(url=COMPETENCIES_HOME_URL, body=b"student dashboard")
@@ -204,6 +300,7 @@ def test_competencies_api_rejects_a_non_json_user_response(monkeypatch) -> None:
                 "opaque-csrf-token-1234567890",
                 domain="hub.imt-atlantique.fr",
                 path="/",
+                secure=True,
             )
             return csrf
         return html_user
