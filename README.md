@@ -16,19 +16,21 @@ IMTégrale est un projet étudiant indépendant. Il n'est ni affilié, ni approu
 - notification Telegram privée lorsqu'une note évolue ;
 - partage en lecture seule avec des tokens révocables ;
 - jusqu'à cinq simulations GPA et cinq simulations de notes privées, avec import académique, autosauvegarde, comparaison et hypothèses par semestre ;
+- agenda de cours personnel importé depuis un lien iCalendar INPASS, conservé chiffré et actualisé chaque heure ;
+- calendrier d'alternance 2026-2027 pour les FIP 2027, 2028 et 2029, avec périodes école, entreprise et mobilité ;
 - leaderboard facultatif par promotion, avec deux classements : GPA par défaut et moyenne générale.
 
 Le leaderboard utilise la moyenne calculée depuis les notes brutes PASS, le grade COMPETENCES lorsqu'il existe et les ECTS officiels. Lorsqu'un étudiant le rejoint, son identité PASS et ses deux scores deviennent immédiatement visibles par les participants actifs, tandis qu'il attend 48 heures avant de voir le moindre classement, rang ou nombre de participants. Il peut retirer ou effacer sa participation immédiatement puis revenir à tout moment ; chaque nouvelle activation relance intégralement les 48 heures d'attente avant consultation.
 
 ## Comment les données sont traitées
 
-Le navigateur envoie les identifiants IMT à l'API via HTTPS. Le serveur les utilise pour la connexion CAS aux services PASS et COMPETENCES, puis chiffre le mot de passe avec AES-256-GCM lorsqu'une synchronisation future a été autorisée. Pour COMPETENCES, le jeton API créé depuis la session Shibboleth reste en mémoire, n'est envoyé qu'au Hub IMT et est révoqué après l'import. Les tokens de partage ne sont pas conservés en clair et les sessions restent côté serveur dans des cookies `HttpOnly`.
+Le navigateur envoie les identifiants IMT à l'API via HTTPS. Le serveur les utilise pour la connexion CAS aux services PASS et COMPETENCES, puis chiffre le mot de passe avec AES-256-GCM lorsqu'une synchronisation future a été autorisée. Pour COMPETENCES, le jeton API créé depuis la session Shibboleth reste en mémoire, n'est envoyé qu'au Hub IMT et est révoqué après l'import. Le lien iCalendar INPASS est lui aussi chiffré, n'est jamais réaffiché et ne peut pas être consulté depuis un token de partage. Les tokens de partage ne sont pas conservés en clair et les sessions restent côté serveur dans des cookies `HttpOnly`.
 
 PASS ne fournit pas ici de délégation OAuth. Le serveur doit donc pouvoir relire le secret chiffré pour synchroniser les notes ; une compromission simultanée de l'application et de sa clé maître permettrait de le déchiffrer. Cette limite est assumée et expliquée dans la [page de confiance](https://imtegrale.tail4fed99.ts.net/confiance).
 
 ## Stack
 
-- React 19, TypeScript, Vite, TanStack Query et Recharts ;
+- React 19, TypeScript, Vite, TanStack Query, Recharts et FullCalendar ;
 - FastAPI, SQLAlchemy 2, Alembic et PostgreSQL ;
 - Server-Sent Events pour pousser les changements vers l'interface ;
 - Nginx, mTLS entre le frontal et le LXC, Tailscale Serve/Funnel et systemd en production.
@@ -78,6 +80,7 @@ pnpm audit --prod
 
 - [classement, confidentialité et modération](docs/leaderboard.md) ;
 - [simulations GPA et simulations de notes privées](docs/simulations.md) ;
+- [agenda INPASS et calendrier de formation FIP](docs/calendars.md) ;
 - [actualisation automatique](docs/automatic-sync.md) et [synchronisation manuelle](docs/manual-sync.md) ;
 - [déploiement et rollback](deploy/README.md) ;
 - [politique de sécurité](SECURITY.md) et [guide de contribution](CONTRIBUTING.md).

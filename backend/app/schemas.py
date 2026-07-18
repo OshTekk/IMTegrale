@@ -168,6 +168,15 @@ class NoteSimulationUpdate(BaseModel):
         return " ".join(value.split())
 
 
+class CalendarSubscriptionUpdate(BaseModel):
+    url: str = Field(min_length=20, max_length=1_024)
+
+    @field_validator("url")
+    @classmethod
+    def normalize_url(cls, value: str) -> str:
+        return value.strip()
+
+
 class AutoSyncUpdate(BaseModel):
     enabled: bool
     interval_hours: Literal[2, 4, 6, 8, 12, 24] = 2

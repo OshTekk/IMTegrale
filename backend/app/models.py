@@ -107,6 +107,9 @@ class Account(Base):
     simulation_scenarios: Mapped[list[SimulationScenario]] = relationship(
         back_populates="account", cascade="all, delete-orphan"
     )
+    calendar_subscription: Mapped[CalendarSubscription | None] = relationship(
+        back_populates="account", cascade="all, delete-orphan", uselist=False
+    )
     leaderboard_profile: Mapped[LeaderboardProfile | None] = relationship(
         back_populates="account", cascade="all, delete-orphan", uselist=False
     )
@@ -421,6 +424,99 @@ class ScoreSimulationAssessment(Base):
     )
 
     ue: Mapped[ScoreSimulationUe] = relationship(back_populates="assessments")
+
+
+class CalendarSubscription(Base):
+    __tablename__ = "calendar_subscriptions"
+    __table_args__ = (
+        CheckConstraint(
+            "last_status IN ('pending', 'success', 'error')",
+            name="ck_calendar_subscriptions_status",
+        ),
+        Index("ix_calendar_subscriptions_next_refresh", "next_refresh_at"),
+    )
+
+    account_id: Mapped[str] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), primary_key=True
+    )
+    encrypted_url: Mapped[str] = mapped_column(Text)
+    url_digest: Mapped[str] = mapped_column(String(64), unique=True)
+    account_hint: Mapped[str] = mapped_column(String(96))
+    content_digest: Mapped[str | None] = mapped_column(String(64))
+    etag: Mapped[str | None] = mapped_column(String(256))
+    last_modified: Mapped[str | None] = mapped_column(String(128))
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    next_refresh_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_status: Mapped[str] = mapped_column(String(16), default="pending")
+    last_error_code: Mapped[str | None] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    account: Mapped[Account] = relationship(back_populates="calendar_subscription")
+    events: Mapped[list[CalendarEvent]] = relationship(
+        back_populates="subscription",
+        cascade="all, delete-orphan",
+        order_by="CalendarEvent.starts_at, CalendarEvent.ends_at, CalendarEvent.id",
+    )
+
+
+class CalendarEvent(Base):
+    __tablename__ = "calendar_events"
+    __table_args__ = (
+        UniqueConstraint("account_id", "source_key", name="uq_calendar_events_source_key"),
+        Index("ix_calendar_events_account_start", "account_id", "starts_at"),
+        Index("ix_calendar_events_account_end", "account_id", "ends_at"),
+        CheckConstraint("ends_at > starts_at", name="ck_calendar_events_dates"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    account_id: Mapped[str] = mapped_column(
+        ForeignKey("calendar_subscriptions.account_id", ondelete="CASCADE"), index=True
+    )
+    source_key: Mapped[str] = mapped_column(String(64))
+    title: Mapped[str] = mapped_column(String(300))
+    location: Mapped[str | None] = mapped_column(String(300))
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    all_day: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    subscription: Mapped[CalendarSubscription] = relationship(back_populates="events")
+
+
+class CalendarFetchAttempt(Base):
+    __tablename__ = "calendar_fetch_attempts"
+    __table_args__ = (
+        Index(
+            "ix_calendar_fetch_attempts_account_kind_attempted",
+            "account_id",
+            "kind",
+            "attempted_at",
+        ),
+        Index("ix_calendar_fetch_attempts_attempted", "attempted_at"),
+        CheckConstraint(
+            "kind IN ('connect', 'automatic')",
+            name="ck_calendar_fetch_attempts_kind",
+        ),
+        CheckConstraint(
+            "outcome IN ('success', 'not_modified', 'invalid', 'upstream')",
+            name="ck_calendar_fetch_attempts_outcome",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    account_id: Mapped[str] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(16))
+    outcome: Mapped[str] = mapped_column(String(24))
+    attempted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class Event(Base):

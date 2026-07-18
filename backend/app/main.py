@@ -16,6 +16,7 @@ from app.database import SessionLocal
 from app.routers import (
     admin,
     auth,
+    calendars,
     dashboard,
     events,
     leaderboard,
@@ -26,6 +27,7 @@ from app.routers import (
     sync,
     tokens,
 )
+from app.services.calendar_scheduler import calendar_sync_scheduler
 from app.services.scheduler import automatic_sync_scheduler
 
 settings_config = get_settings()
@@ -73,9 +75,11 @@ class BodySizeLimitMiddleware:
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     automatic_sync_scheduler.start()
+    calendar_sync_scheduler.start()
     try:
         yield
     finally:
+        calendar_sync_scheduler.stop()
         automatic_sync_scheduler.stop()
 
 
@@ -140,6 +144,7 @@ def health_ready() -> dict:
 for api_router in (
     admin.router,
     auth.router,
+    calendars.router,
     dashboard.router,
     leaderboard.router,
     note_simulations.router,

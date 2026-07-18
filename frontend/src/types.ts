@@ -156,6 +156,74 @@ export interface Dashboard {
   events: EventItem[];
 }
 
+export interface CalendarStatus {
+  configured: boolean;
+  refresh_interval_minutes: 60;
+  account_hint: string | null;
+  last_attempt_at: string | null;
+  last_success_at: string | null;
+  next_refresh_at: string | null;
+  last_status: "success" | "error" | "pending" | null;
+  last_error_code: string | null;
+  event_count: number;
+  fip_training_available: boolean;
+  promotion_year: number | null;
+}
+
+export interface CalendarEventItem {
+  id: string;
+  title: string;
+  location: string | null;
+  start: string;
+  end: string;
+  all_day: boolean;
+}
+
+export interface FipTrainingPeriod {
+  kind: "school" | "company";
+  start: string;
+  end: string;
+  weeks: number;
+  campus: "Rennes" | "Brest" | null;
+}
+
+export interface FipTrainingMilestone {
+  kind: "international_project" | "academic_mobility";
+  title: string;
+  start: string;
+  end: string;
+  detail: string;
+}
+
+export interface FipTrainingPromotion {
+  promotion_year: number;
+  level: "A1" | "A2" | "A3";
+  semesters: Array<{
+    semester: AcademicSemester;
+    start: string;
+    end: string;
+  }>;
+  totals: {
+    school_weeks: number;
+    company_weeks: number;
+  };
+  periods: FipTrainingPeriod[];
+  milestones: FipTrainingMilestone[];
+}
+
+export interface FipTrainingCalendar {
+  academic_year: string;
+  title: string;
+  speciality: string;
+  source: {
+    label: string;
+    version_date: string;
+  };
+  promotions: FipTrainingPromotion[];
+  default_promotion_year: number | null;
+  campus_note: string;
+}
+
 export type SimulationGrade = "A" | "B" | "C" | "D" | "E" | "FX" | "F";
 
 export interface SimulationFormula {

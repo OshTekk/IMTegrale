@@ -1,7 +1,7 @@
 import { type QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef } from "react";
 import { api, ApiError } from "./api";
-import type { Dashboard, LeaderboardMetric, LeaderboardView, NoteSimulationList, NoteSimulationScenario, Session, SettingsView, ShareToken, SimulationList, SimulationScenario, SyncStartResponse } from "../types";
+import type { CalendarEventItem, CalendarStatus, Dashboard, FipTrainingCalendar, LeaderboardMetric, LeaderboardView, NoteSimulationList, NoteSimulationScenario, Session, SettingsView, ShareToken, SimulationList, SimulationScenario, SyncStartResponse } from "../types";
 
 export const queryKeys = {
   session: ["session"] as const,
@@ -15,6 +15,10 @@ export const queryKeys = {
   noteSimulations: (accountId: string) => ["account", accountId, "note-simulations"] as const,
   noteSimulation: (accountId: string, scenarioId: string) =>
     ["account", accountId, "note-simulations", scenarioId] as const,
+  calendarStatus: (accountId: string) => ["account", accountId, "calendar", "status"] as const,
+  calendarEvents: (accountId: string, start: string, end: string) =>
+    ["account", accountId, "calendar", "events", start, end] as const,
+  trainingCalendar: (accountId: string) => ["account", accountId, "calendar", "training"] as const,
   leaderboardRoot: (accountId: string) => ["account", accountId, "leaderboard"] as const,
   leaderboard: (accountId: string, metric: string, campus: string, cohort: string) =>
     ["account", accountId, "leaderboard", metric, campus, cohort] as const
@@ -125,6 +129,69 @@ export function useNoteSimulation(scenarioId: string | null) {
     queryFn: () => api<NoteSimulationScenario>(`/api/v1/note-simulations/${scenarioId}`),
     enabled: Boolean(scenarioId),
     staleTime: 0
+  });
+}
+
+export function useCalendarStatus() {
+  const client = useQueryClient();
+  const accountId = currentAccountId(client);
+  return useQuery({
+    queryKey: queryKeys.calendarStatus(accountId),
+    queryFn: () => api<CalendarStatus>("/api/v1/calendar/status"),
+    staleTime: 60_000,
+    refetchInterval: 5 * 60_000
+  });
+}
+
+export function useCalendarEvents(start: string | null, end: string | null, enabled = true) {
+  const client = useQueryClient();
+  const accountId = currentAccountId(client);
+  return useQuery({
+    queryKey: queryKeys.calendarEvents(accountId, start ?? "none", end ?? "none"),
+    queryFn: () => {
+      const params = new URLSearchParams({ start: start!, end: end! });
+      return api<CalendarEventItem[]>(`/api/v1/calendar/events?${params.toString()}`);
+    },
+    enabled: enabled && Boolean(start && end),
+    staleTime: 5 * 60_000
+  });
+}
+
+export function useFipTrainingCalendar(enabled = true) {
+  const client = useQueryClient();
+  const accountId = currentAccountId(client);
+  return useQuery({
+    queryKey: queryKeys.trainingCalendar(accountId),
+    queryFn: () => api<FipTrainingCalendar>("/api/v1/calendar/training"),
+    enabled,
+    staleTime: Number.POSITIVE_INFINITY
+  });
+}
+
+export function useConnectCalendar() {
+  const client = useQueryClient();
+  const accountId = currentAccountId(client);
+  return useMutation({
+    mutationFn: (url: string) => api<CalendarStatus>("/api/v1/calendar/subscription", {
+      method: "PUT",
+      body: JSON.stringify({ url })
+    }),
+    onSuccess: (status) => {
+      client.setQueryData(queryKeys.calendarStatus(accountId), status);
+      client.removeQueries({ queryKey: ["account", accountId, "calendar", "events"] });
+    }
+  });
+}
+
+export function useDisconnectCalendar() {
+  const client = useQueryClient();
+  const accountId = currentAccountId(client);
+  return useMutation({
+    mutationFn: () => api<void>("/api/v1/calendar/subscription", { method: "DELETE" }),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: queryKeys.calendarStatus(accountId) });
+      client.removeQueries({ queryKey: ["account", accountId, "calendar", "events"] });
+    }
   });
 }
 

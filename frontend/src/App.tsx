@@ -18,6 +18,7 @@ const loadSettingsPage = () => import("./pages/SettingsPage");
 const loadLeaderboardPage = () => import("./pages/LeaderboardPage");
 const loadSimulationsPage = () => import("./pages/SimulationsPage");
 const loadNoteSimulationsPage = () => import("./pages/NoteSimulationsPage");
+const loadCalendarPage = () => import("./pages/CalendarPage");
 const OverviewPage = lazy(() => loadOverviewPage().then((module) => ({ default: module.OverviewPage })));
 const NotesPage = lazy(() => loadNotesPage().then((module) => ({ default: module.NotesPage })));
 const UesPage = lazy(() => loadUesPage().then((module) => ({ default: module.UesPage })));
@@ -26,6 +27,7 @@ const SettingsPage = lazy(() => loadSettingsPage().then((module) => ({ default: 
 const LeaderboardPage = lazy(() => loadLeaderboardPage().then((module) => ({ default: module.LeaderboardPage })));
 const SimulationsPage = lazy(() => loadSimulationsPage().then((module) => ({ default: module.SimulationsPage })));
 const NoteSimulationsPage = lazy(() => loadNoteSimulationsPage().then((module) => ({ default: module.NoteSimulationsPage })));
+const CalendarPage = lazy(() => loadCalendarPage().then((module) => ({ default: module.CalendarPage })));
 const AdminPortal = lazy(() => import("./pages/AdminPortal").then((module) => ({ default: module.AdminPortal })));
 const TrustPage = lazy(() => import("./pages/TrustPage").then((module) => ({ default: module.TrustPage })));
 const DemoPage = lazy(() => import("./pages/DemoPage").then((module) => ({ default: module.DemoPage })));
@@ -33,6 +35,7 @@ const DemoPage = lazy(() => import("./pages/DemoPage").then((module) => ({ defau
 const studentRouteLoaders: Record<string, () => Promise<unknown>> = {
   "/": loadOverviewPage,
   "/notes": loadNotesPage,
+  "/calendar": loadCalendarPage,
   "/ues": loadUesPage,
   "/leaderboard": loadLeaderboardPage,
   "/simulations": loadSimulationsPage,
@@ -45,6 +48,7 @@ const studentRouteLoaders: Record<string, () => Promise<unknown>> = {
 const documentTitles: Record<string, string> = {
   "/": "Vue d'ensemble",
   "/notes": "Notes",
+  "/calendar": "Agenda",
   "/ues": "UE & ECTS",
   "/leaderboard": "Classement",
   "/simulations": "Simulations",
@@ -140,6 +144,7 @@ function StudentApp() {
         <Route element={<AppShell session={session.data} preloadRoute={preloadStudentRoute} />}>
           <Route index element={<OverviewPage />} />
           <Route path="notes" element={<NotesPage />} />
+          <Route path="calendar" element={isPrimaryOwner ? <CalendarPage /> : <Navigate to="/" replace />} />
           <Route path="ues" element={<UesPage />} />
           <Route path="leaderboard" element={isOwner ? <LeaderboardPage /> : <Navigate to="/" replace />} />
           <Route path="simulations" element={isPrimaryOwner ? <SimulationLayout /> : <Navigate to="/" replace />}>

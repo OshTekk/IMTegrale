@@ -9,6 +9,7 @@ htmlcov/
 *.egg-info/
 build/
 dist/
+/tmp/
 .pnpm-store/
 /node_modules/
 

@@ -8,9 +8,10 @@ interface ModalProps {
   onClose: () => void;
   children: ReactNode;
   size?: "small" | "medium" | "large";
+  className?: string;
 }
 
-export function Modal({ open, title, description, onClose, children, size = "medium" }: ModalProps) {
+export function Modal({ open, title, description, onClose, children, size = "medium", className }: ModalProps) {
   const titleId = useId();
   const descriptionId = useId();
   const dialogRef = useRef<HTMLElement>(null);
@@ -59,7 +60,7 @@ export function Modal({ open, title, description, onClose, children, size = "med
   if (!open) return null;
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section ref={dialogRef} className={`modal modal-${size}`} role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={description ? descriptionId : undefined} tabIndex={-1}>
+      <section ref={dialogRef} className={`modal modal-${size}${className ? ` ${className}` : ""}`} role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={description ? descriptionId : undefined} tabIndex={-1}>
         <header className="modal-header">
           <div>
             <h2 id={titleId}>{title}</h2>

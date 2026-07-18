@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { BookOpenCheck, ChevronDown, Ellipsis, FlaskConical, Gauge, KeyRound, LogOut, NotebookPen, RefreshCw, Settings, ShieldCheck, Trophy } from "lucide-react";
+import { BookOpenCheck, CalendarDays, ChevronDown, Ellipsis, FlaskConical, Gauge, KeyRound, LogOut, NotebookPen, RefreshCw, Settings, ShieldCheck, Trophy } from "lucide-react";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
@@ -17,6 +17,7 @@ import { useToast } from "./Toast";
 const navItems = [
   { to: "/", label: "Vue d'ensemble", short: "Accueil", icon: Gauge, ownerOnly: false },
   { to: "/notes", label: "Notes", short: "Notes", icon: NotebookPen, ownerOnly: false },
+  { to: "/calendar", label: "Agenda", short: "Agenda", icon: CalendarDays, ownerOnly: true, primaryOwnerOnly: true },
   { to: "/ues", label: "UE & ECTS", short: "UE", icon: BookOpenCheck, ownerOnly: false },
   { to: "/simulations/gpa", label: "Simulations", short: "Simuler", icon: FlaskConical, ownerOnly: true, primaryOwnerOnly: true },
   { to: "/leaderboard", label: "Classement", short: "Rangs", icon: Trophy, ownerOnly: true },
@@ -27,6 +28,7 @@ const navItems = [
 const titles: Record<string, [string, string]> = {
   "/": ["Vue d'ensemble", "Ta situation académique en un coup d'œil"],
   "/notes": ["Notes", "Détail des évaluations officielles importées depuis PASS"],
+  "/calendar": ["Agenda", "Tes cours et ton rythme de formation au même endroit"],
   "/ues": ["UE & ECTS", "Moyennes, grades et pondération par crédits"],
   "/simulations/gpa": ["Simulations", "Projette ton GPA sans modifier tes données officielles"],
   "/simulations/notes": ["Simulations", "Teste tes prochaines notes et leur impact sur ta moyenne"],
@@ -37,6 +39,7 @@ const titles: Record<string, [string, string]> = {
 
 const mobileNavDescriptions: Record<string, string> = {
   "/ues": "Grades, crédits et détail des évaluations",
+  "/calendar": "Cours personnels et calendrier de formation",
   "/sharing": "Tokens et accès partagés",
   "/settings": "Compte, synchronisation et notifications"
 };
@@ -61,7 +64,7 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
     (!item.ownerOnly || session.role === "owner") && (!item.primaryOwnerOnly || primaryOwner)
   )), [primaryOwner, session.role]);
   const mobilePrimaryPaths = useMemo(() => primaryOwner
-    ? ["/", "/notes", "/simulations/gpa", "/leaderboard"]
+    ? ["/", "/notes", "/calendar", "/simulations/gpa"]
     : ["/", "/notes", "/ues"], [primaryOwner]);
   const mobilePrimaryNav = useMemo(() => visibleNav.filter((item) => mobilePrimaryPaths.includes(item.to)), [mobilePrimaryPaths, visibleNav]);
   const mobileSecondaryNav = useMemo(() => visibleNav.filter((item) => !mobilePrimaryPaths.includes(item.to)), [mobilePrimaryPaths, visibleNav]);
