@@ -1933,25 +1933,17 @@ select:disabled {
 }
 
 .grade-scale-band > div {
-  display: grid;
+  display: flex;
   min-height: 62px;
-  grid-template-columns: 34px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 7px;
-  padding: 9px 10px;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 14px;
   border-right: 1px solid var(--line);
 }
 
 .grade-scale-band > div:last-child {
   border-right: 0;
-}
-
-.grade-scale-band span:not(.grade-badge) {
-  overflow: hidden;
-  color: var(--muted);
-  font-size: var(--text-2xs);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .grade-scale-band strong {
