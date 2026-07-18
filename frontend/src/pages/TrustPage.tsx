@@ -1,14 +1,19 @@
 import {
   ArrowRight,
+  BellRing,
+  ChartNoAxesCombined,
   ExternalLink,
   Database,
   Fingerprint,
   KeyRound,
   LockKeyhole,
   RefreshCw,
+  Scale,
   Server,
   ShieldAlert,
   ShieldCheck,
+  Trash2,
+  Trophy,
   UserRoundCheck,
 } from "lucide-react";
 import { Link } from "react-router-dom";
@@ -17,10 +22,26 @@ import { GitHubMark } from "../components/GitHubMark";
 
 const guarantees = [
   { icon: ShieldCheck, title: "Transport HTTPS", text: "Le navigateur vérifie un certificat public valide. Les cookies de session sont Secure, HttpOnly et SameSite=Strict." },
-  { icon: LockKeyhole, title: "Secrets minimisés", text: "Le mot de passe IMT n'est pas stocké. La session PASS/HUB et le token Telegram sont chiffrés en AES-256-GCM avec une clé hors de PostgreSQL." },
+  { icon: LockKeyhole, title: "Secrets minimisés", text: "Le mot de passe IMT n'est jamais stocké. La session PASS/HUB, le token Telegram et le lien INPASS sont chiffrés avec une clé hors de PostgreSQL." },
   { icon: Database, title: "Données cloisonnées", text: "Chaque note, UE, session, token et événement est rattaché à un compte et filtré côté serveur." },
   { icon: RefreshCw, title: "PASS protégé", text: "Les synchronisations sont consenties, sérialisées, limitées par heure et par jour, puis suspendues automatiquement si PASS devient instable." },
 ];
+
+const choices = [
+  { icon: Database, title: "Espace académique", status: "Compte", text: "Profil, notes, grades et ECTS sont importés à l'inscription, restent privés et ne sont jamais éditables." },
+  { icon: RefreshCw, title: "Actualisation automatique", status: "Facultatif", text: "Désactivée par défaut, révocable à tout moment et mise en pause dès que la session distante expire." },
+  { icon: BellRing, title: "Telegram et agenda", status: "Facultatif", text: "Deux réglages indépendants. Leurs secrets sont chiffrés et ne sont jamais inclus dans un accès partagé." },
+  { icon: ChartNoAxesCombined, title: "Simulations et relevé", status: "Privé", text: "Les hypothèses sont des copies isolées. Le relevé PDF est généré en mémoire puis immédiatement oublié." },
+  { icon: KeyRound, title: "Partage", status: "Facultatif", text: "Chaque token possède un rôle et une expiration. Son secret n'est pas conservé en clair et peut être révoqué." },
+  { icon: Trophy, title: "Classement", status: "Publication choisie", text: "Identité et scores sont publiés aux participants actifs après accord séparé. Le retrait reste immédiat." },
+];
+
+const officialLinks = {
+  imtRules: "https://www.imt-atlantique.fr/sites/default/files/ecole/ddrs/odd/ODD%2016/REGLEMENT-INTERIEUR-IMT%20A%202023-version-suite-CE-14-avril-2023.pdf",
+  renaterCharter: "https://www.renater.fr/wp-content/uploads/2022/01/charte-de-bon-usage-de-linformatique-et-du-reseau-renater.pdf",
+  cnilConsent: "https://www.cnil.fr/fr/les-bases-legales/consentement",
+  cnilTransparency: "https://www.cnil.fr/fr/conformite-rgpd-information-des-personnes-et-transparence",
+} as const;
 
 export function TrustPage() {
   return (
@@ -52,6 +73,13 @@ export function TrustPage() {
         {guarantees.map((item) => <article key={item.title}><span><item.icon size={20} /></span><div><h2>{item.title}</h2><p>{item.text}</p></div></article>)}
       </section>
 
+      <section className="trust-controls">
+        <header><span className="section-kicker">Périmètres séparés</span><h2>Un compte ne donne pas un accord général.</h2><p>Chaque fonction facultative se décide et se retire indépendamment. Les données académiques officielles restent la référence immuable.</p></header>
+        <div className="trust-control-list">
+          {choices.map((item) => <article key={item.title}><span><item.icon size={19} /></span><div><h3>{item.title}</h3><p>{item.text}</p></div><small>{item.status}</small></article>)}
+        </div>
+      </section>
+
       <section className="trust-split">
         <article>
           <span className="section-kicker">Après l'inscription</span>
@@ -65,9 +93,37 @@ export function TrustPage() {
         </article>
       </section>
 
+      <section className="trust-policy" id="cadre-utilisation">
+        <header>
+          <span><Scale size={24} /></span>
+          <div><span className="section-kicker">Cadre d'utilisation</span><h2>Ton choix compte, mais il ne remplace pas les règles du SI.</h2><p>La protection des données et l'autorisation d'utiliser un service informatique sont deux sujets différents.</p></div>
+        </header>
+        <div className="trust-policy-grid">
+          <article>
+            <span className="section-kicker">Ce que tu autorises</span>
+            <h3>Le traitement demandé</h3>
+            <p>Tu choisis les finalités facultatives une par une. Ton accord doit rester libre, compréhensible et retirable aussi simplement qu'il a été donné.</p>
+            <a href={officialLinks.cnilConsent} target="_blank" rel="noreferrer">Repères de la CNIL <ExternalLink size={13} /></a>
+          </article>
+          <article>
+            <span className="section-kicker">Ce que cela ne remplace pas</span>
+            <h3>La charte informatique IMT</h3>
+            <p>IMTégrale n'est ni homologué par la DISI, ni autorisé par l'école. Le règlement IMT rend sa charte informatique applicable ; la charte RENATER citée par l'école encadre aussi l'accès personnel et l'usage rationnel des ressources.</p>
+            <div className="trust-policy-links"><a href={officialLinks.imtRules} target="_blank" rel="noreferrer">Règlement IMT <ExternalLink size={13} /></a><a href={officialLinks.renaterCharter} target="_blank" rel="noreferrer">Charte RENATER <ExternalLink size={13} /></a></div>
+          </article>
+          <article>
+            <span className="section-kicker">Qui reste responsable</span>
+            <h3>L'exploitant et l'étudiant</h3>
+            <p>L'exploitant choisit le fonctionnement du service et protège les données. L'étudiant reste titulaire de son accès IMT. Aucun consentement ne transfère toute la responsabilité à l'autre partie.</p>
+            <a href={officialLinks.cnilTransparency} target="_blank" rel="noreferrer">Obligations de transparence <ExternalLink size={13} /></a>
+          </article>
+        </div>
+        <div className="trust-retention"><Trash2 size={18} /><p><strong>Retrait et effacement.</strong> Une publication au classement disparaît immédiatement sur demande. Pour supprimer tout le compte, contacte l'administrateur de l'instance : le compte et ses données académiques actives sont effacés. Une trace administrative minimale peut être conservée ; les sauvegardes chiffrées expirent selon leur cycle de 30 jours.</p></div>
+      </section>
+
       <section className="trust-source-band">
         <span><GitHubMark size={25} /></span>
-        <div><span className="section-kicker">Code source public</span><h2>Les protections peuvent être examinées, discutées et améliorées.</h2><p>Le dépôt expose l'architecture, les migrations et les contrôles de sécurité. Cela rend le projet auditable, sans prétendre qu'un dépôt public prouve à lui seul la version réellement exécutée sur le serveur.</p></div>
+        <div><span className="section-kicker">Code source public</span><h2>Les protections peuvent être examinées, discutées et améliorées.</h2><p>Le dépôt expose l'architecture, les migrations, la cartographie des données et les contrôles de sécurité. Cela rend le projet auditable, sans prétendre qu'un dépôt public prouve à lui seul la version réellement exécutée sur le serveur.</p></div>
         <a className="secondary-button" href={BRAND.sourceCodeUrl} target="_blank" rel="noreferrer">Ouvrir GitHub <ExternalLink size={16} /></a>
       </section>
 

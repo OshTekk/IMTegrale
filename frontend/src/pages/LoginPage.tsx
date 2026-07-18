@@ -59,10 +59,10 @@ export function LoginPage() {
           <div className="context-icon"><BrandMark size={52} /></div>
           <span className="login-product-label">{BRAND.descriptor}</span>
           <h1>{BRAND.tagline}</h1>
-          <p>Notes PASS, moyenne pondérée par ECTS et GPA réunis dans un espace personnel sécurisé.</p>
+          <p>Notes PASS, UE et ECTS officiels, agenda, simulations, moyenne et GPA réunis dans un espace personnel.</p>
           <div className="security-points">
-            <span><ShieldCheck size={18} /> Données séparées par compte</span>
-            <span><LockKeyhole size={18} /> Session PASS/HUB chiffrée</span>
+            <span><ShieldCheck size={18} /> Mot de passe IMT jamais conservé</span>
+            <span><LockKeyhole size={18} /> Session PASS/HUB chiffrée, 30 jours maximum</span>
           </div>
           <SourceNotice />
           <div className="login-public-links">
@@ -87,7 +87,7 @@ export function LoginPage() {
             {mode === "imt" && <>
               <label>Identifiant CAS / IMT Atlantique<input autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} placeholder="Votre identifiant de connexion" required autoFocus /></label>
               <label>Mot de passe IMT<span className="password-field"><input type={showPassword ? "text" : "password"} autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required /><button type="button" className="field-icon" onClick={() => setShowPassword((value) => !value)} aria-label={showPassword ? "Masquer le mot de passe" : "Afficher le mot de passe"}>{showPassword ? <EyeOff size={18} /> : <Eye size={18} />}</button></span></label>
-              <p className="field-note">La première connexion importe ton espace PASS. Les suivantes vérifient uniquement ton accès IMT ; la synchronisation reste une action distincte.</p>
+              <p className="field-note">Le mot de passe transite uniquement pour l'authentification CAS et n'est jamais enregistré. La première connexion importe ton espace ; les suivantes ne synchronisent rien sans action distincte.</p>
             </>}
             {mode === "token" && <>
               <label>Token d'accès<input autoComplete="off" value={token} onChange={(event) => setToken(event.target.value)} placeholder="bn1_…" required autoFocus /></label>

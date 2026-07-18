@@ -35,3 +35,19 @@ def test_release_versions_remain_aligned() -> None:
 
     assert match is not None
     assert project["project"]["version"] == frontend["version"] == match.group(1)
+
+
+def test_public_explanations_match_the_service_session_model() -> None:
+    login = read("frontend/src/pages/LoginPage.tsx")
+    trust = read("frontend/src/pages/TrustPage.tsx")
+    demo = read("frontend/src/pages/DemoPage.tsx")
+    security = read("SECURITY.md")
+
+    assert "Mot de passe IMT jamais conservé" in login
+    assert "il ne remplace pas les règles du SI" in trust
+    assert "Accès & partage" in demo
+    assert "Simulations" in demo
+    assert "Agenda" in demo
+    assert "Relevé PDF" in demo
+    assert "chiffre les identifiants nécessaires" not in security
+    assert "supprimés au plus tard après 30 jours" in security
