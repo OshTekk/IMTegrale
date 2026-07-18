@@ -13,6 +13,7 @@ from app.services.imt import (
     COMPETENCIES_RESULTS_BASE_URL,
     COMPETENCIES_USER_URL,
     IMT_ATLANTIQUE_IDP_ENTITY_ID,
+    MAX_REQUESTS_PER_OPERATION,
     ImtFetchError,
     ImtPassClient,
 )
@@ -99,6 +100,21 @@ def test_imt_streaming_read_enforces_global_deadline(monkeypatch) -> None:
 
     with pytest.raises(ImtFetchError, match="délai global"):
         client._read_limited(response, 100)
+
+
+def test_imt_operation_keeps_a_hard_request_ceiling(monkeypatch) -> None:
+    client = ImtPassClient()
+    monkeypatch.setattr(
+        client.session,
+        "request",
+        lambda *_args, **_kwargs: fake_response(url=CAS_LOGIN_URL),
+    )
+
+    with client._operation():
+        for _ in range(MAX_REQUESTS_PER_OPERATION):
+            client._get(CAS_LOGIN_URL)
+        with pytest.raises(ImtFetchError, match="anormalement long"):
+            client._get(CAS_LOGIN_URL)
 
 
 def test_competencies_api_uses_csrf_bearer_and_current_student_only(monkeypatch) -> None:
