@@ -20,6 +20,7 @@ router = APIRouter(prefix="/api/v1/events", tags=["events"])
 class StreamAuth:
     account_id: str
     session_id: str
+    include_simulations: bool
 
 
 def stream_event_payload(event: Event) -> dict[str, int]:
@@ -32,7 +33,11 @@ def get_stream_auth(
 ) -> StreamAuth:
     with SessionLocal() as db:
         auth = get_auth_context(request, db, settings)
-        return StreamAuth(account_id=auth.account.id, session_id=auth.session.id)
+        return StreamAuth(
+            account_id=auth.account.id,
+            session_id=auth.session.id,
+            include_simulations=getattr(auth.session, "share_token_id", None) is None,
+        )
 
 
 @router.get("")
@@ -43,6 +48,7 @@ async def stream_events(
 ) -> StreamingResponse:
     account_id = auth.account_id
     session_id = auth.session_id
+    include_simulations = auth.include_simulations
 
     async def event_stream():
         last_id = max(0, after)
@@ -69,6 +75,8 @@ async def stream_events(
                 break
             for event in events:
                 last_id = event.id
+                if not include_simulations and event.kind.startswith("simulation:"):
+                    continue
                 payload = stream_event_payload(event)
                 yield f"id: {event.id}\nevent: update\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
                 idle = 0

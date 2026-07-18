@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { BookOpenCheck, ChevronDown, Ellipsis, Gauge, KeyRound, LogOut, NotebookPen, RefreshCw, Settings, ShieldCheck, Trophy } from "lucide-react";
+import { BookOpenCheck, ChevronDown, Ellipsis, FlaskConical, Gauge, KeyRound, LogOut, NotebookPen, RefreshCw, Settings, ShieldCheck, Trophy } from "lucide-react";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
@@ -18,6 +18,7 @@ const navItems = [
   { to: "/", label: "Vue d'ensemble", short: "Accueil", icon: Gauge, ownerOnly: false },
   { to: "/notes", label: "Notes", short: "Notes", icon: NotebookPen, ownerOnly: false },
   { to: "/ues", label: "UE & ECTS", short: "UE", icon: BookOpenCheck, ownerOnly: false },
+  { to: "/simulations", label: "Simulations", short: "Simuler", icon: FlaskConical, ownerOnly: true, primaryOwnerOnly: true },
   { to: "/leaderboard", label: "Classement", short: "Rangs", icon: Trophy, ownerOnly: true },
   { to: "/sharing", label: "Partage", short: "Partage", icon: KeyRound, ownerOnly: true },
   { to: "/settings", label: "Paramètres", short: "Réglages", icon: Settings, ownerOnly: false }
@@ -27,9 +28,16 @@ const titles: Record<string, [string, string]> = {
   "/": ["Vue d'ensemble", "Ta situation académique en un coup d'œil"],
   "/notes": ["Notes", "Détail des évaluations officielles importées depuis PASS"],
   "/ues": ["UE & ECTS", "Moyennes, grades et pondération par crédits"],
+  "/simulations": ["Simulations", "Projette ton GPA sans modifier tes données officielles"],
   "/leaderboard": ["Classement", "Deux classements privés, calculés depuis PASS"],
   "/sharing": ["Partage", "Accès révocables liés à ton compte"],
   "/settings": ["Paramètres", "Compte, synchronisation et notifications"]
+};
+
+const mobileNavDescriptions: Record<string, string> = {
+  "/ues": "Grades, crédits et détail des évaluations",
+  "/sharing": "Tokens et accès partagés",
+  "/settings": "Compte, synchronisation et notifications"
 };
 
 function PageRouteLoading() {
@@ -47,9 +55,15 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [live, setLive] = useState<"connected" | "connecting">("connecting");
   const [title, subtitle] = titles[location.pathname] ?? titles["/"]!;
-  const visibleNav = useMemo(() => navItems.filter((item) => !item.ownerOnly || session.role === "owner"), [session.role]);
-  const mobilePrimaryNav = useMemo(() => visibleNav.filter((item) => !["/sharing", "/settings"].includes(item.to)), [visibleNav]);
-  const mobileSecondaryNav = useMemo(() => visibleNav.filter((item) => ["/sharing", "/settings"].includes(item.to)), [visibleNav]);
+  const primaryOwner = session.role === "owner" && session.auth_method !== "token";
+  const visibleNav = useMemo(() => navItems.filter((item) => (
+    (!item.ownerOnly || session.role === "owner") && (!item.primaryOwnerOnly || primaryOwner)
+  )), [primaryOwner, session.role]);
+  const mobilePrimaryPaths = useMemo(() => primaryOwner
+    ? ["/", "/notes", "/simulations", "/leaderboard"]
+    : ["/", "/notes", "/ues"], [primaryOwner]);
+  const mobilePrimaryNav = useMemo(() => visibleNav.filter((item) => mobilePrimaryPaths.includes(item.to)), [mobilePrimaryPaths, visibleNav]);
+  const mobileSecondaryNav = useMemo(() => visibleNav.filter((item) => !mobilePrimaryPaths.includes(item.to)), [mobilePrimaryPaths, visibleNav]);
   const profileWrap = useRef<HTMLDivElement>(null);
   const manualSync = dashboard.data?.account.manual_sync;
   const syncRemaining = useServerCountdown(manualSync);
@@ -202,8 +216,8 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
         {mobileSecondaryNav.length > 0 && <button className={mobileSecondaryNav.some((item) => item.to === location.pathname) ? "active" : ""} type="button" onClick={() => setMobileMenuOpen(true)} aria-label="Ouvrir les autres pages" aria-expanded={mobileMenuOpen}><Ellipsis size={21} /><span>Plus</span></button>}
       </nav>
 
-      <Modal open={mobileMenuOpen} title="Autres pages" description="Compte, accès et préférences." onClose={() => setMobileMenuOpen(false)}>
-        <nav className="mobile-overflow-links" aria-label="Navigation secondaire">{mobileSecondaryNav.map((item) => <NavLink key={item.to} to={item.to} viewTransition onTouchStart={() => preloadRoute(item.to)} onFocus={() => preloadRoute(item.to)} onClick={() => setMobileMenuOpen(false)}><item.icon size={19} /><span><strong>{item.label}</strong><small>{item.to === "/sharing" ? "Tokens et accès partagés" : "Compte, synchronisation et notifications"}</small></span></NavLink>)}</nav>
+      <Modal open={mobileMenuOpen} title="Autres pages" description="Données académiques, accès et préférences." onClose={() => setMobileMenuOpen(false)}>
+        <nav className="mobile-overflow-links" aria-label="Navigation secondaire">{mobileSecondaryNav.map((item) => <NavLink key={item.to} to={item.to} viewTransition onTouchStart={() => preloadRoute(item.to)} onFocus={() => preloadRoute(item.to)} onClick={() => setMobileMenuOpen(false)}><item.icon size={19} /><span><strong>{item.label}</strong><small>{mobileNavDescriptions[item.to] ?? titles[item.to]?.[1]}</small></span></NavLink>)}</nav>
       </Modal>
     </div>
   );

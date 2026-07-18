@@ -154,6 +154,114 @@ export interface Dashboard {
   events: EventItem[];
 }
 
+export type SimulationGrade = "A" | "B" | "C" | "D" | "E" | "FX" | "F";
+export type SimulationSemester = "S1" | "S2" | "S3" | "S4" | "S5" | "S6" | "S7" | "S8" | "S9" | "S10";
+
+export interface SimulationFormula {
+  version: string;
+  label: string;
+  scale: string;
+  rounding: string;
+  scope: string;
+  expression: string;
+  official: false;
+}
+
+export interface SimulationResult {
+  status: "empty" | "partial" | "ready";
+  gpa: number | null;
+  credits_entered: number;
+  credits_included: number;
+  ue_count: number;
+  graded_count: number;
+  pending_count: number;
+  missing_ects_count: number;
+  completion_rate: number;
+  semesters: Array<{
+    semester: SimulationSemester;
+    gpa: number | null;
+    credits_included: number;
+    ue_count: number;
+  }>;
+  warnings: Array<{ code: string; count: number; message: string }>;
+  formula: SimulationFormula;
+}
+
+export interface SimulationSourceSummary {
+  revision: string;
+  captured_at: string;
+  ue_count: number;
+  graded_count: number;
+}
+
+export interface SimulationEntry {
+  id: string;
+  lineage_key: string;
+  semester: SimulationSemester | null;
+  ue_code: string | null;
+  title: string;
+  credits_ects: number | null;
+  grade: SimulationGrade | null;
+  gpa_points: number | null;
+  status: "pending" | "validated" | "not_validated";
+  nature: "imported" | "modified" | "simulated";
+  source: {
+    ue_code: string | null;
+    status: "current" | "conflict" | "unavailable";
+    grade_source: "competences" | "pass_calculated" | null;
+    observed_at: string | null;
+  } | null;
+  baseline: {
+    semester: SimulationSemester | null;
+    ue_code: string | null;
+    title: string | null;
+    credits_ects: number | null;
+    grade: SimulationGrade | null;
+  } | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SimulationScenarioSummary {
+  id: string;
+  name: string;
+  created_from: "blank" | "academic";
+  formula_version: string;
+  version: number;
+  source_revision: string | null;
+  source_captured_at: string | null;
+  rebase_available: boolean;
+  created_at: string;
+  updated_at: string;
+  result: SimulationResult;
+}
+
+export interface SimulationScenario extends SimulationScenarioSummary {
+  entries: SimulationEntry[];
+}
+
+export interface SimulationList {
+  limit: number;
+  source: SimulationSourceSummary;
+  scenarios: SimulationScenarioSummary[];
+}
+
+export interface SimulationComparisonDifference {
+  lineage_key: string;
+  kind: "changed" | "left_only" | "right_only";
+  left: SimulationEntry | null;
+  right: SimulationEntry | null;
+  fields: Array<"presence" | "semester" | "ue" | "credits_ects" | "grade">;
+}
+
+export interface SimulationComparison {
+  left: SimulationScenarioSummary;
+  right: SimulationScenarioSummary;
+  gpa_delta: number | null;
+  differences: SimulationComparisonDifference[];
+  formula: SimulationFormula;
+}
+
 export interface ShareToken {
   id: string;
   name: string;

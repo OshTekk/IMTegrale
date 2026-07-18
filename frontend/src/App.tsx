@@ -15,12 +15,14 @@ const loadUesPage = () => import("./pages/UesPage");
 const loadSharingPage = () => import("./pages/SharingPage");
 const loadSettingsPage = () => import("./pages/SettingsPage");
 const loadLeaderboardPage = () => import("./pages/LeaderboardPage");
+const loadSimulationsPage = () => import("./pages/SimulationsPage");
 const OverviewPage = lazy(() => loadOverviewPage().then((module) => ({ default: module.OverviewPage })));
 const NotesPage = lazy(() => loadNotesPage().then((module) => ({ default: module.NotesPage })));
 const UesPage = lazy(() => loadUesPage().then((module) => ({ default: module.UesPage })));
 const SharingPage = lazy(() => loadSharingPage().then((module) => ({ default: module.SharingPage })));
 const SettingsPage = lazy(() => loadSettingsPage().then((module) => ({ default: module.SettingsPage })));
 const LeaderboardPage = lazy(() => loadLeaderboardPage().then((module) => ({ default: module.LeaderboardPage })));
+const SimulationsPage = lazy(() => loadSimulationsPage().then((module) => ({ default: module.SimulationsPage })));
 const AdminPortal = lazy(() => import("./pages/AdminPortal").then((module) => ({ default: module.AdminPortal })));
 const TrustPage = lazy(() => import("./pages/TrustPage").then((module) => ({ default: module.TrustPage })));
 const DemoPage = lazy(() => import("./pages/DemoPage").then((module) => ({ default: module.DemoPage })));
@@ -30,6 +32,7 @@ const studentRouteLoaders: Record<string, () => Promise<unknown>> = {
   "/notes": loadNotesPage,
   "/ues": loadUesPage,
   "/leaderboard": loadLeaderboardPage,
+  "/simulations": loadSimulationsPage,
   "/sharing": loadSharingPage,
   "/settings": loadSettingsPage,
 };
@@ -39,6 +42,7 @@ const documentTitles: Record<string, string> = {
   "/notes": "Notes",
   "/ues": "UE & ECTS",
   "/leaderboard": "Classement",
+  "/simulations": "Simulations",
   "/sharing": "Partage",
   "/settings": "Paramètres",
   "/confiance": "Confiance",
@@ -119,6 +123,7 @@ function StudentApp() {
   }
 
   const isOwner = session.data.role === "owner";
+  const isPrimaryOwner = isOwner && session.data.auth_method !== "token";
   return (
     <>
       <Routes>
@@ -127,6 +132,7 @@ function StudentApp() {
           <Route path="notes" element={<NotesPage />} />
           <Route path="ues" element={<UesPage />} />
           <Route path="leaderboard" element={isOwner ? <LeaderboardPage /> : <Navigate to="/" replace />} />
+          <Route path="simulations" element={isPrimaryOwner ? <SimulationsPage /> : <Navigate to="/" replace />} />
           <Route path="sharing" element={isOwner ? <SharingPage /> : <Navigate to="/" replace />} />
           <Route path="settings" element={<SettingsPage role={session.data.role} />} />
           <Route path="*" element={<Navigate to="/" replace />} />

@@ -1,7 +1,7 @@
 import { type QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef } from "react";
 import { api, ApiError } from "./api";
-import type { Dashboard, LeaderboardMetric, LeaderboardView, Session, SettingsView, ShareToken, SyncStartResponse } from "../types";
+import type { Dashboard, LeaderboardMetric, LeaderboardView, Session, SettingsView, ShareToken, SimulationList, SimulationScenario, SyncStartResponse } from "../types";
 
 export const queryKeys = {
   session: ["session"] as const,
@@ -9,6 +9,9 @@ export const queryKeys = {
   dashboard: (accountId: string) => ["account", accountId, "dashboard"] as const,
   settings: (accountId: string) => ["account", accountId, "settings"] as const,
   tokens: (accountId: string) => ["account", accountId, "tokens"] as const,
+  simulations: (accountId: string) => ["account", accountId, "simulations"] as const,
+  simulation: (accountId: string, scenarioId: string) =>
+    ["account", accountId, "simulations", scenarioId] as const,
   leaderboardRoot: (accountId: string) => ["account", accountId, "leaderboard"] as const,
   leaderboard: (accountId: string, metric: string, campus: string, cohort: string) =>
     ["account", accountId, "leaderboard", metric, campus, cohort] as const
@@ -75,6 +78,28 @@ export function useTokens(enabled = true) {
     queryKey: queryKeys.tokens(accountId),
     queryFn: () => api<ShareToken[]>("/api/v1/tokens"),
     enabled
+  });
+}
+
+export function useSimulations(enabled = true) {
+  const client = useQueryClient();
+  const accountId = currentAccountId(client);
+  return useQuery({
+    queryKey: queryKeys.simulations(accountId),
+    queryFn: () => api<SimulationList>("/api/v1/simulations"),
+    enabled,
+    staleTime: 20_000
+  });
+}
+
+export function useSimulation(scenarioId: string | null) {
+  const client = useQueryClient();
+  const accountId = currentAccountId(client);
+  return useQuery({
+    queryKey: queryKeys.simulation(accountId, scenarioId ?? "none"),
+    queryFn: () => api<SimulationScenario>(`/api/v1/simulations/${scenarioId}`),
+    enabled: Boolean(scenarioId),
+    staleTime: 0
   });
 }
 

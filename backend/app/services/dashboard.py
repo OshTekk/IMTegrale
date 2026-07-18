@@ -29,7 +29,14 @@ def note_view(note: Note) -> dict:
     }
 
 
-OWNER_ONLY_EVENT_PREFIXES = ("account:", "auth:", "leaderboard:", "telegram:", "token:")
+OWNER_ONLY_EVENT_PREFIXES = (
+    "account:",
+    "auth:",
+    "leaderboard:",
+    "simulation:",
+    "telegram:",
+    "token:",
+)
 
 
 def _validated_credits(items: list[dict]) -> float:
@@ -48,7 +55,9 @@ def _validated_credits(items: list[dict]) -> float:
     )
 
 
-def event_view(event: Event, role: str) -> dict | None:
+def event_view(event: Event, role: str, *, include_simulations: bool = True) -> dict | None:
+    if not include_simulations and event.kind.startswith("simulation:"):
+        return None
     if role != "owner" and event.kind.startswith(OWNER_ONLY_EVENT_PREFIXES):
         return None
     payload = event.payload
@@ -151,7 +160,13 @@ def calculate_ues(notes: list[Note], settings: list[UeSetting]) -> list[dict]:
     return summaries
 
 
-def dashboard_snapshot(db: Session, account: Account, *, role: str = "owner") -> dict:
+def dashboard_snapshot(
+    db: Session,
+    account: Account,
+    *,
+    role: str = "owner",
+    include_simulations: bool = True,
+) -> dict:
     notes = list(
         db.scalars(
             select(Note)
@@ -216,11 +231,18 @@ def dashboard_snapshot(db: Session, account: Account, *, role: str = "owner") ->
         )
 
     grade_counts = Counter(item["grade"] for item in ues if item["grade"])
-    latest_event_id = db.scalar(select(func.max(Event.id)).where(Event.account_id == account.id)) or 0
+    latest_event_query = select(func.max(Event.id)).where(Event.account_id == account.id)
+    if not include_simulations:
+        latest_event_query = latest_event_query.where(~Event.kind.startswith("simulation:"))
+    latest_event_id = db.scalar(latest_event_query) or 0
     event_rows = list(
         db.scalars(select(Event).where(Event.account_id == account.id).order_by(Event.id.desc()).limit(100))
     )
-    events = [view for event in event_rows if (view := event_view(event, role)) is not None][:30]
+    events = [
+        view
+        for event in event_rows
+        if (view := event_view(event, role, include_simulations=include_simulations)) is not None
+    ][:30]
     grade_scale = [
         {"grade": row["grade"], "description": row["description"], "gpa": row["gpa"]}
         for row in GRADE_SCALE[:4]

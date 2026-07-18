@@ -13,7 +13,18 @@ from app import __version__
 from app.admin_security import require_admin_network
 from app.config import get_settings
 from app.database import SessionLocal
-from app.routers import admin, auth, dashboard, events, leaderboard, notes, settings, sync, tokens
+from app.routers import (
+    admin,
+    auth,
+    dashboard,
+    events,
+    leaderboard,
+    notes,
+    settings,
+    simulations,
+    sync,
+    tokens,
+)
 from app.services.scheduler import automatic_sync_scheduler
 
 settings_config = get_settings()
@@ -131,6 +142,7 @@ for api_router in (
     dashboard.router,
     leaderboard.router,
     notes.router,
+    simulations.router,
     tokens.router,
     settings.router,
     sync.router,

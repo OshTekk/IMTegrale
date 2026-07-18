@@ -13,4 +13,9 @@ def get_dashboard(
     auth: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db),
 ) -> dict:
-    return dashboard_snapshot(db, auth.account, role=auth.role)
+    return dashboard_snapshot(
+        db,
+        auth.account,
+        role=auth.role,
+        include_simulations=auth.session.share_token_id is None,
+    )

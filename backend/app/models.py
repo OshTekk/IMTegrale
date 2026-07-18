@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     JSON,
@@ -13,6 +14,7 @@ from sqlalchemy import (
     Index,
     Integer,
     LargeBinary,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -102,6 +104,9 @@ class Account(Base):
     ue_settings: Mapped[list[UeSetting]] = relationship(
         back_populates="account", cascade="all, delete-orphan"
     )
+    simulation_scenarios: Mapped[list[SimulationScenario]] = relationship(
+        back_populates="account", cascade="all, delete-orphan"
+    )
     leaderboard_profile: Mapped[LeaderboardProfile | None] = relationship(
         back_populates="account", cascade="all, delete-orphan", uselist=False
     )
@@ -183,6 +188,100 @@ class UeSetting(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
     account: Mapped[Account] = relationship(back_populates="ue_settings")
+
+
+class SimulationScenario(Base):
+    __tablename__ = "simulation_scenarios"
+    __table_args__ = (
+        Index("ix_simulation_scenarios_account_updated", "account_id", "updated_at"),
+        CheckConstraint(
+            "created_from IN ('blank', 'academic')",
+            name="ck_simulation_scenarios_created_from",
+        ),
+        CheckConstraint("version >= 1", name="ck_simulation_scenarios_version"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    account_id: Mapped[str] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(80))
+    created_from: Mapped[str] = mapped_column(String(16), default="blank")
+    formula_version: Mapped[str] = mapped_column(String(32), default="gpa-ects-v1")
+    source_revision: Mapped[str | None] = mapped_column(String(64))
+    source_captured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    account: Mapped[Account] = relationship(back_populates="simulation_scenarios")
+    entries: Mapped[list[SimulationEntry]] = relationship(
+        back_populates="scenario",
+        cascade="all, delete-orphan",
+        order_by="SimulationEntry.position, SimulationEntry.created_at, SimulationEntry.id",
+    )
+
+
+class SimulationEntry(Base):
+    __tablename__ = "simulation_entries"
+    __table_args__ = (
+        UniqueConstraint("scenario_id", "lineage_key", name="uq_simulation_entries_lineage"),
+        Index("ix_simulation_entries_scenario_position", "scenario_id", "position"),
+        CheckConstraint(
+            "origin IN ('imported', 'simulated')",
+            name="ck_simulation_entries_origin",
+        ),
+        CheckConstraint(
+            "source_status IN ('current', 'conflict', 'unavailable')",
+            name="ck_simulation_entries_source_status",
+        ),
+        CheckConstraint(
+            "grade IS NULL OR grade IN ('A', 'B', 'C', 'D', 'E', 'FX', 'F')",
+            name="ck_simulation_entries_grade",
+        ),
+        CheckConstraint(
+            "base_grade IS NULL OR base_grade IN ('A', 'B', 'C', 'D', 'E', 'FX', 'F')",
+            name="ck_simulation_entries_base_grade",
+        ),
+        CheckConstraint(
+            "credits_ects IS NULL OR (credits_ects > 0 AND credits_ects <= 60)",
+            name="ck_simulation_entries_credits",
+        ),
+        CheckConstraint(
+            "base_credits_ects IS NULL OR (base_credits_ects > 0 AND base_credits_ects <= 60)",
+            name="ck_simulation_entries_base_credits",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    scenario_id: Mapped[str] = mapped_column(
+        ForeignKey("simulation_scenarios.id", ondelete="CASCADE"), index=True
+    )
+    lineage_key: Mapped[str] = mapped_column(String(80))
+    source_ue_code: Mapped[str | None] = mapped_column(String(32))
+    origin: Mapped[str] = mapped_column(String(16), default="simulated")
+    source_status: Mapped[str] = mapped_column(String(16), default="current")
+    semester: Mapped[str | None] = mapped_column(String(16))
+    ue_code: Mapped[str | None] = mapped_column(String(32))
+    title: Mapped[str] = mapped_column(String(200), default="")
+    credits_ects: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
+    grade: Mapped[str | None] = mapped_column(String(4))
+    base_semester: Mapped[str | None] = mapped_column(String(16))
+    base_ue_code: Mapped[str | None] = mapped_column(String(32))
+    base_title: Mapped[str | None] = mapped_column(String(200))
+    base_credits_ects: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
+    base_grade: Mapped[str | None] = mapped_column(String(4))
+    base_grade_source: Mapped[str | None] = mapped_column(String(24))
+    source_observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    scenario: Mapped[SimulationScenario] = relationship(back_populates="entries")
 
 
 class Event(Base):
