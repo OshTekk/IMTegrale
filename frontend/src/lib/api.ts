@@ -76,7 +76,12 @@ async function request<T>(
       : typeof structured?.message === "string"
         ? structured.message
         : `Erreur HTTP ${response.status}`;
-    if (response.status === 401 && !path.includes("/auth/login") && unauthorizedEvent) {
+    if (
+      response.status === 401
+      && !path.includes("/auth/login")
+      && path !== "/api/v1/auth/pass/reconnect"
+      && unauthorizedEvent
+    ) {
       window.dispatchEvent(new CustomEvent(unauthorizedEvent));
     }
     throw new ApiError(detail, response.status, {

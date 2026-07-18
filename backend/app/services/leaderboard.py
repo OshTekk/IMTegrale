@@ -14,10 +14,12 @@ from app.calculations import grade_for_average, grade_from_code
 from app.database import utcnow
 from app.models import Account, LeaderboardProfile, Note, UeSetting
 
-LEADERBOARD_CONSENT_VERSION = "2026-07-17.3"
-LEADERBOARD_RULES_VERSION = "2026-07-18.2"
+LEADERBOARD_CONSENT_VERSION = "2026-07-18.4"
+LEADERBOARD_RULES_VERSION = "2026-07-18.3"
 LEADERBOARD_RULES_UPDATED_AT = "2026-07-18"
 LEADERBOARD_WAIT = timedelta(hours=48)
+LEADERBOARD_REFRESH_GRACE = timedelta(hours=72)
+LEADERBOARD_HARD_STALE_AFTER = timedelta(days=30)
 
 CAMPUSES = frozenset({"rennes", "brest", "nantes", "other"})
 COHORTS = frozenset({"1a", "2a", "3a", "higher", "atypical"})
@@ -413,6 +415,7 @@ def _reset_participation_for_reconsent(
     profile.consent_at = None
     profile.score_ects_basis = None
     profile.score_basis_updated_at = None
+    profile.refresh_recommended_at = None
     profile.updated_at = now
 
 
@@ -430,6 +433,7 @@ def reconcile_participating_leaderboard_basis(db: Session, account: Account) -> 
         return "withdrawn"
     profile.score_ects_basis = basis
     profile.score_basis_updated_at = account.ue_metadata_refreshed_at
+    profile.refresh_recommended_at = None
     profile.updated_at = now
     return "refreshed"
 
@@ -457,9 +461,37 @@ def rules_view() -> dict:
             "ECTS manuels ou issus d'une ancienne génération COMPETENCES",
         ],
         "ties": "Rang dense : un score identique reçoit le même rang",
-        "freshness": "Recalcul à chaque lecture à partir du dernier état synchronisé",
-        "public_fields": ["rank", "official_name", "score", "is_self"],
+        "freshness": (
+            "La date de dernière synchronisation réussie et son état sont publics ; "
+            "un profil trop ancien reste visible sans rang actif"
+        ),
+        "public_fields": [
+            "rank",
+            "official_name",
+            "score",
+            "verified_at",
+            "freshness",
+            "is_self",
+        ],
     }
+
+
+def leaderboard_freshness(
+    account: Account,
+    profile: LeaderboardProfile,
+    *,
+    now: datetime | None = None,
+) -> tuple[str, datetime | None]:
+    current = ensure_utc(now or utcnow())
+    verified_at = ensure_utc(account.last_successful_sync_at)
+    if verified_at is None or verified_at + LEADERBOARD_HARD_STALE_AFTER <= current:
+        return "stale", verified_at
+    recommended_at = ensure_utc(profile.refresh_recommended_at)
+    if recommended_at is None or recommended_at <= verified_at:
+        return "current", verified_at
+    if recommended_at + LEADERBOARD_REFRESH_GRACE <= current:
+        return "stale", verified_at
+    return "recommended", verified_at
 
 
 def _state_for(account: Account, profile: LeaderboardProfile | None, now: datetime) -> str:
@@ -523,6 +555,12 @@ def _profile_view(account: Account, profile: LeaderboardProfile | None, score: L
             "left_at": profile.left_at if profile else None,
             "rejoin_after": profile.rejoin_after if profile else None,
             "verification_status": profile.verification_status if profile else "standard",
+            "freshness": (
+                leaderboard_freshness(account, profile, now=now)[0]
+                if profile
+                else "stale"
+            ),
+            "verified_at": account.last_successful_sync_at,
         },
         "eligibility": {
             "eligible": not missing,
@@ -626,7 +664,12 @@ def board_view(
         and accounts[profile.account_id].promotion_year == viewer.promotion_year
     ]
     scores = _scores_for_profiles(db, selected)
-    sortable: list[tuple[float, tuple[str, str], LeaderboardProfile]] = []
+    sortable: list[
+        tuple[float, tuple[str, str], LeaderboardProfile, str, datetime | None]
+    ] = []
+    unranked: list[
+        tuple[tuple[str, str], float, LeaderboardProfile, str, datetime | None]
+    ] = []
     for profile in selected:
         score = scores[profile.account_id]
         value = score.gpa if metric == "gpa" else score.average
@@ -634,22 +677,22 @@ def board_view(
         name = official_name(account)
         if not score.eligible or value is None or name is None:
             continue
-        sortable.append(
-            (
-                value,
-                (
-                    unicodedata.normalize("NFKD", account.official_last_name or "").casefold(),
-                    unicodedata.normalize("NFKD", account.official_first_name or "").casefold(),
-                ),
-                profile,
-            )
+        sort_name = (
+            unicodedata.normalize("NFKD", account.official_last_name or "").casefold(),
+            unicodedata.normalize("NFKD", account.official_first_name or "").casefold(),
         )
+        freshness, verified_at = leaderboard_freshness(account, profile, now=now)
+        if freshness == "stale":
+            unranked.append((sort_name, value, profile, freshness, verified_at))
+        else:
+            sortable.append((value, sort_name, profile, freshness, verified_at))
     sortable.sort(key=lambda item: (-item[0], item[1]))
+    unranked.sort(key=lambda item: item[0])
 
     entries: list[dict] = []
     previous_score: float | None = None
     dense_rank = 0
-    for value, _sort_name, profile in sortable:
+    for value, _sort_name, profile, freshness, verified_at in sortable:
         if previous_score is None or value != previous_score:
             dense_rank += 1
             previous_score = value
@@ -658,6 +701,19 @@ def board_view(
                 "rank": dense_rank,
                 "official_name": official_name(accounts[profile.account_id]),
                 "score": value,
+                "verified_at": verified_at,
+                "freshness": freshness,
+                "is_self": profile.account_id == viewer.id,
+            }
+        )
+    for _sort_name, value, profile, freshness, verified_at in unranked:
+        entries.append(
+            {
+                "rank": None,
+                "official_name": official_name(accounts[profile.account_id]),
+                "score": value,
+                "verified_at": verified_at,
+                "freshness": freshness,
                 "is_self": profile.account_id == viewer.id,
             }
         )
@@ -772,6 +828,7 @@ def join_leaderboard(
     profile.verification_status = "review" if account.classification_review_required else "standard"
     profile.score_ects_basis = basis
     profile.score_basis_updated_at = account.ue_metadata_refreshed_at
+    profile.refresh_recommended_at = None
     profile.updated_at = now
 
 
@@ -821,6 +878,7 @@ def delete_leaderboard_data(
     profile.verification_status = "standard"
     profile.score_ects_basis = None
     profile.score_basis_updated_at = None
+    profile.refresh_recommended_at = None
     profile.suspended_at = None
     profile.suspended_reason = None
     profile.rejoin_after = None

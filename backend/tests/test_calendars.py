@@ -89,7 +89,6 @@ def test_feed_url_validation_is_exact_and_account_bound() -> None:
     account = Account(
         imt_username="calendar@imt-atlantique.fr",
         display_name="Calendar",
-        encrypted_imt_password="encrypted",
     )
     validated = calendar_feed.validate_feed_url(VALID_URL, account)
 
@@ -332,7 +331,6 @@ def test_connect_limit_is_hourly_per_account() -> None:
     account = Account(
         imt_username="calendar@imt-atlantique.fr",
         display_name="Calendar",
-        encrypted_imt_password="encrypted",
     )
     with SessionLocal() as db:
         db.add(account)
@@ -359,12 +357,10 @@ def test_calendar_url_digest_is_unique_across_accounts() -> None:
     first = Account(
         imt_username="calendar@imt-atlantique.fr",
         display_name="Calendar",
-        encrypted_imt_password="encrypted",
     )
     second = Account(
         imt_username="second@imt-atlantique.fr",
         display_name="Second",
-        encrypted_imt_password="encrypted",
     )
     with SessionLocal() as db:
         db.add_all((first, second))

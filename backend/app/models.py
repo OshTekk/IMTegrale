@@ -18,6 +18,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -46,7 +47,6 @@ class Account(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     imt_username: Mapped[str] = mapped_column(String(160))
     display_name: Mapped[str] = mapped_column(String(120))
-    encrypted_imt_password: Mapped[str] = mapped_column(Text)
     encrypted_telegram_token: Mapped[str | None] = mapped_column(Text)
     encrypted_telegram_chat_id: Mapped[str | None] = mapped_column(Text)
     telegram_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -54,8 +54,8 @@ class Account(Base):
     telegram_last_test_status: Mapped[str | None] = mapped_column(String(16))
     timezone: Mapped[str] = mapped_column(String(64), default="Europe/Paris")
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    credentials_updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_successful_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_sync_status: Mapped[str] = mapped_column(String(32), default="never")
     last_sync_error: Mapped[str | None] = mapped_column(Text)
     auto_sync_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -65,6 +65,8 @@ class Account(Base):
     auto_sync_no_change_streak: Mapped[int] = mapped_column(Integer, default=0)
     auto_sync_next_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     auto_sync_consented_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    auto_sync_paused_reason: Mapped[str | None] = mapped_column(String(32))
+    auto_sync_paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     sync_cooldown_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     sync_active_request_id: Mapped[str | None] = mapped_column(String(36))
     sync_active_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -97,6 +99,7 @@ class Account(Base):
     classification_review_required: Mapped[bool] = mapped_column(Boolean, default=False)
     last_note_change_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     security_setup_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    sync_setup_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
@@ -112,6 +115,9 @@ class Account(Base):
     )
     leaderboard_profile: Mapped[LeaderboardProfile | None] = relationship(
         back_populates="account", cascade="all, delete-orphan", uselist=False
+    )
+    pass_service_sessions: Mapped[list[PassServiceSession]] = relationship(
+        back_populates="account", cascade="all, delete-orphan"
     )
 
 
@@ -610,6 +616,52 @@ class PassOperation(Base):
     retry_after_seconds: Mapped[int | None] = mapped_column(Integer)
 
 
+class PassServiceSession(Base):
+    __tablename__ = "pass_service_sessions"
+    __table_args__ = (
+        Index(
+            "uq_pass_service_sessions_active_account",
+            "account_id",
+            unique=True,
+            postgresql_where=text("state = 'active'"),
+            sqlite_where=text("state = 'active'"),
+        ),
+        Index(
+            "ix_pass_service_sessions_account_state",
+            "account_id",
+            "state",
+        ),
+        Index("ix_pass_service_sessions_established_at", "established_at"),
+        Index("ix_pass_service_sessions_ended_at", "ended_at"),
+        CheckConstraint(
+            "state IN ('active', 'expired', 'revoked', 'invalid')",
+            name="ck_pass_service_sessions_state",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    account_id: Mapped[str] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), index=True
+    )
+    encrypted_cookie_jar: Mapped[str | None] = mapped_column(Text)
+    state: Mapped[str] = mapped_column(String(16), default="active")
+    established_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    pass_last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    hub_last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    hub_last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    end_reason: Mapped[str | None] = mapped_column(String(32))
+    reuse_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    account: Mapped[Account] = relationship(back_populates="pass_service_sessions")
+
+
 class PassDenial(Base):
     __tablename__ = "pass_denials"
     __table_args__ = (Index("ix_pass_denials_reason_created", "reason", "created_at"),)
@@ -772,6 +824,7 @@ class LeaderboardProfile(Base):
     verification_status: Mapped[str] = mapped_column(String(24), default="standard")
     score_ects_basis: Mapped[dict | None] = mapped_column(JSON(none_as_null=True))
     score_basis_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    refresh_recommended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     suspended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     suspended_reason: Mapped[str | None] = mapped_column(String(240))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

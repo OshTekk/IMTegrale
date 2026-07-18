@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import math
 import statistics
 import threading
@@ -9,6 +10,7 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+import requests
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.orm import Session
 
@@ -26,16 +28,30 @@ from app.models import (
 from app.services.imt import (
     CompetencyUe,
     ImtAuthenticationError,
+    ImtError,
     ImtNetworkError,
     ImtPassClient,
     ImtUpstreamError,
     PassEntry,
     PassProfile,
 )
+from app.services.pass_sessions import (
+    PassSessionRequired,
+    cleanup_service_session_history,
+    invalidate_service_session,
+    load_service_session,
+    owner_password_for,
+    refresh_service_session,
+    restore_service_cookies,
+    serialize_service_cookies,
+    service_session_metrics,
+    service_session_view,
+    store_service_session,
+)
 
 _COORDINATOR_LOCK = threading.RLock()
-_SESSION_LOCK = threading.RLock()
 _METRICS_RETENTION = timedelta(days=30)
+logger = logging.getLogger(__name__)
 
 
 def ensure_utc(value: datetime | None) -> datetime | None:
@@ -116,16 +132,9 @@ class GatewayResult:
     session_reused: bool
     full_sso_performed: bool
     profile_fetched: bool
-
-
-@dataclass(slots=True)
-class _CachedSession:
-    client: ImtPassClient
-    authenticated_at: datetime
-    credentials_updated_at: datetime | None
-
-
-_SESSIONS: dict[str, _CachedSession] = {}
+    session_snapshot: str
+    hub_attempted: bool
+    hub_succeeded: bool
 
 
 def _system_state(db: Session, *, for_update: bool = False) -> PassSystemState:
@@ -414,7 +423,7 @@ def _open_circuit(
 
 
 def _failure_metadata(exc: Exception) -> tuple[str, int | None, int | None]:
-    if isinstance(exc, ImtAuthenticationError):
+    if isinstance(exc, (ImtAuthenticationError, PassSessionRequired)):
         return "authentication", None, None
     if isinstance(exc, ImtUpstreamError):
         return "upstream", exc.status_code, exc.retry_after_seconds
@@ -553,59 +562,19 @@ def _ue_metadata_refresh_due(account: Account, now: datetime) -> bool:
     )
 
 
-def _cached_session(target_ref: str, credentials_updated_at: datetime | None) -> _CachedSession | None:
-    if get_settings().environment == "test":
-        return None
-    with _SESSION_LOCK:
-        cached = _SESSIONS.get(target_ref)
-        if cached is None:
-            return None
-        max_age = timedelta(hours=get_settings().pass_session_max_hours)
-        if ensure_utc(cached.authenticated_at) + max_age <= utcnow():
-            _SESSIONS.pop(target_ref, None)
-            return None
-        cached_credentials = ensure_utc(cached.credentials_updated_at)
-        current_credentials = ensure_utc(credentials_updated_at)
-        if cached_credentials != current_credentials:
-            _SESSIONS.pop(target_ref, None)
-            return None
-        return cached
+def _close_client_session(client: object) -> None:
+    session = getattr(client, "session", None)
+    close = getattr(session, "close", None)
+    if callable(close):
+        close()
 
 
-def _store_session(
-    target_ref: str,
-    client: ImtPassClient,
-    credentials_updated_at: datetime | None,
-) -> None:
-    if get_settings().environment == "test":
-        return
-    with _SESSION_LOCK:
-        previous = _SESSIONS.get(target_ref)
-        if previous is not None and previous.client is not client:
-            previous.client.session.close()
-        _SESSIONS[target_ref] = _CachedSession(
-            client=client,
-            authenticated_at=utcnow(),
-            credentials_updated_at=ensure_utc(credentials_updated_at),
-        )
-
-
-def bind_cached_credentials(username: str, credentials_updated_at: datetime) -> None:
-    target_ref = target_reference(username)
-    with _SESSION_LOCK:
-        cached = _SESSIONS.get(target_ref)
-        if cached is not None:
-            cached.credentials_updated_at = ensure_utc(credentials_updated_at)
-
-
-def purge_pass_session(*, username: str | None = None, target_ref: str | None = None) -> None:
-    resolved = target_ref or (target_reference(username or "") if username else None)
-    if resolved is None:
-        return
-    with _SESSION_LOCK:
-        cached = _SESSIONS.pop(resolved, None)
-        if cached is not None:
-            cached.client.session.close()
+def _has_secure_service_cookie(client: ImtPassClient, host: str) -> bool:
+    return any(
+        cookie.secure
+        and (cookie.domain or "").lstrip(".").casefold() == host
+        for cookie in client.session.cookies
+    )
 
 
 def perform_login_operation(
@@ -613,7 +582,6 @@ def perform_login_operation(
     username: str,
     password: str,
     account_id: str | None,
-    credentials_updated_at: datetime | None,
     raw_client_identity: str,
     initial_import: bool,
 ) -> GatewayResult:
@@ -634,26 +602,64 @@ def perform_login_operation(
     )
     client = ImtPassClient(timeout_seconds=get_settings().imt_timeout_seconds)
     entries: list[PassEntry] = []
+    request_count = 0
     try:
         if get_settings().environment == "test":
             client.include_profile_on_fetch = initial_import
             client.include_competencies_on_fetch = initial_import
-            fetched = client.fetch_entries(username, password)
+            try:
+                fetched = client.fetch_entries(username, password)
+            finally:
+                request_count += client.request_count
             entries = fetched if initial_import else []
         else:
-            client.authenticate(username, password)
+            try:
+                client.authenticate(username, password)
+            finally:
+                request_count += client.request_count
             if initial_import:
-                entries = client.fetch_entries_authenticated(
-                    include_profile=True,
-                    include_competencies=True,
-                    competency_credentials=(username, password),
-                )
-        _store_session(target_ref, client, credentials_updated_at)
+                try:
+                    entries = client.fetch_entries_authenticated(
+                        include_profile=True,
+                        include_competencies=True,
+                        competency_credentials=(username, password),
+                    )
+                finally:
+                    request_count += client.request_count
+            else:
+                try:
+                    try:
+                        client.prime_competency_session(username, password)
+                    except (ImtError, requests.RequestException) as exc:
+                        logger.warning(
+                            "HUB session could not be renewed after PASS login: %s",
+                            type(exc).__name__,
+                        )
+                finally:
+                    request_count += client.request_count
+        if get_settings().environment == "test" and not any(
+            (cookie.domain or "").lstrip(".").casefold()
+            == "pass.imt-atlantique.fr"
+            for cookie in client.session.cookies
+        ):
+            client.session.cookies.set(
+                "botnote-test-session",
+                "opaque-test-value",
+                domain="pass.imt-atlantique.fr",
+                path="/",
+                secure=True,
+            )
+        session_snapshot = serialize_service_cookies(client.session)
+        hub_attempted = bool(getattr(client, "last_competency_attempted", False))
+        hub_succeeded = bool(
+            getattr(client, "last_competency_succeeded", False)
+            and _has_secure_service_cookie(client, "hub.imt-atlantique.fr")
+        )
         record_auth_outcome(target_ref=target_ref, client_ref=client_ref, outcome="success")
         complete_pass_operation(
             lease,
             success=True,
-            request_count=client.request_count,
+            request_count=request_count,
             session_reused=False,
             full_sso_performed=True,
             profile_fetched=initial_import and client.last_profile is not None,
@@ -663,31 +669,35 @@ def perform_login_operation(
             entries=entries,
             profile=client.last_profile if initial_import else None,
             competency_ues=client.last_competency_ues if initial_import else None,
-            request_count=client.request_count,
+            request_count=request_count,
             session_reused=False,
             full_sso_performed=True,
             profile_fetched=initial_import and client.last_profile is not None,
+            session_snapshot=session_snapshot,
+            hub_attempted=hub_attempted,
+            hub_succeeded=hub_succeeded,
         )
     except Exception as exc:
-        purge_pass_session(target_ref=target_ref)
         outcome = "invalid" if isinstance(exc, ImtAuthenticationError) else "upstream"
         record_auth_outcome(target_ref=target_ref, client_ref=client_ref, outcome=outcome)
         complete_pass_operation(
             lease,
             success=False,
-            request_count=client.request_count,
+            request_count=request_count,
             session_reused=False,
             full_sso_performed=True,
             profile_fetched=False,
             error=exc,
         )
         raise
+    finally:
+        _close_client_session(client)
 
 
 def perform_sync_operation(
     *,
+    db: Session,
     account: Account,
-    password: str,
     actor: str,
     quota_bypass: bool = False,
     bypass_reason: str | None = None,
@@ -697,6 +707,10 @@ def perform_sync_operation(
     target_ref = target_reference(account.imt_username)
     profile_due = _profile_refresh_due(account, now)
     metadata_due = _ue_metadata_refresh_due(account, now)
+    stored = load_service_session(account.id)
+    owner_password = owner_password_for(account)
+    if stored is None and owner_password is None:
+        raise PassSessionRequired()
     lease = reserve_pass_operation(
         account_id=account.id,
         target_ref=target_ref,
@@ -710,36 +724,75 @@ def perform_sync_operation(
         enforce_fairness=actor not in {"automatic", "admin"},
         now=now,
     )
-    cached = _cached_session(target_ref, account.credentials_updated_at)
-    client = cached.client if cached is not None else ImtPassClient(
-        timeout_seconds=get_settings().imt_timeout_seconds
-    )
+    client = ImtPassClient(timeout_seconds=get_settings().imt_timeout_seconds)
+    if stored is not None:
+        restore_service_cookies(client.session, stored.snapshot)
+        client.authenticated = True
     request_count = 0
-    session_reused = cached is not None
-    full_sso = cached is None
+    current_client_counted = False
+    session_reused = stored is not None
+    full_sso = stored is None
     try:
-        if cached is not None:
+        if stored is not None:
             try:
-                entries = client.fetch_entries_authenticated(
-                    include_profile=profile_due,
-                    include_competencies=metadata_due,
-                    competency_credentials=(account.imt_username, password) if metadata_due else None,
-                )
-            except ImtAuthenticationError:
+                if get_settings().environment == "test":
+                    client.include_profile_on_fetch = profile_due
+                    client.include_competencies_on_fetch = metadata_due
+                    entries = client.fetch_entries(
+                        account.imt_username,
+                        "test-service-session",
+                    )
+                else:
+                    entries = client.fetch_entries_authenticated(
+                        include_profile=profile_due,
+                        include_competencies=metadata_due,
+                        competency_credentials=None,
+                    )
+            except ImtAuthenticationError as exc:
                 request_count += client.request_count
-                purge_pass_session(target_ref=target_ref)
+                current_client_counted = True
+                invalidate_service_session(
+                    stored.id,
+                    state="expired",
+                    reason="upstream_expired",
+                )
+                if owner_password is None:
+                    raise PassSessionRequired() from exc
+                _close_client_session(client)
                 client = ImtPassClient(timeout_seconds=get_settings().imt_timeout_seconds)
+                current_client_counted = False
                 client.include_profile_on_fetch = profile_due
                 client.include_competencies_on_fetch = metadata_due
-                entries = client.fetch_entries(account.imt_username, password)
+                entries = client.fetch_entries(account.imt_username, owner_password)
                 session_reused = False
                 full_sso = True
         else:
             client.include_profile_on_fetch = profile_due
             client.include_competencies_on_fetch = metadata_due
-            entries = client.fetch_entries(account.imt_username, password)
+            entries = client.fetch_entries(account.imt_username, owner_password or "")
         request_count += client.request_count
-        _store_session(target_ref, client, account.credentials_updated_at)
+        current_client_counted = True
+        session_snapshot = serialize_service_cookies(client.session)
+        hub_attempted = bool(getattr(client, "last_competency_attempted", False))
+        hub_succeeded = bool(
+            getattr(client, "last_competency_succeeded", False)
+            and _has_secure_service_cookie(client, "hub.imt-atlantique.fr")
+        )
+        if stored is not None and session_reused:
+            refresh_service_session(
+                stored.id,
+                session_snapshot,
+                hub_attempted=hub_attempted,
+                hub_succeeded=hub_succeeded,
+            )
+        else:
+            store_service_session(
+                db,
+                account,
+                session_snapshot,
+                hub_attempted=hub_attempted,
+                hub_succeeded=hub_succeeded,
+            )
         complete_pass_operation(
             lease,
             success=True,
@@ -757,11 +810,13 @@ def perform_sync_operation(
             session_reused=session_reused,
             full_sso_performed=full_sso,
             profile_fetched=profile_due and client.last_profile is not None,
+            session_snapshot=session_snapshot,
+            hub_attempted=hub_attempted,
+            hub_succeeded=hub_succeeded,
         )
     except Exception as exc:
-        request_count += client.request_count
-        if isinstance(exc, ImtAuthenticationError):
-            purge_pass_session(target_ref=target_ref)
+        if not current_client_counted:
+            request_count += client.request_count
         complete_pass_operation(
             lease,
             success=False,
@@ -772,6 +827,8 @@ def perform_sync_operation(
             error=exc,
         )
         raise
+    finally:
+        _close_client_session(client)
 
 
 def pass_status_view(db: Session, account: Account | None = None) -> dict:
@@ -816,6 +873,7 @@ def pass_status_view(db: Session, account: Account | None = None) -> dict:
             "refreshed_at": account.profile_refreshed_at,
             "refresh_due": _profile_refresh_due(account, now),
         }
+        result["service_session"] = service_session_view(db, account)
     return result
 
 
@@ -870,6 +928,7 @@ def metrics_view(db: Session, *, hours: int) -> dict:
         ),
         "denials": dict(denial_counts),
         "circuit": pass_status_view(db)["circuit"],
+        "service_sessions": service_session_metrics(db, hours=hours),
     }
 
 
@@ -903,3 +962,4 @@ def cleanup_operational_data() -> None:
         )
         db.execute(delete(WebAuthnChallenge).where(WebAuthnChallenge.expires_at < utcnow()))
         db.commit()
+    cleanup_service_session_history()

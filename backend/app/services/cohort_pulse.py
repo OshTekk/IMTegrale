@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.database import utcnow
-from app.models import Account, CohortPulse
+from app.models import Account, CohortPulse, LeaderboardProfile
 from app.services.sync_schedule import next_business_time
 
 PULSE_COOLDOWN = timedelta(hours=2)
@@ -70,6 +70,7 @@ def emit_cohort_pulse(
                 Account.promotion_year == source.promotion_year,
                 Account.auto_sync_enabled.is_(True),
                 Account.auto_sync_consented_at.is_not(None),
+                Account.auto_sync_paused_reason.is_(None),
                 Account.auto_sync_adaptive.is_(True),
                 Account.is_disabled.is_(False),
             )
@@ -91,5 +92,19 @@ def emit_cohort_pulse(
         )
         existing = ensure_utc(account.auto_sync_next_at)
         account.auto_sync_next_at = min(existing, candidate) if existing else candidate
+    leaderboard_profiles = db.scalars(
+        select(LeaderboardProfile)
+        .join(Account, Account.id == LeaderboardProfile.account_id)
+        .where(
+            LeaderboardProfile.account_id != source.id,
+            LeaderboardProfile.is_participating.is_(True),
+            Account.program == source.program,
+            Account.promotion_year == source.promotion_year,
+            Account.is_disabled.is_(False),
+        )
+    )
+    for profile in leaderboard_profiles:
+        profile.refresh_recommended_at = current
+        profile.updated_at = current
     pulse.affected_accounts = len(candidates)
     return len(candidates)

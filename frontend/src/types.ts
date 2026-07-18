@@ -7,6 +7,7 @@ export interface Session {
   role?: Role;
   auth_method?: "imt" | "token" | "passkey";
   needs_security_setup?: boolean;
+  needs_sync_setup?: boolean;
   account?: {
     id: string;
     display_name: string;
@@ -57,7 +58,7 @@ export interface EventItem {
 }
 
 export interface ManualSyncStatus {
-  state: "available" | "cooldown" | "in_progress" | "pass_unavailable";
+  state: "available" | "cooldown" | "in_progress" | "pass_unavailable" | "reauth_required";
   can_start: boolean;
   cooldown_seconds: number;
   retry_after_seconds: number;
@@ -92,6 +93,21 @@ export interface PassAccessStatus {
     retry_after_seconds: number;
   };
   profile?: { refreshed_at: string | null; refresh_due: boolean };
+  service_session: ServiceSessionStatus;
+}
+
+export interface ServiceSessionStatus {
+  state: "active" | "reauth_required" | "owner_managed";
+  reauth_required: boolean;
+  beta: true;
+  retention_days: number;
+  established_at: string | null;
+  expires_at: string | null;
+  last_used_at: string | null;
+  pass_last_success_at: string | null;
+  hub_state: "unknown" | "ready" | "degraded";
+  hub_last_attempt_at: string | null;
+  hub_last_success_at: string | null;
 }
 
 export interface SyncStartResponse {
@@ -496,7 +512,6 @@ export interface SettingsView {
     display_name: string;
     imt_username: string | null;
     timezone: string;
-    credentials_updated_at: string | null;
     campus: Campus;
     campus_source: string;
     profile_refreshed_at: string | null;
@@ -522,6 +537,8 @@ export interface SettingsView {
     current_interval_hours: 2 | 4 | 6 | 8 | 12 | 24;
     no_change_streak: number;
     consented_at: string | null;
+    paused_reason: "reauth_required" | null;
+    paused_at: string | null;
     next_eligible_at: string | null;
     allowed_intervals: Array<2 | 4 | 6 | 8 | 12 | 24>;
     business_hours: {
@@ -531,11 +548,13 @@ export interface SettingsView {
       timezone: string;
     };
     pass_access: PassAccessStatus;
+    service_session: ServiceSessionStatus;
   };
   access: {
     role: Role;
     auth_method: "imt" | "token" | "passkey";
     security_setup_completed: boolean;
+    sync_setup_completed: boolean;
     passkey_count: number;
   };
 }
@@ -545,9 +564,11 @@ export type Cohort = "1a" | "2a" | "3a" | "higher" | "atypical" | "unknown";
 export type LeaderboardMetric = "gpa" | "average";
 
 export interface LeaderboardEntry {
-  rank: number;
+  rank: number | null;
   official_name: string;
   score: number;
+  verified_at: string | null;
+  freshness: "current" | "recommended" | "stale";
   is_self: boolean;
 }
 
@@ -578,6 +599,8 @@ export interface LeaderboardView {
     left_at: string | null;
     rejoin_after: string | null;
     verification_status: "standard" | "review" | "suspended";
+    freshness: "current" | "recommended" | "stale";
+    verified_at: string | null;
   };
   eligibility: {
     eligible: boolean;
@@ -644,10 +667,13 @@ export interface AdminAccount {
   auto_sync_interval_hours: 2 | 4 | 6 | 8 | 12 | 24;
   auto_sync_adaptive: boolean;
   auto_sync_current_interval_hours: 2 | 4 | 6 | 8 | 12 | 24;
+  auto_sync_paused_reason: "reauth_required" | null;
+  auto_sync_paused_at: string | null;
   created_at: string;
   session_count: number;
   active_token_count: number;
   passkey_count: number;
+  pass_session: ServiceSessionStatus;
   tokens: AdminToken[];
   leaderboard: {
     state: LeaderboardView["state"];
@@ -714,6 +740,29 @@ export interface AdminPassMetrics {
   errors: Record<string, number>;
   denials: Record<string, number>;
   circuit: PassAccessStatus["circuit"];
+  service_sessions: {
+    window_hours: number;
+    active: number;
+    reauth_required: number;
+    hub_ready: number;
+    established: number;
+    completed: number;
+    completed_duration_hours: { median: number | null; longest: number | null };
+    survival: Record<"24h" | "3d" | "7d" | "30d", {
+      eligible: number;
+      survived: number;
+      rate: number | null;
+    }>;
+    end_reasons: Record<string, number>;
+  };
+}
+
+export interface AdminPassSession extends ServiceSessionStatus {
+  account_id: string;
+  display_name: string;
+  imt_username: string;
+  auto_sync_enabled: boolean;
+  auto_sync_paused_reason: "reauth_required" | null;
 }
 
 export interface AdminAccountsView {

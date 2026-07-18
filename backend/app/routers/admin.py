@@ -60,8 +60,12 @@ from app.services.leaderboard import (
 from app.services.pass_gateway import (
     metrics_view,
     pass_status_view,
-    purge_pass_session,
     target_reference,
+)
+from app.services.pass_sessions import (
+    purge_account_service_sessions,
+    service_session_admin_rows,
+    service_session_view,
 )
 from app.services.sync import SyncAlreadyRunning, account_sync_lock, run_sync_background
 from app.services.sync_control import (
@@ -225,6 +229,7 @@ def _account_counts(
 
 
 def _account_view(
+    db: Session,
     account: Account,
     profile: LeaderboardProfile | None,
     session_counts: dict[str, int],
@@ -246,10 +251,13 @@ def _account_view(
         "auto_sync_interval_hours": account.auto_sync_interval_hours,
         "auto_sync_adaptive": account.auto_sync_adaptive,
         "auto_sync_current_interval_hours": account.auto_sync_current_interval_hours,
+        "auto_sync_paused_reason": account.auto_sync_paused_reason,
+        "auto_sync_paused_at": account.auto_sync_paused_at,
         "created_at": account.created_at,
         "session_count": session_counts.get(account.id, 0),
         "active_token_count": token_counts.get(account.id, 0),
         "passkey_count": passkey_counts.get(account.id, 0),
+        "pass_session": service_session_view(db, account),
         "tokens": [
             {
                 "id": token.id,
@@ -311,6 +319,7 @@ def _all_account_views(db: Session) -> list[dict]:
     session_counts, token_counts, passkey_counts = _account_counts(db)
     return [
         _account_view(
+            db,
             account,
             profiles.get(account.id),
             session_counts,
@@ -337,6 +346,7 @@ def _single_account_view(
         )
     )
     return _account_view(
+        db,
         account,
         profile if profile is not None else db.get(LeaderboardProfile, account.id),
         session_counts,
@@ -402,6 +412,7 @@ def manage_account(
         "leaderboard_suspend",
         "leaderboard_refresh_score_basis",
         "auth_clear_cooldown",
+        "pass_session_revoke",
     } and not reason:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Un motif est requis")
 
@@ -415,7 +426,10 @@ def manage_account(
             .where(ShareToken.account_id == account.id, ShareToken.revoked_at.is_(None))
             .values(revoked_at=now)
         )
-        purge_pass_session(username=account.imt_username)
+        purge_account_service_sessions(db, account.id, reason="account_disabled")
+        account.auto_sync_paused_reason = "reauth_required"
+        account.auto_sync_paused_at = now
+        account.auto_sync_next_at = None
     elif payload.action == "enable":
         account.is_disabled = False
         account.disabled_at = None
@@ -430,7 +444,10 @@ def manage_account(
         db.execute(
             delete(PasskeyCredential).where(PasskeyCredential.account_id == account.id)
         )
-        purge_pass_session(username=account.imt_username)
+        purge_account_service_sessions(db, account.id, reason="access_revoked")
+        account.auto_sync_paused_reason = "reauth_required"
+        account.auto_sync_paused_at = now
+        account.auto_sync_next_at = None
     elif payload.action == "leaderboard_suspend":
         if profile is None:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Aucun profil leaderboard")
@@ -476,6 +493,11 @@ def manage_account(
         clear_target_cooldown(db, target_reference(account.imt_username))
     elif payload.action == "profile_refresh":
         account.profile_refresh_requested_at = now
+    elif payload.action == "pass_session_revoke":
+        purge_account_service_sessions(db, account.id, reason="admin_revoked")
+        account.auto_sync_paused_reason = "reauth_required"
+        account.auto_sync_paused_at = now
+        account.auto_sync_next_at = None
 
     record_admin_audit(
         db,
@@ -555,6 +577,11 @@ def queue_account_sync(
     account = _get_account(db, account_id)
     if account.is_disabled:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Le compte est désactivé")
+    if service_session_view(db, account)["reauth_required"]:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Une reconnexion IMT de l'étudiant est requise avant cette synchronisation.",
+        )
     try:
         reservation = reserve_sync_request(
             account.id,
@@ -627,6 +654,14 @@ def get_pass_metrics(
     return metrics_view(db, hours=hours)
 
 
+@router.get("/pass/sessions")
+def get_pass_sessions(
+    _auth: AdminAuthContext = Depends(require_admin_ready),
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    return service_session_admin_rows(db)
+
+
 @router.post("/pass/probe", status_code=status.HTTP_202_ACCEPTED)
 def probe_pass(
     payload: AdminPassProbe,
@@ -638,6 +673,11 @@ def probe_pass(
     account = _get_account(db, payload.account_id)
     if account.is_disabled:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Le compte est désactivé")
+    if service_session_view(db, account)["reauth_required"]:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Une reconnexion IMT de l'étudiant est requise avant cette sonde.",
+        )
     try:
         reservation = reserve_sync_request(
             account.id,
@@ -717,7 +757,7 @@ def delete_account(
     account_snapshot = {"id": account.id, "display_name": account.display_name}
     try:
         with account_sync_lock(account.id):
-            purge_pass_session(username=account.imt_username)
+            purge_account_service_sessions(db, account.id, reason="account_deleted")
             record_admin_audit(
                 db,
                 auth=auth,

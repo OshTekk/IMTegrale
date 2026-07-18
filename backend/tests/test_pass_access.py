@@ -4,9 +4,10 @@ import json
 from datetime import timedelta
 
 import pytest
+import requests
 from app.config import get_settings
 from app.database import SessionLocal, utcnow
-from app.models import Account, PassDenial, PassOperation
+from app.models import Account, PassDenial, PassOperation, PassServiceSession
 from app.services import pass_gateway
 from app.services.imt import ImtAuthenticationError, ImtUpstreamError, PassEntry, PassProfile
 from app.services.pass_gateway import (
@@ -18,6 +19,11 @@ from app.services.pass_gateway import (
     reserve_pass_operation,
     target_reference,
 )
+from app.services.pass_sessions import (
+    PassSessionRequired,
+    serialize_service_cookies,
+    store_service_session,
+)
 from sqlalchemy import func, select
 
 
@@ -26,7 +32,6 @@ def create_account(username: str = "pass-access@imt-atlantique.fr") -> Account:
         account = Account(
             imt_username=username,
             display_name="PASS Access",
-            encrypted_imt_password="encrypted",
         )
         db.add(account)
         db.commit()
@@ -217,7 +222,6 @@ def test_failed_login_quota_is_scoped_to_client_not_claimed_account(monkeypatch)
             username=username,
             password="wrong",
             account_id=None,
-            credentials_updated_at=None,
             raw_client_identity=identity,
             initial_import=True,
         )
@@ -229,17 +233,12 @@ def test_failed_login_quota_is_scoped_to_client_not_claimed_account(monkeypatch)
         assert operation.target_ref != target_reference(username)
 
 
-class FakeSession:
-    def close(self) -> None:
-        return None
-
-
 class FakePassClient:
     instances: list[FakePassClient] = []
 
     def __init__(self, *, timeout_seconds: int) -> None:
         self.timeout_seconds = timeout_seconds
-        self.session = FakeSession()
+        self.session = requests.Session()
         self.request_count = 0
         self.last_profile: PassProfile | None = None
         self.last_competency_ues = None
@@ -265,7 +264,7 @@ class FakePassClient:
         include_competencies: bool,
         competency_credentials: tuple[str, str] | None,
     ) -> list[PassEntry]:
-        assert (competency_credentials is not None) is include_competencies
+        assert competency_credentials is None
         self.request_count = 2
         self.last_profile = (
             PassProfile(
@@ -281,68 +280,104 @@ class FakePassClient:
         return [PassEntry("SIT130", "Examen", 15, 1, False)]
 
 
-def test_sync_reuses_memory_only_sso_session(monkeypatch) -> None:
+def seed_service_session(account: Account) -> None:
+    source = requests.Session()
+    source.cookies.set(
+        "ASP.NET_SessionId",
+        "opaque-session-value",
+        domain="pass.imt-atlantique.fr",
+        path="/",
+        secure=True,
+    )
+    try:
+        snapshot = serialize_service_cookies(source)
+    finally:
+        source.close()
+    with SessionLocal() as db:
+        managed = db.get(Account, account.id)
+        assert managed is not None
+        store_service_session(
+            db,
+            managed,
+            snapshot,
+            hub_attempted=True,
+            hub_succeeded=True,
+        )
+        db.commit()
+
+
+def test_sync_reuses_encrypted_session_across_clients(monkeypatch) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "environment", "production")
     monkeypatch.setattr(pass_gateway, "ImtPassClient", FakePassClient)
     FakePassClient.instances.clear()
-    pass_gateway._SESSIONS.clear()
     account = create_account("reuse@imt-atlantique.fr")
+    seed_service_session(account)
 
-    first = pass_gateway.perform_sync_operation(
-        account=account,
-        password="secret",
-        actor="owner",
-    )
-    second = pass_gateway.perform_sync_operation(
-        account=account,
-        password="secret",
-        actor="owner",
-    )
+    with SessionLocal() as db:
+        managed = db.get(Account, account.id)
+        assert managed is not None
+        first = pass_gateway.perform_sync_operation(db=db, account=managed, actor="owner")
+    with SessionLocal() as db:
+        managed = db.get(Account, account.id)
+        assert managed is not None
+        second = pass_gateway.perform_sync_operation(db=db, account=managed, actor="owner")
 
-    assert first.session_reused is False
-    assert first.full_sso_performed is True
+    assert first.session_reused is True
+    assert first.full_sso_performed is False
     assert second.session_reused is True
     assert second.full_sso_performed is False
-    assert len(FakePassClient.instances) == 1
-    pass_gateway.purge_pass_session(username=account.imt_username)
+    assert len(FakePassClient.instances) == 2
+    with SessionLocal() as db:
+        stored = db.scalar(
+            select(PassServiceSession).where(
+                PassServiceSession.account_id == account.id,
+                PassServiceSession.state == "active",
+            )
+        )
+        assert stored is not None
+        assert stored.reuse_count == 2
+        assert "opaque-session-value" not in (stored.encrypted_cookie_jar or "")
 
 
-def test_expired_cached_session_performs_one_full_authentication_fallback(monkeypatch) -> None:
+def test_rejected_session_requires_reauthentication_without_password_fallback(monkeypatch) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "environment", "production")
     monkeypatch.setattr(pass_gateway, "ImtPassClient", FakePassClient)
     FakePassClient.instances.clear()
-    pass_gateway._SESSIONS.clear()
     account = create_account("fallback@imt-atlantique.fr")
-    pass_gateway.perform_sync_operation(account=account, password="secret", actor="owner")
-
-    cached = FakePassClient.instances[0]
+    seed_service_session(account)
 
     def expired(
+        self: FakePassClient,
         *,
         include_profile: bool,
         include_competencies: bool,
         competency_credentials: tuple[str, str] | None,
     ) -> list[PassEntry]:
-        cached.request_count = 1
+        self.request_count = 1
         raise ImtAuthenticationError(
             f"expired include_profile={include_profile} "
             f"include_competencies={include_competencies} "
             f"has_competency_credentials={competency_credentials is not None}"
         )
 
-    monkeypatch.setattr(cached, "fetch_entries_authenticated", expired)
-    result = pass_gateway.perform_sync_operation(
-        account=account,
-        password="secret",
-        actor="owner",
-    )
+    monkeypatch.setattr(FakePassClient, "fetch_entries_authenticated", expired)
+    with SessionLocal() as db:
+        managed = db.get(Account, account.id)
+        assert managed is not None
+        with pytest.raises(PassSessionRequired):
+            pass_gateway.perform_sync_operation(db=db, account=managed, actor="owner")
 
-    assert result.session_reused is False
-    assert result.full_sso_performed is True
-    assert len(FakePassClient.instances) == 2
-    pass_gateway.purge_pass_session(username=account.imt_username)
+    assert len(FakePassClient.instances) == 1
+    with SessionLocal() as db:
+        stored = db.scalar(
+            select(PassServiceSession).where(PassServiceSession.account_id == account.id)
+        )
+        assert stored is not None
+        assert stored.state == "expired"
+        assert stored.end_reason == "upstream_expired"
+        assert stored.encrypted_cookie_jar is None
 
 
 def test_metrics_are_aggregate_and_do_not_expose_raw_identity() -> None:

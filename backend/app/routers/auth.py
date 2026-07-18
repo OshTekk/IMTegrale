@@ -16,11 +16,11 @@ from app.schemas import (
     ImtLoginRequest,
     PasskeyAuthenticationVerify,
     PasskeyRegistrationVerify,
+    PassReconnectRequest,
     TokenLoginRequest,
 )
 from app.security import (
     AuthContext,
-    cipher_for,
     cleanup_sessions,
     clear_session_cookies,
     client_identity,
@@ -44,9 +44,9 @@ from app.services.imt import ImtAuthenticationError, ImtFetchError
 from app.services.pass_gateway import (
     PassAccessRejected,
     attach_operation_account,
-    bind_cached_credentials,
     perform_login_operation,
 )
+from app.services.pass_sessions import service_session_view, store_service_session
 from app.services.passkeys import (
     PasskeyError,
     authenticate_passkey,
@@ -69,6 +69,7 @@ def _session_payload(auth: AuthContext) -> dict:
         "role": auth.role,
         "auth_method": auth.session.auth_method,
         "needs_security_setup": auth.account.security_setup_completed_at is None,
+        "needs_sync_setup": auth.account.sync_setup_completed_at is None,
         "account": {
             "id": auth.account.id,
             "display_name": auth.account.display_name,
@@ -142,9 +143,6 @@ async def login_imt(
             username=payload.username,
             password=payload.password,
             account_id=account.id if account is not None else None,
-            credentials_updated_at=(
-                account.credentials_updated_at if account is not None else None
-            ),
             raw_client_identity=client_identity(request, settings),
             initial_import=is_new,
         )
@@ -177,19 +175,9 @@ async def login_imt(
             id=account_id,
             imt_username=payload.username,
             display_name=payload.username.split("@", 1)[0],
-            encrypted_imt_password=cipher_for(settings).encrypt(
-                payload.password,
-                context=f"imt-password:{account_id}",
-            ),
         )
         db.add(account)
         db.flush()
-    else:
-        account.encrypted_imt_password = cipher_for(settings).encrypt(
-            payload.password,
-            context=f"imt-password:{account.id}",
-        )
-        account.credentials_updated_at = utcnow()
 
     account.last_login_at = utcnow()
     if is_new:
@@ -203,6 +191,13 @@ async def login_imt(
         )
         apply_pass_profile(account, gateway.profile)
         apply_competency_ues(db, account, gateway.competency_ues, actor="owner")
+    store_service_session(
+        db,
+        account,
+        gateway.session_snapshot,
+        hub_attempted=gateway.hub_attempted,
+        hub_succeeded=gateway.hub_succeeded,
+    )
     cleanup_sessions(db)
     web_session, session_token, csrf_token = create_web_session(
         db,
@@ -215,7 +210,6 @@ async def login_imt(
     record_event(db, account_id=account.id, kind="auth:login", actor="owner", payload={"method": "imt"})
     db.commit()
     attach_operation_account(gateway.operation_id, account.id)
-    bind_cached_credentials(account.imt_username, account.credentials_updated_at)
     login_rate_limiter.reset(limiter_key)
     if target_key:
         login_target_rate_limiter.reset(target_key)
@@ -223,6 +217,73 @@ async def login_imt(
     response = JSONResponse(_session_payload(AuthContext(account=account, session=web_session)))
     set_session_cookies(response, session_token, csrf_token, settings)
     return response
+
+
+@router.post("/pass/reconnect")
+async def reconnect_pass(
+    payload: PassReconnectRequest,
+    request: Request,
+    auth: AuthContext = Depends(require_owner_action),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    limiter_key, target_key = _check_login_limits(
+        request,
+        "pass-reconnect",
+        auth.account.imt_username,
+        settings,
+    )
+    try:
+        gateway = await run_in_threadpool(
+            perform_login_operation,
+            username=auth.account.imt_username,
+            password=payload.password,
+            account_id=auth.account.id,
+            raw_client_identity=client_identity(request, settings),
+            initial_import=False,
+        )
+    except AuthProtectionRejected as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=exc.detail(),
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        ) from exc
+    except PassAccessRejected as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=exc.detail(),
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        ) from exc
+    except ImtAuthenticationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Le mot de passe IMT n'a pas permis de renouveler la session.",
+        ) from exc
+    except ImtFetchError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="La reconnexion à PASS est indisponible pour le moment.",
+        ) from exc
+
+    store_service_session(
+        db,
+        auth.account,
+        gateway.session_snapshot,
+        hub_attempted=gateway.hub_attempted,
+        hub_succeeded=gateway.hub_succeeded,
+    )
+    record_event(
+        db,
+        account_id=auth.account.id,
+        kind="pass_session:renewed",
+        actor=auth.actor,
+        payload={"beta": True},
+    )
+    db.commit()
+    login_rate_limiter.reset(limiter_key)
+    if target_key:
+        login_target_rate_limiter.reset(target_key)
+    return {"ok": True, "service_session": service_session_view(db, auth.account)}
 
 
 @router.post("/login/token")

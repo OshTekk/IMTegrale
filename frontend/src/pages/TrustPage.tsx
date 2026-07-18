@@ -17,7 +17,7 @@ import { GitHubMark } from "../components/GitHubMark";
 
 const guarantees = [
   { icon: ShieldCheck, title: "Transport HTTPS", text: "Le navigateur vérifie un certificat public valide. Les cookies de session sont Secure, HttpOnly et SameSite=Strict." },
-  { icon: LockKeyhole, title: "Secrets chiffrés", text: "Le mot de passe IMT et le token Telegram sont chiffrés en AES-256-GCM avec une clé conservée hors de PostgreSQL." },
+  { icon: LockKeyhole, title: "Secrets minimisés", text: "Le mot de passe IMT n'est pas stocké. La session PASS/HUB et le token Telegram sont chiffrés en AES-256-GCM avec une clé hors de PostgreSQL." },
   { icon: Database, title: "Données cloisonnées", text: "Chaque note, UE, session, token et événement est rattaché à un compte et filtré côté serveur." },
   { icon: RefreshCw, title: "PASS protégé", text: "Les synchronisations sont consenties, sérialisées, limitées par heure et par jour, puis suspendues automatiquement si PASS devient instable." },
 ];
@@ -38,7 +38,7 @@ export function TrustPage() {
       <section className="trust-flow" aria-label="Chemin d'une première connexion">
         <header><span className="section-kicker">Première connexion</span><h2>Un trajet court, puis des choix explicites</h2></header>
         <div className="trust-flow-line">
-          <article><span><Fingerprint size={20} /></span><strong>Ton navigateur</strong><small>Envoie l'identifiant en HTTPS</small></article>
+          <article><span><Fingerprint size={20} /></span><strong>Ton navigateur</strong><small>Envoie les identifiants une fois, en HTTPS</small></article>
           <i><ArrowRight size={18} /></i>
           <article><span><Server size={20} /></span><strong>IMTégrale</strong><small>Applique quotas et protection anti-abus</small></article>
           <i><ArrowRight size={18} /></i>
@@ -56,12 +56,12 @@ export function TrustPage() {
         <article>
           <span className="section-kicker">Après l'inscription</span>
           <h2>Se reconnecter ne déclenche pas de scraping</h2>
-          <p>Une connexion IMT ultérieure vérifie uniquement le compte. Une synchronisation manuelle reste une action séparée ; l'automatisation est désactivée tant que tu ne l'as pas autorisée.</p>
+          <p>Une connexion IMT ultérieure vérifie le compte et renouvelle sa session technique, sans importer les notes. Une synchronisation manuelle reste une action séparée ; l'automatisation est désactivée tant que tu ne l'as pas autorisée.</p>
           <div className="trust-methods"><span><Fingerprint size={17} /> Passkey recommandée</span><span><KeyRound size={17} /> Token personnel révocable</span></div>
         </article>
         <article className="trust-limit">
           <span><ShieldAlert size={21} /></span>
-          <div><span className="section-kicker">Limite importante</span><h2>Le chiffrement n'annule pas la confiance serveur</h2><p>Le worker doit pouvoir relire le mot de passe pour synchroniser PASS. Une compromission complète du serveur et de sa clé maître permettrait donc de le déchiffrer. Aucune interface sérieuse ne doit présenter cela comme l'équivalent d'OAuth.</p></div>
+          <div><span className="section-kicker">Limite importante</span><h2>Une session active reste une capacité d'accès</h2><p>Le worker doit pouvoir déchiffrer la session PASS/HUB pour synchroniser. Une compromission complète du serveur et de sa clé permettrait donc de l'utiliser tant qu'elle reste acceptée par l'IMT. Elle est révocable, limitée localement à 30 jours et ne permet pas de retrouver le mot de passe.</p></div>
         </article>
       </section>
 

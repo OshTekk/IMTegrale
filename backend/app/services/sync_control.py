@@ -453,6 +453,9 @@ def manual_sync_view(
     from app.services.pass_gateway import pass_status_view
 
     pass_access = pass_status_view(db, account)
+    if state != "in_progress" and pass_access["service_session"]["reauth_required"]:
+        state = "reauth_required"
+        available_at = None
     pass_retry = max(
         pass_access["retry_after_seconds"],
         pass_access["quota"]["retry_after_seconds"],

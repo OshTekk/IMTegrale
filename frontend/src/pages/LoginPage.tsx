@@ -62,7 +62,7 @@ export function LoginPage() {
           <p>Notes PASS, moyenne pondérée par ECTS et GPA réunis dans un espace personnel sécurisé.</p>
           <div className="security-points">
             <span><ShieldCheck size={18} /> Données séparées par compte</span>
-            <span><LockKeyhole size={18} /> Secrets chiffrés sur le serveur</span>
+            <span><LockKeyhole size={18} /> Session PASS/HUB chiffrée</span>
           </div>
           <SourceNotice />
           <div className="login-public-links">

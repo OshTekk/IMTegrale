@@ -35,7 +35,7 @@ export function SecuritySetupModal({ open, onComplete }: { open: boolean; onComp
   });
 
   return (
-    <Modal open={open} title="Sécuriser tes prochaines connexions" description="Choisis une ou plusieurs méthodes, ou continue simplement avec ton compte IMT." onClose={() => undefined} size="large" className="security-setup-modal">
+    <Modal open={open} title="Sécuriser tes prochaines connexions" description="Choisis une ou plusieurs méthodes, ou continue simplement avec ton compte IMT." onClose={() => undefined} size="large" className="security-setup-modal" dismissible={false}>
       <div className="security-setup-scroll">
         <div className="security-setup-options">
           <section className="security-method recommended">

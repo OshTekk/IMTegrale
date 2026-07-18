@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     imt_timeout_seconds: int = 30
     pass_operation_lease_seconds: int = Field(default=180, ge=60, le=600)
     pass_quiet_period_seconds: int = Field(default=60, ge=0, le=600)
-    pass_session_max_hours: int = Field(default=24, ge=1, le=24)
+    pass_session_max_days: int = Field(default=30, ge=1, le=30)
     pass_profile_refresh_days: int = Field(default=30, ge=1, le=90)
     pass_hourly_quota: int = Field(default=3, ge=1, le=12)
     pass_daily_quota: int = Field(default=8, ge=1, le=48)
@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     database_pool_size: int = Field(default=10, ge=1, le=50)
     database_max_overflow: int = Field(default=10, ge=0, le=50)
     database_pool_timeout_seconds: int = Field(default=10, ge=1, le=60)
+    owner_imt_username: str = ""
+    owner_imt_password_file: Path | None = None
 
     @field_validator("allowed_hosts", "trusted_proxy_ips", "admin_allowed_identities", mode="before")
     @classmethod
@@ -58,6 +60,11 @@ class Settings(BaseSettings):
     @classmethod
     def clean_origin(cls, value: str) -> str:
         return value.rstrip("/")
+
+    @field_validator("owner_imt_username")
+    @classmethod
+    def clean_owner_username(cls, value: str) -> str:
+        return value.strip().casefold()
 
     def validate_secrets(self) -> None:
         if self.environment == "test":

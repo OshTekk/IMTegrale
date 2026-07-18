@@ -9,9 +9,10 @@ interface ModalProps {
   children: ReactNode;
   size?: "small" | "medium" | "large";
   className?: string;
+  dismissible?: boolean;
 }
 
-export function Modal({ open, title, description, onClose, children, size = "medium", className }: ModalProps) {
+export function Modal({ open, title, description, onClose, children, size = "medium", className, dismissible = true }: ModalProps) {
   const titleId = useId();
   const descriptionId = useId();
   const dialogRef = useRef<HTMLElement>(null);
@@ -21,7 +22,7 @@ export function Modal({ open, title, description, onClose, children, size = "med
     if (!open) return;
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const handleKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && dismissible) {
         event.preventDefault();
         closeRef.current();
         return;
@@ -55,18 +56,18 @@ export function Modal({ open, title, description, onClose, children, size = "med
       document.body.classList.remove("modal-open");
       previousFocus?.focus();
     };
-  }, [open]);
+  }, [dismissible, open]);
 
   if (!open) return null;
   return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <div className="modal-backdrop" role="presentation" onMouseDown={(event) => dismissible && event.target === event.currentTarget && onClose()}>
       <section ref={dialogRef} className={`modal modal-${size}${className ? ` ${className}` : ""}`} role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={description ? descriptionId : undefined} tabIndex={-1}>
         <header className="modal-header">
           <div>
             <h2 id={titleId}>{title}</h2>
             {description && <p id={descriptionId}>{description}</p>}
           </div>
-          <button className="icon-button" type="button" onClick={onClose} aria-label="Fermer"><X size={19} /></button>
+          {dismissible && <button className="icon-button" type="button" onClick={onClose} aria-label="Fermer"><X size={19} /></button>}
         </header>
         {children}
       </section>

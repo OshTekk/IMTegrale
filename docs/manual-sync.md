@@ -20,6 +20,7 @@ Les refus sont structurés :
 
 - `429 SYNC_COOLDOWN` avec `Retry-After`, `retry_after_seconds`, `available_at` et `server_time` lorsque le délai court encore ;
 - `409 SYNC_IN_PROGRESS` avec le reliquat du bail lorsqu'une demande est déjà active ;
+- `409 SYNC_REAUTH_REQUIRED` sans réservation ni appel réseau lorsque la session PASS/HUB n'est plus disponible ;
 - `422 SYNC_INVALID_IDEMPOTENCY_KEY` lorsque la clé est invalide.
 - `429 PASS_ACCOUNT_QUOTA` lorsque le budget glissant du compte est atteint ;
 - `429 PASS_QUIET_PERIOD` pendant le repos global ;
@@ -32,6 +33,8 @@ Le compte à rebours de l'interface est seulement une projection accessible de l
 La réservation atomique en base précède le lancement du worker. Un verrou fichier par compte reste une seconde barrière pendant l'accès à PASS. La demande possède un bail de `900` secondes : une réservation active dont le bail a expiré est marquée `failed` avec le code `SYNC_WORKER_LOST`, puis le compte peut être réservé à nouveau.
 
 Les résultats finaux sont `succeeded`, `failed` ou `skipped`. Une réponse PASS partielle ou invalide est rejetée avant toute écriture de notes. Les erreurs persistées et journalisées utilisent uniquement des codes sûrs ; ni identifiant IMT, ni secret, ni contenu de note ne figure dans les logs de contrôle. Les identités de compte et de connexion utilisées par les protections sont des références HMAC non réversibles.
+
+Une synchronisation publique réutilise uniquement la session PASS/HUB chiffrée créée lors de la dernière authentification. Aucun mot de passe IMT n'est stocké ni utilisé en secours. Si PASS refuse cette session, son ciphertext est supprimé avant de renvoyer `SYNC_REAUTH_REQUIRED`; l'utilisateur doit alors renouveler volontairement la session, puis relancer sa synchronisation.
 
 Les cent dernières demandes terminales par compte sont conservées. Les métriques minimales d'exploitation se déduisent des statuts, acteurs, dates d'acceptation et d'achèvement, ainsi que des événements `sync:accepted`, `sync:rejected_cooldown`, `sync:completed` et `sync:error`.
 

@@ -36,6 +36,9 @@ export function manualSyncMessage(
   remaining: number
 ): string {
   if (!status) return "Vérification de la disponibilité";
+  if (status.state === "reauth_required") {
+    return "Reconnexion IMT requise avant la prochaine synchronisation";
+  }
   if (status.state === "in_progress") return "Synchronisation en cours";
   if (status.state === "cooldown") {
     return remaining > 0

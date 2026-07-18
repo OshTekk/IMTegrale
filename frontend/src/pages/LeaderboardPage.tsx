@@ -63,6 +63,12 @@ function scoreLabel(metric: LeaderboardMetric, value: number) {
   return metric === "gpa" ? `${formatNumber(value)} / 4` : `${formatNumber(value)} / 20`;
 }
 
+const FRESHNESS_LABELS: Record<LeaderboardView["profile"]["freshness"], string> = {
+  current: "À jour",
+  recommended: "Actualisation conseillée",
+  stale: "À actualiser",
+};
+
 function RulesModal({ view, open, onClose }: { view: LeaderboardView; open: boolean; onClose: () => void }) {
   return (
     <Modal
@@ -77,7 +83,7 @@ function RulesModal({ view, open, onClose }: { view: LeaderboardView; open: bool
         <section><span><ShieldCheck size={18} /></span><div><strong>Données académiques officielles</strong><p>La dernière génération complète COMPETENCES fournit les ECTS et, lorsqu'il existe, le grade. Un grade absent est calculé depuis les notes brutes PASS.</p></div></section>
         <section><span><Clock3 size={18} /></span><div><strong>Délai anti-consultation opportuniste</strong><p>Ton profil devient visible dès l'activation, mais tu n'accèdes au classement qu'après {view.rules.wait_hours} heures. Tu peux retirer ta participation à tout moment.</p></div></section>
         <section><span><Scale size={18} /></span><div><strong>Égalités</strong><p>{view.rules.ties}. Les deux métriques produisent deux classements indépendants.</p></div></section>
-        <section><span><ShieldCheck size={18} /></span><div><strong>Classement nominatif</strong><p>Le prénom et le nom officiels PASS, le rang et le score figurent dans chaque ligne. Le cursus et la promotion définissent le segment ; le campus sert uniquement de filtre.</p></div></section>
+        <section><span><ShieldCheck size={18} /></span><div><strong>Classement nominatif</strong><p>Le prénom et le nom officiels PASS, le rang, le score, la date de vérification et l'état de fraîcheur figurent dans chaque ligne. Le cursus et la promotion définissent le segment ; le campus sert uniquement de filtre.</p></div></section>
         <section className="rules-exclusions"><span><EyeOff size={18} /></span><div><strong>Jamais comptabilisé</strong><ul>{view.rules.excluded.map((item) => <li key={item}>{item}</li>)}</ul></div></section>
       </div>
       <footer className="modal-actions"><button className="primary-button" type="button" onClick={onClose}>Compris</button></footer>
@@ -243,7 +249,7 @@ function ActiveLeaderboard({
 
       <section className="leaderboard-board">
         <header>
-          <div><span className="section-kicker">{view.profile.program} {view.profile.promotion_year} · {metric === "gpa" ? "GPA" : "moyenne générale"}</span><h2>{board?.participant_count ?? 0} participant{board?.participant_count === 1 ? "" : "s"}</h2><p>Notes PASS pondérées par les ECTS officiels COMPETENCES, actualisées à chaque consultation.</p></div>
+          <div><span className="section-kicker">{view.profile.program} {view.profile.promotion_year} · {metric === "gpa" ? "GPA" : "moyenne générale"}</span><h2>{board?.participant_count ?? 0} participant{board?.participant_count === 1 ? "" : "s"}</h2><p>Notes PASS pondérées par les ECTS officiels COMPETENCES, avec fraîcheur visible pour chaque profil.</p></div>
           <div className="board-actions"><button className="icon-button" type="button" onClick={onRules} aria-label="Voir les règles" title="Règles"><Info size={18} /></button><button className="icon-button" type="button" onClick={onManage} aria-label="Gérer ma participation" title="Confidentialité"><ShieldCheck size={18} /></button></div>
         </header>
         {board?.entries.length ? (
@@ -251,9 +257,9 @@ function ActiveLeaderboard({
             <table className="leaderboard-table">
               <thead><tr><th>Rang</th><th>Identité PASS</th><th>{metric === "gpa" ? "GPA" : "Moyenne"}</th></tr></thead>
               <tbody>{board.entries.map((entry, index) => (
-                <tr key={`${entry.rank}-${entry.official_name}-${index}`} className={entry.is_self ? "is-self" : ""}>
-                  <td><span className={`rank-mark rank-${entry.rank <= 3 ? entry.rank : "other"}`} aria-label={`Rang ${entry.rank}`}>{entry.rank}</span></td>
-                  <td><strong>{entry.official_name}</strong>{entry.is_self && <span className="self-pill">Toi</span>}</td>
+                <tr key={`${entry.rank ?? "stale"}-${entry.official_name}-${index}`} className={`${entry.is_self ? "is-self " : ""}${entry.freshness === "stale" ? "is-stale" : ""}`.trim()}>
+                  <td><span className={`rank-mark rank-${entry.rank !== null && entry.rank <= 3 ? entry.rank : "other"}`} aria-label={entry.rank === null ? "Rang suspendu jusqu'à actualisation" : `Rang ${entry.rank}`}>{entry.rank ?? "—"}</span></td>
+                  <td><strong>{entry.official_name}</strong>{entry.is_self && <span className="self-pill">Toi</span>}<small className="leaderboard-verification">Vérifié le {entry.verified_at ? formatDate(entry.verified_at, false) : "—"}<span className={`freshness-state freshness-${entry.freshness}`}><i />{FRESHNESS_LABELS[entry.freshness]}</span></small></td>
                   <td><strong>{scoreLabel(metric, entry.score)}</strong></td>
                 </tr>
               ))}</tbody>
@@ -262,7 +268,7 @@ function ActiveLeaderboard({
         ) : (
           <EmptyState icon={<Users size={20} />} title="Aucun participant pour ces filtres" detail="Le classement accepte aussi un seul participant. Modifie simplement les filtres pour retrouver les autres profils actifs." />
         )}
-        <footer><span><ShieldCheck size={14} /> Campus et classification masqués dans les résultats</span><span>Calculé {formatDate(board?.calculated_at)}</span></footer>
+        <footer><span><ShieldCheck size={14} /> Un profil à actualiser reste visible sans rang actif</span><span>Calculé {formatDate(board?.calculated_at)}</span></footer>
       </section>
     </>
   );

@@ -28,7 +28,7 @@ La section est visible par défaut, mais aucun classement, rang ou compteur n'es
 À l'activation :
 
 1. son prénom, son nom, son campus, son cursus et sa promotion officiels PASS doivent être disponibles ;
-2. elle accepte explicitement la publication immédiate de son identité nominative et de ses deux scores auprès des participants déjà actifs ;
+2. elle accepte explicitement la publication immédiate de son identité nominative, de ses deux scores, de sa date de dernière synchronisation réussie et de son état de fraîcheur auprès des participants déjà actifs ;
 3. elle ne reçoit elle-même aucune donnée du classement pendant 48 heures ;
 4. après 48 heures, elle accède aux deux classements et à leurs filtres ;
 5. le retrait et l'effacement restent disponibles immédiatement, y compris pendant le délai initial.
@@ -42,9 +42,13 @@ La réponse publique d'une ligne est limitée à :
   "rank": 1,
   "official_name": "Camille Dupont",
   "score": 3.8,
+  "verified_at": "2026-07-18T17:30:00Z",
+  "freshness": "current",
   "is_self": false
 }
 ```
+
+La fraîcheur vaut `current` après une synchronisation réussie. Lorsqu'une nouvelle note est détectée pour un autre participant du même cursus et de la même promotion, les profils concernés passent en `recommended` pendant une grâce de 72 heures, puis en `stale` s'ils ne se sont pas actualisés. Une vérification vieille de 30 jours devient également `stale`. Le profil reste alors visible pour respecter le consentement de publication, mais son rang devient `null` et il est placé après les profils classés. Le nombre d'UE et les ECTS ne sont jamais publiés dans une ligne.
 
 ## Administration
 
@@ -58,9 +62,9 @@ Le portail `/admin` n'est référencé dans aucune navigation étudiante. Son AP
 
 Une requête depuis le LAN ou une autre identité reçoit `404`, y compris pour l'état de session. Les actions sensibles exigent un motif lorsque nécessaire et sont enregistrées dans `admin_audit_logs`, limité aux 10 000 entrées les plus récentes.
 
-Le portail permet de désactiver/réactiver un compte, révoquer sessions, tokens et passkeys, supprimer un token ciblé, déclencher une synchronisation PASS motivée, relire la fiche PASS, lever un cooldown d'authentification, corriger explicitement campus/cursus/promotion, actualiser avec motif les ECTS utilisés par le classement, suspendre/restaurer/retirer une publication, lever le délai de consultation initial, effacer les données leaderboard et supprimer définitivement un compte. Les suppressions irréversibles exigent un motif et la confirmation littérale `SUPPRIMER`.
+Le portail permet de désactiver/réactiver un compte, révoquer sessions web, session PASS/HUB, tokens et passkeys, supprimer un token ciblé, déclencher une synchronisation PASS motivée, relire la fiche PASS, lever un cooldown d'authentification, corriger explicitement campus/cursus/promotion, actualiser avec motif les ECTS utilisés par le classement, suspendre/restaurer/retirer une publication, lever le délai de consultation initial, effacer les données leaderboard et supprimer définitivement un compte. Les suppressions irréversibles exigent un motif et la confirmation littérale `SUPPRIMER`.
 
-La section PASS de l'administration expose uniquement des agrégats sur 24 heures, 7 jours ou 30 jours : volumes, requêtes réelles, latences, réutilisation SSO, lectures de profil, refus et classes d'erreur. Les références HMAC et identifiants internes ne sont jamais renvoyés. Une sonde contrôlée exige un compte et un motif audité.
+La section PASS de l'administration expose des agrégats sur 24 heures, 7 jours ou 30 jours : volumes, requêtes réelles, latences, réutilisation SSO, lectures de profil, refus et classes d'erreur. Un observatoire privé liste aussi, pour le support, l'état de session de chaque compte, son échéance, sa dernière utilisation et la santé PASS/HUB, sans mot de passe ni valeur de cookie. Les références HMAC ne sont jamais renvoyées. Une sonde contrôlée exige un compte et un motif audité.
 
 ## Exploitation
 

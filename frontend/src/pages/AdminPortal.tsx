@@ -12,6 +12,7 @@ import {
   Eye,
   EyeOff,
   FileClock,
+  FlaskConical,
   Gauge,
   Info,
   KeyRound,
@@ -41,6 +42,7 @@ import type {
   AdminAccount,
   AdminAccountsView,
   AdminPassMetrics,
+  AdminPassSession,
   AdminSession,
   AdminToken,
   Campus,
@@ -60,7 +62,8 @@ type AdminAction =
   | "leaderboard_delete_data"
   | "leaderboard_refresh_score_basis"
   | "auth_clear_cooldown"
-  | "profile_refresh";
+  | "profile_refresh"
+  | "pass_session_revoke";
 
 interface AuditItem {
   id: number;
@@ -90,6 +93,7 @@ const ACTIONS: Record<AdminAction, ActionDefinition> = {
   leaderboard_refresh_score_basis: { title: "Actualiser les coefficients du classement", description: "Recopie la dernière génération complète d'ECTS officiels COMPETENCES. Les valeurs manuelles restent exclues.", confirmation: "Actualiser", reasonRequired: true },
   auth_clear_cooldown: { title: "Lever le cooldown PASS", description: "Réinitialise exceptionnellement le délai de sécurité lié aux échecs de connexion de ce compte. La protection par adresse cliente reste active.", confirmation: "Lever le cooldown", reasonRequired: true },
   profile_refresh: { title: "Actualiser le profil officiel", description: "Le prénom, le nom, le campus, le cursus et la promotion seront relus sur PASS lors de la prochaine synchronisation autorisée.", confirmation: "Programmer l'actualisation" },
+  pass_session_revoke: { title: "Révoquer la session PASS/HUB", description: "Efface immédiatement les cookies techniques chiffrés. La synchronisation automatique sera mise en pause jusqu'à la prochaine connexion IMT de l'étudiant.", confirmation: "Révoquer la session", reasonRequired: true, dangerous: true },
 };
 
 const STATE_LABELS: Record<AdminAccount["leaderboard"]["state"], string> = {
@@ -258,6 +262,9 @@ function AccountDetail({
     : account.auto_sync_adaptive
       ? `Adaptative · ${account.auto_sync_current_interval_hours} h actuellement`
       : `Fixe · toutes les ${account.auto_sync_interval_hours} h`;
+  const displayedSyncMode = account.auto_sync_paused_reason === "reauth_required"
+    ? "En pause · reconnexion IMT requise"
+    : syncMode;
   return (
     <Modal open={open} title={account.display_name} description={account.imt_username} onClose={onClose} size="large">
       <div className="admin-account-detail">
@@ -265,7 +272,7 @@ function AccountDetail({
         <section className="admin-detail-summary">
           <div><span>Dernière connexion</span><strong>{formatDate(account.last_login_at)}</strong></div>
           <div><span>Accès actifs</span><strong>{account.session_count} session{account.session_count === 1 ? "" : "s"} · {account.active_token_count} token{account.active_token_count === 1 ? "" : "s"} · {account.passkey_count} passkey{account.passkey_count === 1 ? "" : "s"}</strong></div>
-          <div><span>Actualisation auto</span><strong>{syncMode}</strong></div>
+          <div><span>Actualisation auto</span><strong>{displayedSyncMode}</strong></div>
           <div><span>Création</span><strong>{formatDate(account.created_at)}</strong></div>
         </section>
         <section className="admin-detail-section">
@@ -274,6 +281,7 @@ function AccountDetail({
             <button className="secondary-button" type="button" onClick={onSync} disabled={pending || account.is_disabled} title="Contourne le cooldown utilisateur et conserve le verrou de concurrence"><RefreshCw size={16} /> Forcer la synchronisation</button>
             <button className="secondary-button" type="button" onClick={() => onAction("profile_refresh")} disabled={pending || account.is_disabled}><Signal size={16} /> Relire le profil PASS</button>
             <button className="secondary-button" type="button" onClick={() => onAction("auth_clear_cooldown")} disabled={pending || account.is_disabled}><Clock3 size={16} /> Lever le cooldown PASS</button>
+            <button className="secondary-button" type="button" onClick={() => onAction("pass_session_revoke")} disabled={pending || account.pass_session.reauth_required}><LockKeyhole size={16} /> Révoquer la session PASS</button>
             <button className="secondary-button" type="button" onClick={() => onAction("revoke_access")} disabled={pending}><KeyRound size={16} /> Révoquer les accès</button>
             <button className={account.is_disabled ? "secondary-button" : "danger-button armed"} type="button" onClick={() => onAction(account.is_disabled ? "enable" : "disable")} disabled={pending}>{account.is_disabled ? <UserRoundCheck size={16} /> : <Ban size={16} />}{account.is_disabled ? "Réactiver" : "Désactiver"}</button>
           </div>
@@ -382,7 +390,7 @@ function AuditLog({ items, pending }: { items: AuditItem[] | undefined; pending:
 }
 
 type MetricsWindow = "24h" | "7d" | "30d";
-type AdminPassStatus = Omit<PassAccessStatus, "quota" | "profile">;
+type AdminPassStatus = Omit<PassAccessStatus, "quota" | "profile" | "service_session">;
 
 const PASS_STATE_LABELS: Record<AdminPassStatus["state"], string> = {
   available: "Disponible",
@@ -414,6 +422,7 @@ function PassConsole({
   status,
   metrics,
   accounts,
+  sessions,
   window,
   onWindow,
   onRefresh,
@@ -423,6 +432,7 @@ function PassConsole({
   status: AdminPassStatus | undefined;
   metrics: AdminPassMetrics | undefined;
   accounts: AdminAccount[];
+  sessions: AdminPassSession[] | undefined;
   window: MetricsWindow;
   onWindow: (window: MetricsWindow) => void;
   onRefresh: () => void;
@@ -438,7 +448,7 @@ function PassConsole({
   return (
     <section className="admin-content-panel admin-pass-console">
       <header>
-        <div><h2>Accès PASS</h2><p>Supervision anonymisée et protection globale</p></div>
+        <div><h2>Accès PASS</h2><p>Métriques globales et suivi privé des sessions</p></div>
         <div className="admin-pass-header-actions">
           {status && <span className={`pass-state pass-state-${status.state}`}><i />{PASS_STATE_LABELS[status.state]}</span>}
           <button className="icon-button" type="button" onClick={onRefresh} aria-label="Actualiser la supervision PASS" title="Actualiser"><RefreshCw size={17} /></button>
@@ -449,7 +459,7 @@ function PassConsole({
         <div className="segmented-control" aria-label="Fenêtre de métriques">
           {(["24h", "7d", "30d"] as MetricsWindow[]).map((value) => <button key={value} type="button" className={window === value ? "active" : ""} onClick={() => onWindow(value)}>{value}</button>)}
         </div>
-        <span><LockKeyhole size={14} /> Conservation 30 jours · aucune identité stockée</span>
+        <span><LockKeyhole size={14} /> Conservation 30 jours · métriques globales anonymisées</span>
       </div>
       <div className="admin-pass-metrics" aria-label="Métriques PASS">
         <div><span><Activity size={18} /></span><strong>{metrics?.operations ?? 0}</strong><small>opérations</small></div>
@@ -457,6 +467,22 @@ function PassConsole({
         <div><span><Gauge size={18} /></span><strong>{Math.round((metrics?.session_reuse.hit_rate ?? 0) * 100)} %</strong><small>sessions réutilisées</small></div>
         <div><span><BarChart3 size={18} /></span><strong>{formatMilliseconds(metrics?.duration_ms.p95 ?? null)}</strong><small>durée p95</small></div>
       </div>
+      <section className="admin-service-session-observatory">
+        <header><div><h3>Sessions techniques PASS/HUB</h3><p>Mesure bêta de longévité, sans mot de passe ni valeur de cookie exposée.</p></div><span><FlaskConical size={15} /> Observation 30 jours</span></header>
+        <div className="admin-session-metrics">
+          <div><strong>{metrics?.service_sessions.active ?? 0}</strong><small>actives</small></div>
+          <div><strong>{metrics?.service_sessions.reauth_required ?? 0}</strong><small>reconnexions requises</small></div>
+          <div><strong>{metrics?.service_sessions.hub_ready ?? 0}</strong><small>HUB prêts</small></div>
+          <div><strong>{metrics?.service_sessions.survival["7d"].rate === null || metrics?.service_sessions.survival["7d"].rate === undefined ? "—" : `${Math.round(metrics.service_sessions.survival["7d"].rate * 100)} %`}</strong><small>survie à 7 jours</small></div>
+        </div>
+        <div className="admin-session-table-wrap">
+          <table className="admin-session-table">
+            <thead><tr><th>Compte</th><th>PASS</th><th>HUB</th><th>Dernière activité</th></tr></thead>
+            <tbody>{sessions?.map((item) => <tr key={item.account_id}><td><strong>{item.display_name}</strong><small>{item.imt_username}</small></td><td><span className={`admin-session-state state-${item.state}`}><i />{item.state === "active" ? "Active" : item.state === "owner_managed" ? "Propriétaire" : "À reconnecter"}</span></td><td>{item.hub_state === "ready" ? "Prêt" : item.hub_state === "degraded" ? "À rouvrir" : "Non observé"}</td><td>{formatDate(item.last_used_at)}</td></tr>)}</tbody>
+          </table>
+          {!sessions?.length && <p className="admin-pass-empty">Aucune session étudiante observée.</p>}
+        </div>
+      </section>
       <div className="admin-pass-detail-grid">
         <section>
           <h3>Performance</h3>
@@ -505,6 +531,7 @@ function AdminDashboard({ session, onLogout }: { session: AdminSession; onLogout
   const audit = useQuery({ queryKey: ["admin", "audit"], queryFn: () => adminApi<AuditItem[]>("/api/v1/admin/audit"), enabled: tab === "audit", staleTime: 5_000 });
   const passStatus = useQuery({ queryKey: ["admin", "pass", "status"], queryFn: () => adminApi<AdminPassStatus>("/api/v1/admin/pass/status"), enabled: tab === "pass", staleTime: 15_000, refetchInterval: tab === "pass" ? 30_000 : false });
   const passMetrics = useQuery({ queryKey: ["admin", "pass", "metrics", metricsWindow], queryFn: () => adminApi<AdminPassMetrics>(`/api/v1/admin/pass/metrics?window=${metricsWindow}`), enabled: tab === "pass", staleTime: 10_000 });
+  const passSessions = useQuery({ queryKey: ["admin", "pass", "sessions"], queryFn: () => adminApi<AdminPassSession[]>("/api/v1/admin/pass/sessions"), enabled: tab === "pass", staleTime: 10_000 });
   const selected = useMemo(() => accounts.data?.accounts.find((account) => account.id === selectedId) ?? null, [accounts.data, selectedId]);
   const refreshAccounts = (updated?: AdminAccount) => {
     if (updated) queryClient.setQueryData<AdminAccountsView>(accountsKey, (current) => current ? { ...current, accounts: current.accounts.map((account) => account.id === updated.id ? updated : account) } : current);
@@ -549,7 +576,7 @@ function AdminDashboard({ session, onLogout }: { session: AdminSession; onLogout
         <section className="admin-page-heading"><div><span className="section-kicker">Administration IMTégrale</span><h1>Comptes et publication</h1><p>Contrôles immédiats, corrections explicites et traçabilité complète.</p></div><span><Shield size={25} /></span></section>
         <AdminStats data={accounts.data} />
         <nav className="admin-tabs" aria-label="Sections du portail"><button className={tab === "accounts" ? "active" : ""} type="button" onClick={() => setTab("accounts")}><CircleUserRound size={17} /> Comptes</button><button className={tab === "pass" ? "active" : ""} type="button" onClick={() => setTab("pass")}><Activity size={17} /> PASS</button><button className={tab === "audit" ? "active" : ""} type="button" onClick={() => setTab("audit")}><FileClock size={17} /> Journal d'audit</button></nav>
-        {tab === "accounts" ? <section className="admin-content-panel"><header><div><h2>Comptes étudiants</h2><p>{accounts.data?.accounts.length ?? 0} résultat{accounts.data?.accounts.length === 1 ? "" : "s"}</p></div><label className="admin-search"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Nom ou identifiant IMT" aria-label="Rechercher un compte" /></label></header>{accounts.isPending ? <div className="skeleton admin-table-skeleton" /> : accounts.isError ? <div className="error-panel"><AlertTriangle size={20} /><div><h2>Chargement impossible</h2><p>{accounts.error.message}</p></div></div> : <AccountsTable accounts={accounts.data?.accounts ?? []} onSelect={(account) => setSelectedId(account.id)} />}</section> : tab === "pass" ? <PassConsole status={passStatus.data} metrics={passMetrics.data} accounts={accounts.data?.accounts ?? []} window={metricsWindow} onWindow={setMetricsWindow} onRefresh={() => { passStatus.refetch(); passMetrics.refetch(); }} onProbe={(accountId, reason) => probe.mutate({ accountId, reason })} pending={probe.isPending} /> : <section className="admin-content-panel"><header><div><h2>Journal d'audit</h2><p>100 dernières actions de la console.</p></div><button className="icon-button" type="button" onClick={() => audit.refetch()} aria-label="Actualiser"><RefreshCw size={17} /></button></header><AuditLog items={audit.data} pending={audit.isPending} /></section>}
+        {tab === "accounts" ? <section className="admin-content-panel"><header><div><h2>Comptes étudiants</h2><p>{accounts.data?.accounts.length ?? 0} résultat{accounts.data?.accounts.length === 1 ? "" : "s"}</p></div><label className="admin-search"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Nom ou identifiant IMT" aria-label="Rechercher un compte" /></label></header>{accounts.isPending ? <div className="skeleton admin-table-skeleton" /> : accounts.isError ? <div className="error-panel"><AlertTriangle size={20} /><div><h2>Chargement impossible</h2><p>{accounts.error.message}</p></div></div> : <AccountsTable accounts={accounts.data?.accounts ?? []} onSelect={(account) => setSelectedId(account.id)} />}</section> : tab === "pass" ? <PassConsole status={passStatus.data} metrics={passMetrics.data} sessions={passSessions.data} accounts={accounts.data?.accounts ?? []} window={metricsWindow} onWindow={setMetricsWindow} onRefresh={() => { passStatus.refetch(); passMetrics.refetch(); passSessions.refetch(); }} onProbe={(accountId, reason) => probe.mutate({ accountId, reason })} pending={probe.isPending} /> : <section className="admin-content-panel"><header><div><h2>Journal d'audit</h2><p>100 dernières actions de la console.</p></div><button className="icon-button" type="button" onClick={() => audit.refetch()} aria-label="Actualiser"><RefreshCw size={17} /></button></header><AuditLog items={audit.data} pending={audit.isPending} /></section>}
       </main>
       <AccountDetail account={selected} open={Boolean(selected)} onClose={() => setSelectedId(null)} onAction={setPendingAction} onSync={() => setSyncOpen(true)} onProfile={(value) => selected && profile.mutate({ accountId: selected.id, value })} onDeleteAccount={() => setDeleteTarget({ kind: "account" })} onDeleteToken={(token) => setDeleteTarget({ kind: "token", token })} pending={action.isPending || sync.isPending || profile.isPending || deleteToken.isPending || deleteAccount.isPending} />
       <ActionModal account={selected} action={pendingAction} open={Boolean(selected && pendingAction)} onClose={() => setPendingAction(null)} onConfirm={(reason) => selected && pendingAction && action.mutate({ accountId: selected.id, actionName: pendingAction, reason })} pending={action.isPending} />

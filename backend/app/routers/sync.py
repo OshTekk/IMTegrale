@@ -50,6 +50,16 @@ def start_sync(
     db: Session = Depends(get_db),
 ) -> dict:
     current_view = manual_sync_view(db, auth.account)
+    if current_view["state"] == "reauth_required":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "SYNC_REAUTH_REQUIRED",
+                "message": "Reconnecte ton compte IMT pour renouveler la session PASS.",
+                "retry_after_seconds": 0,
+                "server_time": utcnow().isoformat(),
+            },
+        )
     pass_access = current_view["pass_access"]
     if not pass_access["available"] or pass_access["quota"]["retry_after_seconds"]:
         retry_after = max(

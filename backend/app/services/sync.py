@@ -40,6 +40,7 @@ from app.services.leaderboard import (
     reconcile_participating_leaderboard_basis,
 )
 from app.services.pass_gateway import PassAccessRejected, perform_sync_operation
+from app.services.pass_sessions import PassSessionRequired
 from app.services.sync_control import (
     ACTIVE_SYNC_STATUSES,
     SYNC_LEASE_SECONDS,
@@ -243,6 +244,7 @@ def apply_pass_entries(
         },
     )
     account.last_sync_at = utcnow()
+    account.last_successful_sync_at = account.last_sync_at
     account.last_sync_status = "success"
     account.last_sync_error = None
     has_changes = bool(inserted or changed or archived_count)
@@ -405,6 +407,8 @@ def _notify_new_notes(db: Session, account: Account, inserted: list[Note]) -> No
 
 
 def _sync_error(exc: Exception) -> tuple[str, str]:
+    if isinstance(exc, PassSessionRequired):
+        return exc.code, exc.message
     if isinstance(exc, ImtAuthenticationError):
         return "SYNC_AUTHENTICATION_FAILED", "Les identifiants IMT ne sont plus valides."
     if isinstance(exc, ImtFetchError):
@@ -431,7 +435,11 @@ def _record_sync_failure(account_id: str, request_id: str, exc: Exception) -> No
         account.last_sync_at = now
         account.last_sync_status = "error"
         account.last_sync_error = public_message
-        if request.actor == "automatic":
+        if isinstance(exc, PassSessionRequired):
+            account.auto_sync_paused_reason = "reauth_required"
+            account.auto_sync_paused_at = now
+            account.auto_sync_next_at = None
+        elif request.actor == "automatic":
             defer_automatic_sync(account, now=now)
         finalize_sync_request(
             db,
@@ -579,14 +587,9 @@ def execute_sync_request(
                     "Actualisation automatique non autorisée ou non échue"
                 )
 
-            cipher = cipher_for()
-            password = cipher.decrypt(
-                account.encrypted_imt_password,
-                context=f"imt-password:{account.id}",
-            )
             gateway = perform_sync_operation(
+                db=db,
                 account=account,
-                password=password,
                 actor=request.actor,
                 quota_bypass=quota_bypass,
                 bypass_reason=bypass_reason,
@@ -620,6 +623,10 @@ def execute_sync_request(
             )
             if result["changed"]:
                 emit_cohort_pulse(db, account)
+            if account.leaderboard_profile is not None:
+                account.leaderboard_profile.refresh_recommended_at = None
+            account.auto_sync_paused_reason = None
+            account.auto_sync_paused_at = None
             db.commit()
             if notify:
                 try:

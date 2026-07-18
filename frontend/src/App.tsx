@@ -5,6 +5,7 @@ import { AppShell } from "./components/AppShell";
 import { Logo } from "./components/Logo";
 import { PublicLayout } from "./components/PublicLayout";
 import { SecuritySetupModal } from "./components/SecuritySetupModal";
+import { SyncSetupModal } from "./components/SyncSetupModal";
 import { SimulationLayout } from "./components/SimulationLayout";
 import { LoginPage } from "./pages/LoginPage";
 import { clearAccountState, queryKeys, replaceSessionState, useSession } from "./lib/queries";
@@ -164,6 +165,14 @@ function StudentApp() {
       </Routes>
       <SecuritySetupModal
         open={Boolean(isOwner && session.data.needs_security_setup)}
+        onComplete={() => queryClient.invalidateQueries({ queryKey: queryKeys.session })}
+      />
+      <SyncSetupModal
+        open={Boolean(
+          isOwner
+          && !session.data.needs_security_setup
+          && session.data.needs_sync_setup
+        )}
         onComplete={() => queryClient.invalidateQueries({ queryKey: queryKeys.session })}
       />
     </>

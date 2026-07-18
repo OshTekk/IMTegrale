@@ -43,7 +43,6 @@ def main() -> None:
     args = parser.parse_args()
 
     username = required_env("IMTA_USERNAME").lower()
-    password = required_env("IMTA_PASSWORD")
     telegram_token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
     telegram_chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
     source = sqlite3.connect(args.source)
@@ -57,18 +56,9 @@ def main() -> None:
                 id=account_id,
                 imt_username=username,
                 display_name=username.split("@", 1)[0],
-                encrypted_imt_password=cipher_for().encrypt(
-                    password,
-                    context=f"imt-password:{account_id}",
-                ),
             )
             db.add(account)
             db.flush()
-        else:
-            account.encrypted_imt_password = cipher_for().encrypt(
-                password,
-                context=f"imt-password:{account.id}",
-            )
 
         if telegram_token and telegram_chat_id:
             cipher = cipher_for()
@@ -163,7 +153,11 @@ def main() -> None:
             Event(
                 account_id=account.id,
                 kind="migration:completed",
-                payload={"notes": inserted_notes, "ues": inserted_ues},
+                payload={
+                    "notes": inserted_notes,
+                    "ues": inserted_ues,
+                    "imt_password_persisted": False,
+                },
                 actor="migration",
             )
         )

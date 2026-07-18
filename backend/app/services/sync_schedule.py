@@ -36,6 +36,7 @@ def auto_sync_is_due(account: Account, now: datetime | None = None) -> bool:
     if (
         not account.auto_sync_enabled
         or account.auto_sync_consented_at is None
+        or account.auto_sync_paused_reason is not None
         or account.is_disabled
         or not in_business_window(account, current)
     ):
@@ -61,7 +62,12 @@ def next_business_time(account: Account, candidate: datetime) -> datetime:
 
 
 def next_auto_sync_at(account: Account, now: datetime | None = None) -> datetime | None:
-    if not account.auto_sync_enabled or account.auto_sync_consented_at is None or account.is_disabled:
+    if (
+        not account.auto_sync_enabled
+        or account.auto_sync_consented_at is None
+        or account.auto_sync_paused_reason is not None
+        or account.is_disabled
+    ):
         return None
     current = ensure_utc(now or utcnow())
     if account.auto_sync_next_at is not None:
@@ -155,6 +161,8 @@ def auto_sync_view(account: Account) -> dict:
         "current_interval_hours": effective_auto_sync_interval(account),
         "no_change_streak": account.auto_sync_no_change_streak,
         "consented_at": account.auto_sync_consented_at,
+        "paused_reason": account.auto_sync_paused_reason,
+        "paused_at": account.auto_sync_paused_at,
         "next_eligible_at": next_auto_sync_at(account),
         "allowed_intervals": list(AUTO_SYNC_INTERVALS),
         "business_hours": {

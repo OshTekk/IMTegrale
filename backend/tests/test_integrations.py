@@ -357,6 +357,29 @@ def test_hub_sso_uses_current_credentials_when_cas_requests_login(monkeypatch) -
     assert captured == [("student", "secret")]
 
 
+def test_prime_competency_session_opens_sso_without_reading_results(monkeypatch) -> None:
+    client = ImtPassClient()
+    dashboard = fake_response(
+        url="https://hub.imt-atlantique.fr/comp2/etudiant/40419",
+        body=b"student dashboard",
+    )
+    calls: list[tuple[requests.Response, tuple[str, str] | None]] = []
+
+    monkeypatch.setattr(client, "_get", lambda url: dashboard if url == COMPETENCIES_HOME_URL else None)
+    monkeypatch.setattr(
+        client,
+        "_complete_hub_sso",
+        lambda response, credentials: calls.append((response, credentials)),
+    )
+
+    client.prime_competency_session("student", "secret")
+
+    assert calls == [(dashboard, ("student", "secret"))]
+    assert client.last_competency_attempted is True
+    assert client.last_competency_succeeded is True
+    assert client.last_competency_ues is None
+
+
 def test_hub_sso_refuses_a_password_form_without_current_credentials() -> None:
     client = ImtPassClient()
     login = fake_response(body=b'<form><input type="password" name="password"></form>')

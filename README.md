@@ -25,9 +25,11 @@ Le leaderboard utilise la moyenne calculée depuis les notes brutes PASS, le gra
 
 ## Comment les données sont traitées
 
-Le navigateur envoie les identifiants IMT à l'API via HTTPS. Le serveur les utilise pour la connexion CAS aux services PASS et COMPETENCES, puis chiffre le mot de passe avec AES-256-GCM lorsqu'une synchronisation future a été autorisée. Pour COMPETENCES, le jeton API créé depuis la session Shibboleth reste en mémoire, n'est envoyé qu'au Hub IMT et est révoqué après l'import. Le lien iCalendar INPASS est lui aussi chiffré, n'est jamais réaffiché et ne peut pas être consulté depuis un token de partage. Les tokens de partage ne sont pas conservés en clair et les sessions restent côté serveur dans des cookies `HttpOnly`.
+Le navigateur envoie les identifiants IMT à l'API via HTTPS pour l'authentification CAS. Le mot de passe sert uniquement à cette opération et n'est jamais écrit en base. Après la connexion, IMTégrale ne conserve que les cookies sécurisés strictement nécessaires aux domaines PASS et Hub : ils sont filtrés, chiffrés en AES-256-GCM, révocables et supprimés au plus tard après 30 jours. Si cette session expire plus tôt, l'actualisation automatique se met en pause jusqu'à une reconnexion volontaire.
 
-PASS ne fournit pas ici de délégation OAuth. Le serveur doit donc pouvoir relire le secret chiffré pour synchroniser les notes ; une compromission simultanée de l'application et de sa clé maître permettrait de le déchiffrer. Cette limite est assumée et expliquée dans la [page de confiance](https://imtegrale.tail4fed99.ts.net/confiance).
+Pour COMPETENCES, le jeton API créé depuis la session Shibboleth reste en mémoire, n'est envoyé qu'au Hub IMT et est révoqué après l'import. Le lien iCalendar INPASS est lui aussi chiffré, n'est jamais réaffiché et ne peut pas être consulté depuis un token de partage. Les tokens de partage ne sont pas conservés en clair et les sessions web utilisent des cookies `HttpOnly`.
+
+PASS ne fournit pas ici de délégation OAuth. Le worker doit donc pouvoir déchiffrer une session PASS/HUB active pour synchroniser ; une compromission simultanée de l'application et de sa clé maître permettrait de l'utiliser jusqu'à son expiration ou sa révocation, mais pas de retrouver le mot de passe IMT. Une instance auto-hébergée peut, de façon explicite, réserver à son unique compte propriétaire un secret local hors base et hors dépôt, lisible seulement par l'utilisateur système du service. Cette exception est désactivée par défaut et n'est jamais proposée aux comptes publics. Ces limites sont expliquées dans la [page de confiance](https://imtegrale.tail4fed99.ts.net/confiance).
 
 ## Stack
 

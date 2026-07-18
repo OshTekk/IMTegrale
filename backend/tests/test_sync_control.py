@@ -172,7 +172,6 @@ def test_atomic_reservation_accepts_only_one_concurrent_request(
         account = Account(
             imt_username="race@imt-atlantique.fr",
             display_name="Race",
-            encrypted_imt_password="encrypted",
         )
         db.add(account)
         db.commit()

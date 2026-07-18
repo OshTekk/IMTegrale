@@ -2,7 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { BookOpenCheck, CalendarDays, ChevronDown, Ellipsis, FlaskConical, Gauge, KeyRound, LogOut, NotebookPen, RefreshCw, Settings, ShieldCheck, Trophy } from "lucide-react";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { api } from "../lib/api";
+import { api, ApiError } from "../lib/api";
 import { eventReconnectDelay } from "../lib/events";
 import { queryKeys, useDashboard, useRefreshDashboard } from "../lib/queries";
 import { broadcastSessionChange } from "../lib/sessionSync";
@@ -10,6 +10,7 @@ import { formatSyncDuration, manualSyncMessage, useServerCountdown } from "../li
 import type { Session } from "../types";
 import { Logo } from "./Logo";
 import { Modal } from "./Modal";
+import { PassReconnectModal } from "./PassReconnectModal";
 import { SourceNotice } from "./SourceNotice";
 import { ThemeToggle } from "./ThemeToggle";
 import { useToast } from "./Toast";
@@ -58,6 +59,7 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
   const { showToast } = useToast();
   const [profileOpen, setProfileOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [passReconnectOpen, setPassReconnectOpen] = useState(false);
   const [live, setLive] = useState<"connected" | "connecting">("connecting");
   const [title, subtitle] = titles[location.pathname] ?? titles["/"]!;
   const primaryOwner = session.role === "owner" && session.auth_method !== "token";
@@ -164,9 +166,19 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
   }, [dashboard, manualSync, syncRemaining]);
 
   const runSync = () => {
+    if (manualSync?.state === "reauth_required") {
+      setPassReconnectOpen(true);
+      return;
+    }
     sync.mutate(undefined, {
       onSuccess: () => showToast("Synchronisation lancée"),
-      onError: (error) => showToast(error.message, "error")
+      onError: (error) => {
+        if (error instanceof ApiError && error.code === "SYNC_REAUTH_REQUIRED") {
+          setPassReconnectOpen(true);
+          return;
+        }
+        showToast(error.message, "error");
+      }
     });
   };
 
@@ -174,7 +186,7 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
     ? "En cours"
     : manualSync?.state === "cooldown" || manualSync?.state === "pass_unavailable"
       ? syncRemaining > 0 ? formatSyncDuration(syncRemaining) : "Vérification"
-      : "Synchroniser";
+      : manualSync?.state === "reauth_required" ? "Reconnecter" : "Synchroniser";
 
   const logout = async () => {
     await api("/api/v1/auth/logout", { method: "POST", body: "{}" }).catch(() => undefined);
@@ -200,7 +212,7 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
         <header className="topbar">
           <div className="page-heading"><h1>{title}</h1><p>{subtitle}</p></div>
           <div className="topbar-actions">
-            {session.role === "owner" && <button className="secondary-button sync-button" type="button" onClick={runSync} disabled={sync.isPending || !manualSync?.can_start} aria-label={syncMessage} title={syncMessage}><RefreshCw size={17} className={sync.isPending || manualSync?.state === "in_progress" ? "spin" : ""} /><span>{syncButtonLabel}</span></button>}
+            {session.role === "owner" && <button className="secondary-button sync-button" type="button" onClick={runSync} disabled={sync.isPending || (!manualSync?.can_start && manualSync?.state !== "reauth_required")} aria-label={syncMessage} title={syncMessage}><RefreshCw size={17} className={sync.isPending || manualSync?.state === "in_progress" ? "spin" : ""} /><span>{syncButtonLabel}</span></button>}
             <ThemeToggle />
             <div className="profile-wrap" ref={profileWrap}>
               <button className="profile-button" type="button" onClick={() => setProfileOpen((value) => !value)} aria-expanded={profileOpen} aria-controls="profile-menu" aria-haspopup="menu" aria-label={`Ouvrir le profil de ${session.account?.display_name ?? "l'utilisateur"}`}>
@@ -224,6 +236,17 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
       <Modal open={mobileMenuOpen} title="Autres pages" description="Données académiques, accès et préférences." onClose={() => setMobileMenuOpen(false)}>
         <nav className="mobile-overflow-links" aria-label="Navigation secondaire">{mobileSecondaryNav.map((item) => <NavLink key={item.to} to={item.to} viewTransition onTouchStart={() => preloadRoute(item.to)} onFocus={() => preloadRoute(item.to)} onClick={() => setMobileMenuOpen(false)}><item.icon size={19} /><span><strong>{item.label}</strong><small>{mobileNavDescriptions[item.to] ?? titles[item.to]?.[1]}</small></span></NavLink>)}</nav>
       </Modal>
+      <PassReconnectModal
+        open={passReconnectOpen}
+        identifier={session.account?.imt_username}
+        onClose={() => setPassReconnectOpen(false)}
+        onRenewed={() => {
+          sync.mutate(undefined, {
+            onSuccess: () => showToast("Synchronisation lancée"),
+            onError: (error) => showToast(error.message, "error"),
+          });
+        }}
+      />
     </div>
   );
 }

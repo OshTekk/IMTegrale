@@ -25,6 +25,10 @@ class TokenLoginRequest(BaseModel):
     token: str = Field(min_length=20, max_length=256)
 
 
+class PassReconnectRequest(BaseModel):
+    password: str = Field(min_length=1, max_length=512)
+
+
 class PasskeyRegistrationVerify(BaseModel):
     challenge_id: str = Field(min_length=36, max_length=36)
     name: str = Field(min_length=2, max_length=80)
@@ -183,6 +187,10 @@ class AutoSyncUpdate(BaseModel):
     adaptive: bool = True
 
 
+class SyncSetupUpdate(AutoSyncUpdate):
+    pass
+
+
 class TelegramUpdate(BaseModel):
     bot_token: str = Field(
         min_length=20,
@@ -226,6 +234,7 @@ class AdminAccountAction(BaseModel):
         "leaderboard_refresh_score_basis",
         "auth_clear_cooldown",
         "profile_refresh",
+        "pass_session_revoke",
     ]
     reason: str | None = Field(default=None, max_length=240)
 

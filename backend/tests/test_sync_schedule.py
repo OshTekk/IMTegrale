@@ -26,7 +26,6 @@ def account_for_schedule(**values) -> Account:
     defaults = {
         "imt_username": "schedule@imt-atlantique.fr",
         "display_name": "Schedule",
-        "encrypted_imt_password": "encrypted",
         "timezone": "Europe/Paris",
         "auto_sync_enabled": True,
         "auto_sync_interval_hours": 2,

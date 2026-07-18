@@ -208,12 +208,16 @@ def test_opt_in_wait_visibility_withdrawal_and_dense_ties(
     alone = client.get("/api/v1/leaderboard?metric=gpa&campus=all&cohort=1a").json()
     assert alone["state"] == "active"
     assert alone["board"]["participant_count"] == 1
-    assert alone["board"]["entries"][0] == {
+    alone_entry = alone["board"]["entries"][0]
+    assert alone_entry == {
         "rank": 1,
         "official_name": "Alpha STUDENT",
         "score": 3.8,
         "is_self": True,
+        "freshness": "current",
+        "verified_at": alone_entry["verified_at"],
     }
+    assert alone_entry["verified_at"] is not None
     owner_campus_change = client.patch(
         "/api/v1/leaderboard/profile",
         json={"official_name": "Someone Else"},
@@ -235,7 +239,15 @@ def test_opt_in_wait_visibility_withdrawal_and_dense_ties(
     assert visible_to_alpha["board"]["participant_count"] == 2
     assert [entry["rank"] for entry in visible_to_alpha["board"]["entries"]] == [1, 1]
     assert all(
-        set(entry) == {"rank", "official_name", "score", "is_self"}
+        set(entry)
+        == {
+            "rank",
+            "official_name",
+            "score",
+            "is_self",
+            "verified_at",
+            "freshness",
+        }
         for entry in visible_to_alpha["board"]["entries"]
     )
 

@@ -193,6 +193,8 @@ class ImtPassClient:
         self._request_count = 0
         self.last_profile: PassProfile | None = None
         self.last_competency_ues: list[CompetencyUe] | None = None
+        self.last_competency_attempted = False
+        self.last_competency_succeeded = False
         self.authenticated = False
         self.include_profile_on_fetch = True
         self.include_competencies_on_fetch = True
@@ -642,6 +644,15 @@ class ImtPassClient:
                 competency_credentials=(username, password) if include_competencies else None,
             )
 
+    def prime_competency_session(self, username: str, password: str) -> None:
+        """Open HUB SSO without reading or persisting academic results."""
+        with self._operation():
+            self.last_competency_attempted = True
+            self.last_competency_succeeded = False
+            response = self._get(COMPETENCIES_HOME_URL)
+            self._complete_hub_sso(response, (username, password))
+            self.last_competency_succeeded = True
+
     def fetch_entries_authenticated(
         self,
         *,
@@ -690,6 +701,8 @@ class ImtPassClient:
 
             self.last_profile = None
             self.last_competency_ues = None
+            self.last_competency_attempted = include_competencies
+            self.last_competency_succeeded = False
             if include_profile:
                 try:
                     self.last_profile = self.fetch_profile_authenticated()
@@ -702,6 +715,7 @@ class ImtPassClient:
                     self.last_competency_ues = self.fetch_competency_ues_authenticated(
                         credentials=competency_credentials,
                     )
+                    self.last_competency_succeeded = True
                 except (ImtError, requests.RequestException) as exc:
                     logger.warning(
                         "COMPETENCES metadata could not be refreshed: %s: %s",

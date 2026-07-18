@@ -10,10 +10,17 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db, utcnow
 from app.models import PasskeyCredential
-from app.schemas import AccountUpdate, AutoSyncUpdate, TelegramToggle, TelegramUpdate
+from app.schemas import (
+    AccountUpdate,
+    AutoSyncUpdate,
+    SyncSetupUpdate,
+    TelegramToggle,
+    TelegramUpdate,
+)
 from app.security import AuthContext, cipher_for, get_auth_context, require_owner_action
 from app.services.events import record_event
 from app.services.pass_gateway import pass_status_view
+from app.services.pass_sessions import service_session_view
 from app.services.sync_schedule import auto_sync_view
 from app.services.telegram import TelegramError, send_telegram
 
@@ -28,7 +35,6 @@ def settings_view(auth: AuthContext, db: Session | None = None) -> dict:
             "display_name": account.display_name,
             "imt_username": account.imt_username if auth.role == "owner" else None,
             "timezone": account.timezone,
-            "credentials_updated_at": account.credentials_updated_at if auth.role == "owner" else None,
             "campus": account.campus,
             "campus_source": account.campus_source,
             "profile_refreshed_at": account.profile_refreshed_at,
@@ -56,11 +62,17 @@ def settings_view(auth: AuthContext, db: Session | None = None) -> dict:
         "sync": {
             **auto_sync_view(account),
             "pass_access": pass_status_view(db, account) if db is not None else None,
+            "service_session": (
+                service_session_view(db, account)
+                if db is not None and auth.role == "owner"
+                else None
+            ),
         },
         "access": {
             "role": auth.role,
             "auth_method": auth.session.auth_method,
             "security_setup_completed": account.security_setup_completed_at is not None,
+            "sync_setup_completed": account.sync_setup_completed_at is not None,
             "passkey_count": (
                 db.scalar(
                     select(func.count(PasskeyCredential.id)).where(
@@ -100,6 +112,15 @@ def update_auto_sync(
         account.auto_sync_consented_at = utcnow()
     elif not payload.enabled:
         account.auto_sync_consented_at = None
+        account.auto_sync_paused_reason = None
+        account.auto_sync_paused_at = None
+    if payload.enabled:
+        account.auto_sync_paused_reason = None
+        account.auto_sync_paused_at = None
+        session_state = service_session_view(db, account)["state"]
+        if session_state == "reauth_required":
+            account.auto_sync_paused_reason = "reauth_required"
+            account.auto_sync_paused_at = utcnow()
     account.updated_at = utcnow()
     record_event(
         db,
@@ -109,6 +130,44 @@ def update_auto_sync(
         payload={
             "interval_hours": payload.interval_hours,
             "adaptive": payload.adaptive,
+        },
+    )
+    db.commit()
+    return settings_view(auth, db)
+
+
+@router.put("/sync-setup")
+def complete_sync_setup(
+    payload: SyncSetupUpdate,
+    auth: AuthContext = Depends(require_owner_action),
+    db: Session = Depends(get_db),
+) -> dict:
+    account = auth.account
+    now = utcnow()
+    account.auto_sync_enabled = payload.enabled
+    account.auto_sync_interval_hours = payload.interval_hours
+    account.auto_sync_adaptive = payload.adaptive
+    account.auto_sync_current_interval_hours = payload.interval_hours
+    account.auto_sync_no_change_streak = 0
+    account.auto_sync_next_at = None
+    account.auto_sync_consented_at = now if payload.enabled else None
+    account.auto_sync_paused_reason = None
+    account.auto_sync_paused_at = None
+    if payload.enabled and service_session_view(db, account)["state"] == "reauth_required":
+        account.auto_sync_paused_reason = "reauth_required"
+        account.auto_sync_paused_at = now
+    account.sync_setup_completed_at = now
+    account.updated_at = now
+    record_event(
+        db,
+        account_id=account.id,
+        kind="sync:setup_completed",
+        actor=auth.actor,
+        payload={
+            "enabled": payload.enabled,
+            "interval_hours": payload.interval_hours,
+            "adaptive": payload.adaptive,
+            "beta": True,
         },
     )
     db.commit()
