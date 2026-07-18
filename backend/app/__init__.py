@@ -1,3 +1,3 @@
 """IMTégrale backend."""
 
-__version__ = "3.5.0"
+__version__ = "3.5.1"

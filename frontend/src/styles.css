@@ -3215,7 +3215,6 @@ select:disabled {
   font-weight: 650;
 }
 
-.cooldown-notice,
 .eligibility-blockers {
   display: flex;
   align-items: flex-start;
@@ -3227,23 +3226,19 @@ select:disabled {
   color: var(--warning-text);
 }
 
-.cooldown-notice svg,
 .eligibility-blockers svg {
   flex: 0 0 auto;
 }
 
-.cooldown-notice div,
 .eligibility-blockers div {
   display: grid;
   gap: 3px;
 }
 
-.cooldown-notice strong,
 .eligibility-blockers strong {
   font-size: 11px;
 }
 
-.cooldown-notice span,
 .eligibility-blockers span {
   font-size: 9px;
   line-height: 1.45;
@@ -4152,7 +4147,7 @@ select:disabled {
 }
 
 .admin-state-active i { background: var(--green); }
-.admin-state-pending i, .admin-state-cooldown i { background: var(--amber); }
+.admin-state-pending i { background: var(--amber); }
 .admin-state-suspended i { background: var(--red); }
 
 .admin-table-skeleton,

@@ -459,11 +459,6 @@ def manage_account(
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Participation inactive")
         profile.ranking_visible_at = now
         profile.updated_at = now
-    elif payload.action == "leaderboard_clear_cooldown":
-        if profile is None:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Aucun profil leaderboard")
-        profile.rejoin_after = None
-        profile.updated_at = now
     elif payload.action == "leaderboard_delete_data":
         if profile is not None:
             delete_leaderboard_data(account, profile)

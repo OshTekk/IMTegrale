@@ -35,11 +35,13 @@ OWNER_ONLY_EVENT_PREFIXES = ("account:", "auth:", "leaderboard:", "telegram:", "
 def _validated_credits(items: list[dict]) -> float:
     return round(
         sum(
-            float(item["earned_credits_ects"])
-            if item.get("earned_credits_ects") is not None
-            else float(item["credits_ects"] or 0)
+            (
+                float(item["earned_credits_ects"])
+                if item.get("earned_credits_ects") is not None
+                else float(item["credits_ects"] or 0)
+            )
             if item["validated"]
-            else 0
+            else 0.0
             for item in items
         ),
         2,

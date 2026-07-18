@@ -24,6 +24,20 @@ def load_migration() -> ModuleType:
     return module
 
 
+def load_rejoin_migration() -> ModuleType:
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "alembic"
+        / "versions"
+        / "0012_remove_leaderboard_rejoin_cooldown.py"
+    )
+    spec = importlib.util.spec_from_file_location("leaderboard_migration_0012", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_migration_revokes_legacy_publication_and_preserves_existing_cooldown() -> None:
     engine = create_engine("sqlite+pysqlite:///:memory:")
     now = datetime.now(UTC).replace(microsecond=0)
@@ -131,3 +145,29 @@ def test_migration_revokes_legacy_publication_and_preserves_existing_cooldown() 
     assert withdrawn["consent_at"] is None
     assert withdrawn["score_ects_basis"] is None
     assert withdrawn["score_basis_updated_at"] is None
+
+
+def test_rejoin_migration_clears_obsolete_cooldowns() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE leaderboard_profiles ("
+                "account_id VARCHAR(36) PRIMARY KEY, rejoin_after DATETIME)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO leaderboard_profiles VALUES "
+                "('waiting', '2026-07-19 12:00:00'), ('available', NULL)"
+            )
+        )
+
+        migration = load_rejoin_migration()
+        migration.op = Operations(MigrationContext.configure(connection))
+        migration.upgrade()
+
+        cooldowns = connection.execute(
+            text("SELECT rejoin_after FROM leaderboard_profiles")
+        ).scalars()
+        assert list(cooldowns) == [None, None]

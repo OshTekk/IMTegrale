@@ -145,10 +145,9 @@ function ParticipationPanel({
   onSubmit: () => void;
   pending: boolean;
 }) {
-  const cooldown = useCountdown(view.profile.rejoin_after);
   const dataBlockers = view.eligibility.missing;
   const formReady = Boolean(view.profile.official_name && view.profile.campus !== "unknown" && view.profile.segment);
-  const canSubmit = Boolean(formReady && visibilityAccepted && waitAccepted && dataBlockers.length === 0 && (view.state !== "cooldown" || cooldown.done));
+  const canSubmit = Boolean(formReady && visibilityAccepted && waitAccepted && dataBlockers.length === 0);
 
   return (
     <div className="leaderboard-optin-layout">
@@ -159,15 +158,12 @@ function ParticipationPanel({
         <div className="privacy-flow">
           <div><span><UserRoundCheck size={18} /></span><div><strong>1. Ton identité PASS est utilisée</strong><p>Prénom, nom, campus, cursus et promotion ne sont pas modifiables ici.</p></div></div>
           <div><span><ShieldCheck size={18} /></span><div><strong>2. Tes coefficients sont officiels</strong><p>Les ECTS viennent de COMPETENCES et suivent automatiquement la dernière génération complète synchronisée.</p></div></div>
-          <div><span><Clock3 size={18} /></span><div><strong>3. Tu observes un délai avant de consulter</strong><p>Tu es visible immédiatement et tu accèdes au classement après 48 heures. Tu peux te retirer à tout moment ; une réactivation attend ensuite 48 heures.</p></div></div>
+          <div><span><Clock3 size={18} /></span><div><strong>3. Tu observes un délai avant de consulter</strong><p>Tu es visible immédiatement et tu accèdes au classement après 48 heures. Tu peux te retirer puis revenir à tout moment ; chaque activation relance cette attente.</p></div></div>
         </div>
       </section>
 
       <form className="leaderboard-join-panel" onSubmit={(event) => { event.preventDefault(); onSubmit(); }}>
         <header><div><h2>Rejoindre le classement</h2><p>Ton segment officiel est appliqué côté serveur.</p></div><span><Trophy size={20} /></span></header>
-        {view.state === "cooldown" && !cooldown.done && (
-          <div className="cooldown-notice"><Clock3 size={18} /><div><strong>Réactivation disponible dans {cooldown.label}</strong><span>Ton retrait est déjà effectif et ton profil n'est plus visible.</span></div></div>
-        )}
         <OfficialProfileFields officialName={view.profile.official_name} officialIdentityAt={view.profile.official_identity_at} campus={view.profile.campus} campusSource={view.profile.campus_source} detectedCampus={view.profile.detected_campus} program={view.profile.program} promotionYear={view.profile.promotion_year} academicSource={view.profile.academic_source} />
         {dataBlockers.length > 0 && (
           <div className="eligibility-blockers"><AlertTriangle size={18} /><div><strong>Encore {dataBlockers.length} étape{dataBlockers.length > 1 ? "s" : ""}</strong>{dataBlockers.map((item) => <span key={item}>{MISSING_LABELS[item]}</span>)}</div></div>
@@ -292,7 +288,7 @@ function PrivacyModal({
   return (
     <Modal open={open} title="Confidentialité et participation" description="Ton profil disparaît immédiatement dès que tu retires ta participation." onClose={onClose} size="large">
       <div className="privacy-management">
-        {view.can_withdraw && <section><span><EyeOff size={20} /></span><div><h3>Me retirer du classement</h3><p>Ton profil disparaît immédiatement pour tout le monde. Une nouvelle activation sera impossible pendant 48 heures.</p><button className="danger-button armed" type="button" onClick={onWithdraw} disabled={pending}>{pending ? <span className="spinner" /> : <EyeOff size={16} />} Me retirer maintenant</button></div></section>}
+        {view.can_withdraw && <section><span><EyeOff size={20} /></span><div><h3>Me retirer du classement</h3><p>Ton profil disparaît immédiatement pour tout le monde. Tu peux revenir quand tu le souhaites, mais chaque nouvelle activation relance les 48 heures avant consultation.</p><button className="danger-button armed" type="button" onClick={onWithdraw} disabled={pending}>{pending ? <span className="spinner" /> : <EyeOff size={16} />} Me retirer maintenant</button></div></section>}
         {view.can_delete_data && <section><span><Trash2 size={20} /></span><div><h3>Effacer mes données de classement</h3><p>La participation et le consentement sont effacés. Ton identité officielle PASS, tes notes privées et ton compte IMTégrale sont conservés.</p><label>Écris <strong>SUPPRIMER</strong> pour confirmer<input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} autoComplete="off" /></label><button className="danger-button armed" type="button" onClick={onDelete} disabled={pending || confirmation !== "SUPPRIMER"}><Trash2 size={16} /> Effacer ces données</button></div></section>}
       </div>
       <footer className="modal-actions"><button className="secondary-button" type="button" onClick={onClose}>Fermer</button></footer>
@@ -356,7 +352,7 @@ export function LeaderboardPage() {
         <button className="secondary-button" type="button" onClick={() => setRulesOpen(true)}><Info size={16} /> Règles et calculs</button>
       </section>
 
-      {(view.state === "not_joined" || view.state === "cooldown") && <ParticipationPanel view={view} visibilityAccepted={visibilityAccepted} setVisibilityAccepted={setVisibilityAccepted} waitAccepted={waitAccepted} setWaitAccepted={setWaitAccepted} onSubmit={() => join.mutate()} pending={join.isPending} />}
+      {view.state === "not_joined" && <ParticipationPanel view={view} visibilityAccepted={visibilityAccepted} setVisibilityAccepted={setVisibilityAccepted} waitAccepted={waitAccepted} setWaitAccepted={setWaitAccepted} onSubmit={() => join.mutate()} pending={join.isPending} />}
       {view.state === "pending" && <PendingView view={view} onManage={() => setPrivacyOpen(true)} />}
       {view.state === "active" && <ActiveLeaderboard view={view} metric={metric} setMetric={setMetric} campus={campusFilter} setCampus={setCampusFilter} onRules={() => setRulesOpen(true)} onManage={() => setPrivacyOpen(true)} />}
       {view.state === "suspended" && <section className="leaderboard-suspended"><AlertTriangle size={22} /><div><span className="section-kicker">Participation suspendue</span><h2>Le profil n'est actuellement visible par personne</h2><p>Une vérification administrative est en cours. Tes notes privées restent intactes et tu peux toujours effacer les données propres au classement.</p></div><button className="secondary-button" type="button" onClick={() => setPrivacyOpen(true)}><ShieldCheck size={16} /> Confidentialité</button></section>}

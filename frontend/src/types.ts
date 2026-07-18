@@ -227,7 +227,7 @@ export interface LeaderboardEntry {
 }
 
 export interface LeaderboardView {
-  state: "not_joined" | "cooldown" | "pending" | "active" | "suspended";
+  state: "not_joined" | "pending" | "active" | "suspended";
   profile: {
     official_first_name: string | null;
     official_last_name: string | null;

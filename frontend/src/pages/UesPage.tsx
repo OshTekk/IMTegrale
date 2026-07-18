@@ -4,6 +4,23 @@ import { EmptyState } from "../components/EmptyState";
 import { GradeBadge } from "../components/GradeBadge";
 import { formatDate, formatNumber, yearLabel } from "../lib/format";
 import { useDashboard } from "../lib/queries";
+import type { UeItem } from "../types";
+
+function UeStatus({ ue }: { ue: UeItem }) {
+  if (ue.grade === null && ue.average === null) {
+    return <span className="status-pill neutral"><CircleDashed size={14} /> En attente</span>;
+  }
+  if (ue.grade === "E") {
+    return <span className="status-pill success"><CheckCircle2 size={14} /> Validée après rattrapage</span>;
+  }
+  if (ue.grade === "FX" || ue.grade === "F") {
+    return <span className="status-pill warning"><TriangleAlert size={14} /> Rattrapage requis</span>;
+  }
+  if (ue.validated) {
+    return <span className="status-pill success"><CheckCircle2 size={14} /> Validée</span>;
+  }
+  return <span className="status-pill danger">Non validée</span>;
+}
 
 export function UesPage() {
   const dashboard = useDashboard();
@@ -54,7 +71,7 @@ export function UesPage() {
               <td data-label="Grade"><div className="grade-source-cell"><GradeBadge grade={ue.grade} description={ue.grade_description} /><small>{ue.grade_source === "competences" ? "COMPETENCES" : ue.grade_source === "pass_calculated" ? "Calcul PASS" : "Indisponible"}</small></div></td>
               <td data-label="GPA"><strong>{formatNumber(ue.gpa, " /4")}</strong></td>
               <td data-label="ECTS">{ue.credits_ects === null ? <span className="missing-value"><TriangleAlert size={15} /> Indisponible</span> : <span className="ects-official-value" title={ue.earned_credits_ects === null ? "ECTS alloués" : "ECTS obtenus / alloués"}><strong>{ue.earned_credits_ects === null ? formatNumber(ue.credits_ects) : `${formatNumber(ue.earned_credits_ects)} / ${formatNumber(ue.credits_ects)}`}</strong>{ue.metadata_source === "competences" && <BadgeCheck size={15} aria-label="Source officielle IMT" />}</span>}</td>
-              <td data-label="État">{ue.grade === null && ue.average === null ? <span className="status-pill neutral"><CircleDashed size={14} /> En attente</span> : ue.used_resit ? <span className="status-pill warning">Rattrapage</span> : ue.validated ? <span className="status-pill success"><CheckCircle2 size={14} /> Validée</span> : <span className="status-pill danger">Non validée</span>}</td>
+              <td data-label="État"><UeStatus ue={ue} /></td>
               <td><button className={`icon-button ue-expand-button ${expanded ? "is-open" : ""}`} type="button" onClick={() => setExpandedCode(expanded ? null : ue.code)} aria-expanded={expanded} aria-controls={detailsId} aria-label={`${expanded ? "Masquer" : "Voir"} les notes de ${ue.code}`} title={expanded ? "Masquer les notes" : "Voir les notes"}><ChevronDown size={18} /></button></td>
             </tr>
             {expanded && <tr className="ue-notes-row"><td colSpan={8}><div className="ue-notes-panel" id={detailsId}><header><div><span className="section-kicker">Évaluations PASS</span><strong>{ue.title || ue.code}</strong></div><span>{notes.length} note{notes.length > 1 ? "s" : ""}</span></header>{notes.length ? <div className="ue-note-list">{notes.map((note) => <div className="ue-note-item" key={note.id}><div><strong>{note.label}</strong><span>{note.is_resit ? "Rattrapage" : "Évaluation classique"} · détectée le {formatDate(note.detected_at, false)}</span></div><dl><div><dt>Note</dt><dd className={note.score >= 10 ? "success" : "danger"}>{formatNumber(note.score)} /20</dd></div><div><dt>Coefficient</dt><dd>{formatNumber(note.coefficient)}</dd></div></dl></div>)}</div> : <p className="ue-notes-empty">Aucune évaluation PASS détaillée n'est disponible pour cette UE.</p>}</div></td></tr>}

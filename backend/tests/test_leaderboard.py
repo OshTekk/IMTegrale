@@ -227,6 +227,7 @@ def test_opt_in_wait_visibility_withdrawal_and_dense_ties(
     assert beta_joined["state"] == "pending"
     assert beta_joined["board"] is None
     assert beta_joined["rules"]["withdrawal_lock_hours"] == 0
+    assert beta_joined["rules"]["rejoin_cooldown_hours"] == 0
     assert beta_joined["can_withdraw"] is True
     assert beta_joined["can_delete_data"] is True
 
@@ -246,14 +247,14 @@ def test_opt_in_wait_visibility_withdrawal_and_dense_ties(
         headers=csrf_headers(beta),
     )
     assert withdrawn.status_code == 200
-    assert withdrawn.json()["state"] == "cooldown"
+    assert withdrawn.json()["state"] == "not_joined"
     assert withdrawn.json()["board"] is None
     after = client.get("/api/v1/leaderboard?cohort=1a").json()
     assert [entry["official_name"] for entry in after["board"]["entries"]] == [
         "Alpha STUDENT"
     ]
 
-    blocked_rejoin = beta.post(
+    rejoined = beta.post(
         "/api/v1/leaderboard/participation",
         json={
             "consent_version": beta_joined["consent_version"],
@@ -262,11 +263,22 @@ def test_opt_in_wait_visibility_withdrawal_and_dense_ties(
         },
         headers=csrf_headers(beta),
     )
-    assert blocked_rejoin.status_code == 409
+    assert rejoined.status_code == 201
+    assert rejoined.json()["state"] == "pending"
+    assert rejoined.json()["board"] is None
+    with SessionLocal() as db:
+        profile = db.get(LeaderboardProfile, beta_id)
+        assert profile is not None
+        assert profile.joined_at is not None
+        assert profile.ranking_visible_at is not None
+        assert ensure_utc(profile.ranking_visible_at) - ensure_utc(profile.joined_at) == timedelta(
+            hours=48
+        )
+        assert profile.rejoin_after is None
 
     erased = beta.delete("/api/v1/leaderboard/data", headers=csrf_headers(beta))
     assert erased.status_code == 200
-    assert erased.json()["state"] == "cooldown"
+    assert erased.json()["state"] == "not_joined"
     assert erased.json()["profile"]["official_name"] == "Beta STUDENT"
     assert erased.json()["profile"]["campus"] == "rennes"
 
@@ -299,7 +311,7 @@ def test_pending_participant_can_erase_leaderboard_data_immediately(
     erased = client.delete("/api/v1/leaderboard/data", headers=csrf_headers(client))
 
     assert erased.status_code == 200
-    assert erased.json()["state"] == "cooldown"
+    assert erased.json()["state"] == "not_joined"
     assert erased.json()["can_delete_data"] is False
     with SessionLocal() as db:
         profile = db.get(LeaderboardProfile, account_id)

@@ -100,7 +100,6 @@ class AdminAccountAction(BaseModel):
         "leaderboard_restore",
         "leaderboard_withdraw",
         "leaderboard_release_wait",
-        "leaderboard_clear_cooldown",
         "leaderboard_delete_data",
         "leaderboard_refresh_score_basis",
         "auth_clear_cooldown",

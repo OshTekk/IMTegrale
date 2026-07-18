@@ -17,7 +17,7 @@ IMTégrale est un projet étudiant indépendant. Il n'est ni affilié, ni approu
 - partage en lecture seule avec des tokens révocables ;
 - leaderboard facultatif par promotion, avec deux classements : GPA par défaut et moyenne générale.
 
-Le leaderboard utilise la moyenne calculée depuis les notes brutes PASS, le grade COMPETENCES lorsqu'il existe et les ECTS officiels. Lorsqu'un étudiant le rejoint, son identité PASS et ses deux scores deviennent immédiatement visibles par les participants actifs, tandis qu'il attend 48 heures avant de voir le moindre classement, rang ou nombre de participants. Il peut retirer ou effacer sa participation immédiatement ; une nouvelle activation impose ensuite un cooldown de 48 heures.
+Le leaderboard utilise la moyenne calculée depuis les notes brutes PASS, le grade COMPETENCES lorsqu'il existe et les ECTS officiels. Lorsqu'un étudiant le rejoint, son identité PASS et ses deux scores deviennent immédiatement visibles par les participants actifs, tandis qu'il attend 48 heures avant de voir le moindre classement, rang ou nombre de participants. Il peut retirer ou effacer sa participation immédiatement puis revenir à tout moment ; chaque nouvelle activation relance intégralement les 48 heures d'attente avant consultation.
 
 ## Comment les données sont traitées
 

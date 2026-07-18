@@ -153,6 +153,48 @@ def test_registration_imports_competencies_metadata(client: TestClient, monkeypa
     assert dashboard["semesters"][0]["gpa"] == 3.8
 
 
+def test_resit_grade_states_and_validated_credits(client: TestClient, monkeypatch) -> None:
+    def resit_notes(
+        self: ImtPassClient,
+        _username: str,
+        _password: str,
+    ) -> list[PassEntry]:
+        self.last_competency_ues = [
+            CompetencyUe(
+                "SIT140",
+                "Outils physiques",
+                3,
+                grade="E",
+                earned_credits_ects=3,
+            ),
+            CompetencyUe(
+                "PRJ120",
+                "Projet en cours",
+                5,
+                grade="FX",
+                earned_credits_ects=0,
+            ),
+        ]
+        return [
+            PassEntry("SIT140", "RAT1", 11, 1, True),
+            PassEntry("PRJ120", "Examen", 8, 1, False),
+        ]
+
+    monkeypatch.setattr(ImtPassClient, "fetch_entries", resit_notes)
+    login_owner(client, "resit-status@imt-atlantique.fr")
+
+    dashboard = client.get("/api/v1/dashboard").json()
+    ues = {ue["code"]: ue for ue in dashboard["ues"]}
+
+    assert ues["SIT140"]["grade"] == "E"
+    assert ues["SIT140"]["validated"] is True
+    assert ues["SIT140"]["earned_credits_ects"] == 3
+    assert ues["PRJ120"]["grade"] == "FX"
+    assert ues["PRJ120"]["validated"] is False
+    assert ues["PRJ120"]["earned_credits_ects"] == 0
+    assert dashboard["summary"]["validated_credits"] == 3
+
+
 def test_official_identity_and_telegram_test_stay_owner_only(
     client: TestClient,
     monkeypatch,

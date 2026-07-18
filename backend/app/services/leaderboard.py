@@ -15,10 +15,9 @@ from app.database import utcnow
 from app.models import Account, LeaderboardProfile, Note, UeSetting
 
 LEADERBOARD_CONSENT_VERSION = "2026-07-17.3"
-LEADERBOARD_RULES_VERSION = "2026-07-18.1"
+LEADERBOARD_RULES_VERSION = "2026-07-18.2"
 LEADERBOARD_RULES_UPDATED_AT = "2026-07-18"
 LEADERBOARD_WAIT = timedelta(hours=48)
-LEADERBOARD_REJOIN_COOLDOWN = timedelta(hours=48)
 
 CAMPUSES = frozenset({"rennes", "brest", "nantes", "other"})
 COHORTS = frozenset({"1a", "2a", "3a", "higher", "atypical"})
@@ -445,7 +444,7 @@ def rules_view() -> dict:
         "updated_at": LEADERBOARD_RULES_UPDATED_AT,
         "wait_hours": 48,
         "withdrawal_lock_hours": 0,
-        "rejoin_cooldown_hours": 48,
+        "rejoin_cooldown_hours": 0,
         "source": "Notes brutes PASS et grades officiels COMPETENCES lorsqu'ils sont disponibles",
         "weighting": (
             "Moyennes d'UE et GPA pondérés par les ECTS officiels COMPETENCES courants ; "
@@ -473,9 +472,6 @@ def _state_for(account: Account, profile: LeaderboardProfile | None, now: dateti
             return "not_joined"
         visible_at = ensure_utc(profile.ranking_visible_at)
         return "active" if visible_at is not None and visible_at <= now else "pending"
-    rejoin_after = ensure_utc(profile.rejoin_after)
-    if rejoin_after is not None and rejoin_after > now:
-        return "cooldown"
     return "not_joined"
 
 
@@ -766,11 +762,6 @@ def join_leaderboard(
         _reset_participation_for_reconsent(profile, now=now)
     if profile.is_participating:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Participation déjà active")
-    if ensure_utc(profile.rejoin_after) and ensure_utc(profile.rejoin_after) > now:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Le délai de réactivation de 48 heures n'est pas terminé",
-        )
     profile.is_participating = True
     profile.joined_at = now
     profile.ranking_visible_at = now + LEADERBOARD_WAIT
@@ -808,8 +799,9 @@ def update_leaderboard_classification(
 def leave_leaderboard(profile: LeaderboardProfile) -> None:
     now = utcnow()
     profile.is_participating = False
+    profile.ranking_visible_at = None
     profile.left_at = now
-    profile.rejoin_after = now + LEADERBOARD_REJOIN_COOLDOWN
+    profile.rejoin_after = None
     profile.updated_at = now
 
 
@@ -831,6 +823,6 @@ def delete_leaderboard_data(
     profile.score_basis_updated_at = None
     profile.suspended_at = None
     profile.suspended_reason = None
-    profile.rejoin_after = now + LEADERBOARD_REJOIN_COOLDOWN
+    profile.rejoin_after = None
     profile.updated_at = now
     account.classification_review_required = _classification_review(account)

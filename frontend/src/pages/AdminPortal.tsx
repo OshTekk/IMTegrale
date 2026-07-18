@@ -57,7 +57,6 @@ type AdminAction =
   | "leaderboard_restore"
   | "leaderboard_withdraw"
   | "leaderboard_release_wait"
-  | "leaderboard_clear_cooldown"
   | "leaderboard_delete_data"
   | "leaderboard_refresh_score_basis"
   | "auth_clear_cooldown"
@@ -85,9 +84,8 @@ const ACTIONS: Record<AdminAction, ActionDefinition> = {
   revoke_access: { title: "Révoquer tous les accès", description: "Ferme les sessions web et révoque les tokens sans désactiver le compte.", confirmation: "Révoquer", dangerous: true },
   leaderboard_suspend: { title: "Suspendre la publication", description: "Le profil disparaît du classement jusqu'à une restauration manuelle.", confirmation: "Suspendre", reasonRequired: true, dangerous: true },
   leaderboard_restore: { title: "Restaurer la publication", description: "Le profil redevient visible s'il participe encore au classement.", confirmation: "Restaurer" },
-  leaderboard_withdraw: { title: "Retirer du classement", description: "Le retrait est immédiat. Le délai normal de 48 heures avant réactivation est conservé.", confirmation: "Retirer", dangerous: true },
+  leaderboard_withdraw: { title: "Retirer du classement", description: "Le retrait est immédiat. L'utilisateur peut revenir aussitôt, avec une nouvelle attente de 48 heures avant de consulter.", confirmation: "Retirer", dangerous: true },
   leaderboard_release_wait: { title: "Ouvrir le classement maintenant", description: "Met fin au délai initial de 48 heures. L'utilisateur accède immédiatement aux classements.", confirmation: "Donner accès" },
-  leaderboard_clear_cooldown: { title: "Lever le délai de réactivation", description: "Autorise exceptionnellement l'utilisateur à rejoindre de nouveau le classement sans attendre.", confirmation: "Lever le délai" },
   leaderboard_delete_data: { title: "Effacer les données leaderboard", description: "Efface la participation et le consentement, sans toucher au profil PASS, aux notes ni au compte.", confirmation: "Effacer", dangerous: true },
   leaderboard_refresh_score_basis: { title: "Actualiser les coefficients du classement", description: "Recopie la dernière génération complète d'ECTS officiels COMPETENCES. Les valeurs manuelles restent exclues.", confirmation: "Actualiser", reasonRequired: true },
   auth_clear_cooldown: { title: "Lever le cooldown PASS", description: "Réinitialise exceptionnellement le délai de sécurité lié aux échecs de connexion de ce compte. La protection par adresse cliente reste active.", confirmation: "Lever le cooldown", reasonRequired: true },
@@ -96,7 +94,6 @@ const ACTIONS: Record<AdminAction, ActionDefinition> = {
 
 const STATE_LABELS: Record<AdminAccount["leaderboard"]["state"], string> = {
   not_joined: "Non inscrit",
-  cooldown: "Délai 48 h",
   pending: "En attente",
   active: "Actif",
   suspended: "Suspendu",
@@ -298,7 +295,7 @@ function AccountDetail({
               <strong>Coefficients officiels du classement</strong>
               <small>{ectsCount ? `${ectsCount} UE · ${formatNumber(ectsTotal)} ECTS` : "Aucune base de calcul disponible"}{account.leaderboard.score_basis_updated_at ? ` · ${formatDate(account.leaderboard.score_basis_updated_at)}` : ""}</small>
             </div>
-            <button className="secondary-button" type="button" onClick={() => onAction("leaderboard_refresh_score_basis")} disabled={pending || leaderboardState === "not_joined" || leaderboardState === "cooldown"}><RefreshCw size={16} /> Actualiser</button>
+            <button className="secondary-button" type="button" onClick={() => onAction("leaderboard_refresh_score_basis")} disabled={pending || leaderboardState === "not_joined"}><RefreshCw size={16} /> Actualiser</button>
           </div>}
           <form className="admin-profile-form" onSubmit={(event) => { event.preventDefault(); if (profileValid && campus) onProfile({ campus, program: program.trim().toUpperCase(), promotion_year: promotionNumber, reason: profileReason.trim() }); }}>
             <label>Identité PASS<input value={account.leaderboard.official_first_name && account.leaderboard.official_last_name ? `${account.leaderboard.official_first_name} ${account.leaderboard.official_last_name}` : "Non disponible"} disabled /></label>
@@ -313,7 +310,6 @@ function AccountDetail({
             {leaderboardState === "suspended" && <button className="secondary-button" type="button" onClick={() => onAction("leaderboard_restore")}><ShieldCheck size={16} /> Restaurer</button>}
             {leaderboardState === "pending" && <button className="secondary-button" type="button" onClick={() => onAction("leaderboard_release_wait")}><Clock3 size={16} /> Donner accès maintenant</button>}
             {(leaderboardState === "active" || leaderboardState === "pending" || leaderboardState === "suspended") && <button className="secondary-button" type="button" onClick={() => onAction("leaderboard_withdraw")}><EyeOff size={16} /> Retirer</button>}
-            {leaderboardState === "cooldown" && <button className="secondary-button" type="button" onClick={() => onAction("leaderboard_clear_cooldown")}><Clock3 size={16} /> Lever le délai</button>}
             {account.leaderboard.has_leaderboard_data && <button className="danger-button" type="button" onClick={() => onAction("leaderboard_delete_data")}><Trash2 size={16} /> Effacer les données</button>}
           </div>
         </section>
