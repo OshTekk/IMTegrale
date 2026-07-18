@@ -1,5 +1,9 @@
 # Changements
 
+## 4.5.5 - 19 juillet 2026
+
+- rendu de toutes les modales dans un portail racine afin qu'elles couvrent réellement la navigation mobile et les autres contextes d'empilement.
+
 ## 4.5.4 - 18 juillet 2026
 
 - correction de la sheet de détail d'un cours sur mobile : hauteur dynamique, safe area et défilement tactile jusqu'au lieu.

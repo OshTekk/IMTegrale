@@ -1,5 +1,6 @@
 import { X } from "lucide-react";
 import { type ReactNode, useEffect, useId, useRef } from "react";
+import { createPortal } from "react-dom";
 
 interface ModalProps {
   open: boolean;
@@ -59,7 +60,7 @@ export function Modal({ open, title, description, onClose, children, size = "med
   }, [dismissible, open]);
 
   if (!open) return null;
-  return (
+  return createPortal(
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => dismissible && event.target === event.currentTarget && onClose()}>
       <section ref={dialogRef} className={`modal modal-${size}${className ? ` ${className}` : ""}`} role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={description ? descriptionId : undefined} tabIndex={-1}>
         <header className="modal-header">
@@ -71,6 +72,7 @@ export function Modal({ open, title, description, onClose, children, size = "med
         </header>
         {children}
       </section>
-    </div>
+    </div>,
+    document.body,
   );
 }
