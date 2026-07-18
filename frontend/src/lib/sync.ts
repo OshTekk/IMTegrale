@@ -3,8 +3,11 @@ import type { ManualSyncStatus } from "../types";
 
 export function formatSyncDuration(value: number): string {
   const total = Math.max(0, Math.ceil(value));
-  const minutes = Math.floor(total / 60);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
   const seconds = total % 60;
+  if (hours && minutes) return `${hours} h ${minutes} min`;
+  if (hours) return `${hours} h`;
   if (minutes && seconds) return `${minutes} min ${seconds} s`;
   if (minutes) return `${minutes} min`;
   return `${seconds} s`;

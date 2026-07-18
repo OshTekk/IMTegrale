@@ -30,6 +30,8 @@ describe("manual synchronization countdown", () => {
   it("formats exact server seconds without hiding the remaining seconds", () => {
     expect(formatSyncDuration(452)).toBe("7 min 32 s");
     expect(formatSyncDuration(120)).toBe("2 min");
+    expect(formatSyncDuration(3665)).toBe("1 h 1 min");
+    expect(formatSyncDuration(3600)).toBe("1 h");
     expect(formatSyncDuration(-1)).toBe("0 s");
   });
 
