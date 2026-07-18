@@ -3,6 +3,7 @@ import { BookOpenCheck, ChevronDown, Ellipsis, Gauge, KeyRound, LogOut, Notebook
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
+import { eventReconnectDelay } from "../lib/events";
 import { queryKeys, useDashboard, useRefreshDashboard } from "../lib/queries";
 import { broadcastSessionChange } from "../lib/sessionSync";
 import { formatSyncDuration, manualSyncMessage, useServerCountdown } from "../lib/sync";
@@ -54,21 +55,62 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
   const syncRemaining = useServerCountdown(manualSync);
   const syncMessage = manualSyncMessage(manualSync, syncRemaining);
   const syncRecheckKey = useRef<string | null>(null);
+  const eventCursor = useRef({ accountId: "", lastId: 0 });
+  const eventAccountId = dashboard.data?.account.id;
+  const latestEventId = dashboard.data?.latest_event_id;
 
   useEffect(() => {
-    if (!dashboard.data) return;
-    const source = new EventSource(`/api/v1/events?after=${dashboard.data.latest_event_id}`);
-    source.onopen = () => setLive("connected");
-    source.onerror = () => setLive("connecting");
-    source.addEventListener("update", () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.account });
-    });
-    source.addEventListener("unauthorized", () => {
-      source.close();
-      window.dispatchEvent(new CustomEvent("botnote:unauthorized"));
-    });
-    return () => source.close();
-  }, [dashboard.data?.latest_event_id, queryClient]);
+    if (!eventAccountId || latestEventId === undefined) return;
+    if (eventCursor.current.accountId !== eventAccountId) {
+      eventCursor.current = { accountId: eventAccountId, lastId: latestEventId };
+      return;
+    }
+    eventCursor.current.lastId = Math.max(eventCursor.current.lastId, latestEventId);
+  }, [eventAccountId, latestEventId]);
+
+  useEffect(() => {
+    if (!eventAccountId) return;
+    let source: EventSource | null = null;
+    let retryTimer: number | null = null;
+    let retryAttempt = 0;
+    let stopped = false;
+
+    const connect = () => {
+      if (stopped) return;
+      source = new EventSource(`/api/v1/events?after=${eventCursor.current.lastId}`);
+      source.onopen = () => {
+        retryAttempt = 0;
+        setLive("connected");
+      };
+      source.onerror = () => {
+        source?.close();
+        setLive("connecting");
+        if (stopped) return;
+        const delay = eventReconnectDelay(retryAttempt);
+        retryAttempt += 1;
+        retryTimer = window.setTimeout(connect, delay);
+      };
+      source.addEventListener("update", (event) => {
+        const eventId = Number((event as MessageEvent).lastEventId);
+        if (Number.isFinite(eventId) && eventId > 0) {
+          eventCursor.current.lastId = Math.max(eventCursor.current.lastId, eventId);
+        }
+        queryClient.invalidateQueries({ queryKey: queryKeys.account });
+      });
+      source.addEventListener("unauthorized", () => {
+        stopped = true;
+        source?.close();
+        window.dispatchEvent(new CustomEvent("botnote:unauthorized"));
+      });
+    };
+
+    connect();
+    return () => {
+      stopped = true;
+      source?.close();
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
+    };
+  }, [eventAccountId, queryClient]);
 
   useEffect(() => {
     setProfileOpen(false);

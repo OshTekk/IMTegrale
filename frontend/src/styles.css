@@ -1222,7 +1222,7 @@ select:disabled {
   margin-top: 8px;
 }
 
-.semester-overview-tabs button { min-width: 44px; min-height: 32px; }
+.semester-overview-tabs button { min-width: 44px; min-height: 36px; }
 
 .semester-overview-values {
   display: grid;

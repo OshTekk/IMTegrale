@@ -55,7 +55,7 @@ export function UesPage() {
 
       {semesters.length > 0 && <section className="semester-filter-band" aria-label="Filtrer par semestre"><div className="segmented semester-tabs" role="tablist" aria-label="Semestre"><button type="button" role="tab" aria-selected={semester === "all"} className={semester === "all" ? "active" : ""} onClick={() => setSemester("all")}>Tous les semestres</button>{semesters.map((item) => <button key={item.semester} type="button" role="tab" aria-selected={semester === item.semester} className={semester === item.semester ? "active" : ""} onClick={() => setSemester(item.semester)}>{item.semester}</button>)}</div><p><BadgeCheck size={16} /> Semestres, intitulés, grades et ECTS importés depuis COMPETENCES.</p></section>}
 
-      <section className="grade-scale-band" aria-label="Échelle des grades">{dashboard.data.grade_scale.map((item) => <div key={item.grade}><GradeBadge grade={item.grade} /><span>{item.description}</span><strong>{formatNumber(item.gpa)}</strong></div>)}</section>
+      <section className="grade-scale-band" aria-label="Échelle des grades">{dashboard.data.grade_scale.map((item) => <div key={item.grade}><GradeBadge grade={item.grade} description={item.description} /><span title={item.description}>{item.description}</span><strong>{formatNumber(item.gpa)}</strong></div>)}</section>
 
       <section className="data-section">
         <header className="section-heading"><div><h2>Unités d'enseignement</h2><p>{ues.length} UE · {ues.filter((ue) => ue.validated).length} validées</p></div><span className="official-data-label"><BadgeCheck size={16} /> PASS + COMPETENCES</span></header>
