@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import json
 import sys
@@ -66,3 +67,19 @@ def test_release_audit_rejects_secrets_inside_wheel(tmp_path) -> None:
         assert str(exc) == "Wheel secret scan failed"
     else:  # pragma: no cover - the scanner must fail closed
         raise AssertionError("release audit accepted a credential-shaped value")
+
+
+def test_release_smoke_probe_uses_asgi_without_test_client() -> None:
+    smoke = _load_script("smoke_release")
+
+    async def app(scope, receive, send) -> None:  # noqa: ANN001
+        assert scope["path"] == "/health/live"
+        request = await receive()
+        assert request["type"] == "http.request"
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b'{"status":"ok"}'})
+
+    status_code, body = asyncio.run(smoke._asgi_get(app, "/health/live"))
+
+    assert status_code == 200
+    assert json.loads(body) == {"status": "ok"}

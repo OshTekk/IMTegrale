@@ -109,7 +109,7 @@ Aucune dette P0 validee n'est ouverte apres le correctif d'assurance primaire et
 | Mesure | Resultat |
 | --- | --- |
 | Lint/SAST backend | `ruff check backend scripts` et `ruff check --select S backend/app` verts |
-| Tests backend | 696 tests verts |
+| Tests backend | 697 tests verts |
 | Couverture backend | 87,45 % lignes, 69,20 % branches ; `calculations.py` 94,12/86,36 |
 | PostgreSQL | 12 contrats CI ; migration reelle isolee `base -> 0024 -> base -> 0024` verte |
 | Migration numerique | Precision/scale, arrondi des anciennes valeurs et round-trip `Decimal` testes |

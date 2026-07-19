@@ -59,7 +59,7 @@ Les contre-mesures préexistantes réduisaient certaines fenêtres (quotas, expi
 ## Vérification et déploiement
 
 - Ruff backend et scripts : vert ;
-- 696 tests backend : verts ; couverture 87,45 % lignes et 69,20 % branches ;
+- 697 tests backend : verts ; couverture 87,45 % lignes et 69,20 % branches ;
 - 12 contrats PostgreSQL et migrations `base -> 0024 -> base -> 0024` : verts ;
 - 74 tests Vitest et 25 parcours Playwright/axe : verts ;
 - typecheck, lint, format, build et budgets frontend : verts ;
