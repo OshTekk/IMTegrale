@@ -60,7 +60,7 @@ jobs:
         shell: bash
         run: |
           wheel_out="$(mktemp -d)"
-          python -m pip wheel --no-deps --no-build-isolation --wheel-dir "$wheel_out" .
+          python -m pip wheel --no-deps --wheel-dir "$wheel_out" .
           mapfile -t wheels < <(find "$wheel_out" -maxdepth 1 -type f -name '*.whl' -print)
           test "${#wheels[@]}" -eq 1
           python scripts/check_content_boundary.py --wheel "${wheels[0]}"
@@ -147,6 +147,16 @@ jobs:
         run: pnpm exec playwright install --with-deps chromium
       - name: Parcours E2E (synthetic fixtures only)
         run: pnpm test:e2e:ci
+      - name: Retain synthetic E2E diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: frontend-e2e-${{ github.sha }}
+          path: |
+            frontend/test-results/
+            frontend/e2e/__screenshots__/
+          if-no-files-found: error
+          retention-days: 7
       - name: Verify built content boundary
         run: python ../scripts/check_content_boundary.py --repo-root .. --dist frontend/dist
       - name: Dependency audit
@@ -180,7 +190,7 @@ jobs:
       - name: Build exact release artifacts
         run: |
           mkdir -p artifacts/wheel
-          python -m pip wheel --no-deps --no-build-isolation --wheel-dir artifacts/wheel .
+          python -m pip wheel --no-deps --wheel-dir artifacts/wheel .
           pnpm --dir frontend build
           python scripts/generate_sbom.py --output artifacts/imtegrale.cdx.json
       - name: Audit manifest and smoke-test built artifacts

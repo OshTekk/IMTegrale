@@ -5,7 +5,7 @@ const ci = Boolean(process.env.CI);
 export default defineConfig({
   testDir: "./e2e",
   outputDir: "./test-results",
-  snapshotPathTemplate: "{testDir}/__screenshots__/{testFilePath}/{arg}{ext}",
+  snapshotPathTemplate: "{testDir}/__screenshots__/{testFilePath}/{arg}-{platform}{ext}",
   // Vite's development dependency optimizer is intentionally exercised once.
   // A single worker avoids concurrent first-load optimizer invalidations that
   // can otherwise look like application failures instead of test failures.
