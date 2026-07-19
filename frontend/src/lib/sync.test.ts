@@ -49,27 +49,17 @@ describe("manual synchronization countdown", () => {
   });
 
   it("uses neutral and accessible cooldown wording", () => {
-    expect(manualSyncMessage(status("cooldown"), 452)).toBe(
-      "Synchronisation récente. Réessaie dans 7 min 32 s."
-    );
-    expect(manualSyncMessage(status("cooldown"), 0)).toBe(
-      "Vérification du prochain créneau"
-    );
+    expect(manualSyncMessage(status("cooldown"), 452)).toBe("Synchronisation récente. Réessaie dans 7 min 32 s.");
+    expect(manualSyncMessage(status("cooldown"), 0)).toBe("Vérification du prochain créneau");
   });
 
   it("distinguishes an active request from an available action", () => {
-    expect(manualSyncMessage(status("in_progress"), 452)).toBe(
-      "Synchronisation en cours"
-    );
-    expect(manualSyncMessage(status("available"), 0)).toBe(
-      "Synchronisation manuelle disponible"
-    );
+    expect(manualSyncMessage(status("in_progress"), 452)).toBe("Synchronisation en cours");
+    expect(manualSyncMessage(status("available"), 0)).toBe("Synchronisation manuelle disponible");
     expect(manualSyncMessage(null, 0)).toBe("Vérification de la disponibilité");
   });
 
   it("keeps an upstream protection message neutral", () => {
-    expect(manualSyncMessage(status("pass_unavailable"), 120)).toBe(
-      "PASS disponible dans 2 min."
-    );
+    expect(manualSyncMessage(status("pass_unavailable"), 120)).toBe("PASS disponible dans 2 min.");
   });
 });

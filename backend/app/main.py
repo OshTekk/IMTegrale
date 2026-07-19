@@ -1,18 +1,31 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+import re
 
 from fastapi import FastAPI, HTTPException, Request, status
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.concurrency import run_in_threadpool
+from fastapi.exception_handlers import (
+    http_exception_handler,
+    request_validation_exception_handler,
+)
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse
+from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import text
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app import __version__
 from app.admin_security import require_admin_network
+from app.api_models import ApiErrorEnvelope
 from app.config import get_settings
 from app.database import SessionLocal
+from app.errors import api_error_response, validation_error_response
+from app.learning.access import (
+    learning_access_for,
+    load_learning_catalog_for_access,
+    require_learning_ingress,
+)
+from app.observability import CorrelationMiddleware
 from app.routers import (
     academic_reports,
     admin,
@@ -21,6 +34,7 @@ from app.routers import (
     dashboard,
     events,
     leaderboard,
+    learning,
     note_simulations,
     notes,
     settings,
@@ -28,10 +42,32 @@ from app.routers import (
     sync,
     tokens,
 )
-from app.services.calendar_scheduler import calendar_sync_scheduler
-from app.services.scheduler import automatic_sync_scheduler
+from app.security import get_auth_context, require_action
+from app.services.operations import readiness_checks
 
 settings_config = get_settings()
+
+COMMON_API_ERROR_RESPONSES = {
+    code: {"model": ApiErrorEnvelope, "description": description}
+    for code, description in {
+        400: "Requête refusée",
+        401: "Authentification requise",
+        403: "Action interdite",
+        404: "Ressource introuvable",
+        409: "Conflit d'état",
+        413: "Requête trop volumineuse",
+        422: "Validation impossible",
+        429: "Limite temporaire atteinte",
+        503: "Service temporairement indisponible",
+    }.items()
+}
+
+
+def stable_operation_id(route: APIRoute) -> str:
+    """Keep generated client identifiers independent from URL formatting."""
+
+    tag = route.tags[0] if route.tags else "api"
+    return re.sub(r"[^a-zA-Z0-9_]+", "_", f"{tag}_{route.name}").strip("_")
 
 
 class BodySizeLimitMiddleware:
@@ -49,9 +85,9 @@ class BodySizeLimitMiddleware:
         except ValueError:
             declared_length = self.max_bytes + 1
         if declared_length > self.max_bytes:
-            response = JSONResponse(
-                {"detail": "Requête trop volumineuse"},
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            response = api_error_response(
+                status.HTTP_413_CONTENT_TOO_LARGE,
+                "Requête trop volumineuse",
             )
             await response(scope, receive, send)
             return
@@ -65,23 +101,12 @@ class BodySizeLimitMiddleware:
                 consumed += len(message.get("body", b""))
                 if consumed > self.max_bytes:
                     raise HTTPException(
-                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
                         detail="Requête trop volumineuse",
                     )
             return message
 
         await self.app(scope, limited_receive, send)
-
-
-@asynccontextmanager
-async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    automatic_sync_scheduler.start()
-    calendar_sync_scheduler.start()
-    try:
-        yield
-    finally:
-        calendar_sync_scheduler.stop()
-        automatic_sync_scheduler.stop()
 
 
 app = FastAPI(
@@ -90,10 +115,105 @@ app = FastAPI(
     docs_url="/api/docs" if settings_config.environment != "production" else None,
     redoc_url=None,
     openapi_url="/api/openapi.json" if settings_config.environment != "production" else None,
-    lifespan=lifespan,
+    generate_unique_id_function=stable_operation_id,
 )
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings_config.allowed_hosts)
 app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings_config.max_request_bytes)
+
+
+def _is_learning_api_surface(path: str) -> bool:
+    return path == "/api/v1/learning" or path.startswith("/api/v1/learning/")
+
+
+def _is_api_surface(path: str) -> bool:
+    return path == "/api" or path.startswith("/api/")
+
+
+def _is_learning_surface(path: str) -> bool:
+    return (
+        _is_learning_api_surface(path)
+        or path == "/parcours"
+        or path.startswith("/parcours/")
+    )
+
+
+@app.middleware("http")
+async def personal_learning_ingress(request: Request, call_next):  # noqa: ANN001
+    """Hide every Parcours surface outside its configured private ingress."""
+
+    if _is_learning_surface(request.url.path):
+        try:
+            require_learning_ingress(request, settings_config)
+        except HTTPException:
+            response = api_error_response(
+                status.HTTP_404_NOT_FOUND,
+                "Route introuvable",
+                headers={
+                    "Cache-Control": "private, no-store",
+                    "X-Robots-Tag": "noindex, nofollow, noarchive",
+                    "Vary": "Cookie",
+                    "X-Content-Type-Options": "nosniff",
+                    "Referrer-Policy": "no-referrer",
+                },
+            )
+            return response
+    return await call_next(request)
+
+
+@app.exception_handler(HTTPException)
+async def stable_http_error(request: Request, exc: HTTPException):  # noqa: ANN201
+    if not _is_api_surface(request.url.path):
+        return await http_exception_handler(request, exc)
+    return api_error_response(
+        exc.status_code,
+        exc.detail,
+        headers=exc.headers,
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_without_learning_input(
+    request: Request,
+    exc: RequestValidationError,
+):  # noqa: ANN201
+    if not _is_learning_api_surface(request.url.path):
+        if _is_api_surface(request.url.path):
+            return validation_error_response(exc.errors())
+        return await request_validation_exception_handler(request, exc)
+    # FastAPI may parse a malformed JSON body before resolving route
+    # dependencies. Re-run the same authentication/action/entitlement checks so
+    # an invalid body can never turn an anonymous 401 or a hidden 404 into a
+    # validation oracle.
+    try:
+        require_learning_ingress(request, settings_config)
+        with SessionLocal() as db:
+            try:
+                auth = get_auth_context(request, db, settings_config)
+                context = learning_access_for(
+                    db,
+                    auth,
+                    settings_config,
+                    load_catalog=False,
+                )
+                if request.method not in {"GET", "HEAD", "OPTIONS"}:
+                    require_action(request, auth, settings_config)
+            finally:
+                db.close()
+        await run_in_threadpool(
+            load_learning_catalog_for_access,
+            context,
+            settings_config,
+        )
+    except HTTPException as access_error:
+        return api_error_response(
+            access_error.status_code,
+            access_error.detail,
+            headers=access_error.headers,
+        )
+    # Pydantic normally includes the rejected input in its 422 payload. Learning
+    # endpoints deliberately return only location/type/message so a malformed
+    # request can never make a private path or content fragment echo back.
+    return validation_error_response(exc.errors())
 
 
 @app.middleware("http")
@@ -101,7 +221,7 @@ async def security_headers(request: Request, call_next):  # noqa: ANN001
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
-    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Permissions-Policy"] = (
         "camera=(), microphone=(), geolocation=(), payment=(), publickey-credentials-get=(self)"
     )
@@ -112,16 +232,28 @@ async def security_headers(request: Request, call_next):  # noqa: ANN001
         "font-src 'self'; "
         "form-action 'self'; "
         "frame-ancestors 'none'; "
-        "img-src 'self' data:; "
-        "object-src 'none'; "
+        # Protected images are also fetched first, then rendered from an
+        # in-memory object URL. Arbitrary network image origins stay blocked.
+        "img-src 'self' data: blob:; "
+        # The lazy source viewer uses only object URLs built from an already
+        # authorized response. Same-origin/network object embeds remain blocked.
+        "object-src blob:; "
         "script-src 'self'; "
         "style-src 'self' 'unsafe-inline'"
     )
     if request.url.path.startswith("/api/"):
         response.headers["Cache-Control"] = "no-store"
+    if request.url.path.startswith("/api/v1/learning"):
+        response.headers["Cache-Control"] = "private, no-store"
+        response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive"
+        response.headers["Vary"] = "Cookie"
+        response.headers["X-Content-Type-Options"] = "nosniff"
     if settings_config.secure_cookies:
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     return response
+
+
+app.add_middleware(CorrelationMiddleware)
 
 
 @app.get("/health/live", include_in_schema=False)
@@ -133,7 +265,9 @@ def health_live() -> dict:
 def health_ready() -> dict:
     try:
         with SessionLocal() as db:
-            db.execute(text("SELECT 1"))
+            checks = readiness_checks(db, settings_config)
+        if not all(checks.values()):
+            raise RuntimeError("Internal dependency is stale")
         return {"status": "ready", "version": __version__}
     except Exception as exc:
         raise HTTPException(
@@ -156,7 +290,9 @@ for api_router in (
     sync.router,
     events.router,
 ):
-    app.include_router(api_router)
+    app.include_router(api_router, responses=COMMON_API_ERROR_RESPONSES)
+
+app.include_router(learning.router, responses=COMMON_API_ERROR_RESPONSES)
 
 
 frontend = settings_config.frontend_dist.resolve()

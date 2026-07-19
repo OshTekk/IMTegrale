@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import logging
 import ssl
 
 import uvicorn
@@ -17,14 +16,11 @@ from app.admin_security import (
 from app.config import get_settings
 from app.database import Base, SessionLocal, engine
 from app.models import AdminUser
+from app.observability import configure_json_logging
+from app.services.key_rotation import reencrypt_stored_secrets
+from app.services.operations import operational_alert_codes
 from app.services.sync import sync_account, sync_all_accounts, sync_due_accounts
-
-
-def configure_logging() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+from app.services.worker_runtime import run_worker
 
 
 def main() -> None:
@@ -40,13 +36,20 @@ def main() -> None:
 
     subparsers.add_parser("sync-all")
     subparsers.add_parser("sync-due")
+    worker = subparsers.add_parser("worker")
+    worker.add_argument("kind", choices=("sync", "calendar", "outbox", "scheduler"))
     subparsers.add_parser("create-schema")
     admin_bootstrap = subparsers.add_parser("admin-bootstrap")
     admin_bootstrap.add_argument("--username", required=True)
     admin_bootstrap.add_argument("--output", required=True)
+    key_rotation = subparsers.add_parser("keys-reencrypt")
+    key_rotation.add_argument("--batch-size", type=int, default=100)
+    key_rotation.add_argument("--dry-run", action="store_true")
+    key_rotation.add_argument("--limit", type=int)
+    subparsers.add_parser("operations-check")
 
     args = parser.parse_args()
-    configure_logging()
+    configure_json_logging()
     get_settings().validate_secrets()
 
     if args.command == "serve":
@@ -57,6 +60,10 @@ def main() -> None:
             workers=1,
             proxy_headers=False,
             server_header=False,
+            # Nginx owns the deliberately redacted access log. Uvicorn's default
+            # formatter includes request paths, which may contain private content IDs.
+            access_log=False,
+            log_config=None,
             ssl_certfile=str(get_settings().backend_tls_cert),
             ssl_keyfile=str(get_settings().backend_tls_key),
             ssl_ca_certs=str(get_settings().backend_tls_ca),
@@ -75,6 +82,8 @@ def main() -> None:
         print(json.dumps(results, ensure_ascii=False))
         if any(not item["ok"] for item in results):
             raise SystemExit(1)
+    elif args.command == "worker":
+        run_worker(args.kind)
     elif args.command == "create-schema":
         Base.metadata.create_all(engine)
     elif args.command == "admin-bootstrap":
@@ -96,6 +105,21 @@ def main() -> None:
             )
             db.commit()
         print(json.dumps({"ok": True, "username": username, "output": args.output}))
+    elif args.command == "keys-reencrypt":
+        with SessionLocal() as db:
+            result = reencrypt_stored_secrets(
+                db,
+                batch_size=args.batch_size,
+                dry_run=args.dry_run,
+                max_items=args.limit,
+            )
+        print(json.dumps(result, sort_keys=True))
+    elif args.command == "operations-check":
+        with SessionLocal() as db:
+            alerts = operational_alert_codes(db, get_settings())
+        print(json.dumps({"ok": not alerts, "alerts": alerts}, sort_keys=True))
+        if alerts:
+            raise SystemExit(1)
 
 
 if __name__ == "__main__":

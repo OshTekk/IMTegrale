@@ -1,0 +1,12 @@
+[Unit]
+Description=Check IMTégrale runtime health every five minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Persistent=true
+Unit=botnote-operations-check.service
+
+[Install]
+WantedBy=timers.target

@@ -7,14 +7,18 @@ from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.security import AuthContext, LoginRateLimiter, get_auth_context
+from app.security import AuthContext, LoginRateLimiter, get_auth_context, require_primary_owner
 from app.services.academic_report import AcademicReportUnavailable, build_academic_report
 
 router = APIRouter(prefix="/api/v1/academic-reports", tags=["academic-reports"])
 report_rate_limiter = LoginRateLimiter(limit=8, window_seconds=60, max_keys=5_000)
 
 
-@router.get("/personal.pdf")
+@router.get(
+    "/personal.pdf",
+    response_class=Response,
+    responses={200: {"content": {"application/pdf": {}}}},
+)
 def download_personal_report(
     semester: Literal["all", "S5", "S6", "S7", "S8", "S9", "S10"] = Query(default="all"),
     include_assessments: bool = Query(default=True),
@@ -22,11 +26,12 @@ def download_personal_report(
     auth: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db),
 ) -> Response:
-    if auth.session.share_token_id:
+    if auth.role != "owner":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Le relevé personnel n'est accessible qu'au titulaire du compte",
         )
+    require_primary_owner(auth)
     report_rate_limiter.check(auth.account.id)
     try:
         content, filename = build_academic_report(

@@ -44,7 +44,7 @@ from app.models import Account
 from app.services.dashboard import dashboard_snapshot
 
 REPOSITORY_URL = "https://github.com/OshTekk/IMTegrale"
-PASS_URL = "https://pass.imt-atlantique.fr/"
+PASS_URL = "https://pass.imt-atlantique.fr/"  # noqa: S105 - public service URL
 COMPETENCES_URL = "https://hub.imt-atlantique.fr/comp2/"
 VALID_SEMESTERS = frozenset({"S5", "S6", "S7", "S8", "S9", "S10"})
 

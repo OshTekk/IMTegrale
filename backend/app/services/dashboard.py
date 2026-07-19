@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from decimal import Decimal
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -19,8 +20,8 @@ def note_view(note: Note) -> dict:
         "source": note.source,
         "ue_code": note.ue_code,
         "label": note.raw_label if official else note.label,
-        "score": round(note.raw_score if official else note.score, 2),
-        "coefficient": round(note.raw_coefficient if official else note.coefficient, 2),
+        "score": float(round(note.raw_score if official else note.score, 2)),
+        "coefficient": float(round(note.raw_coefficient if official else note.coefficient, 2)),
         "is_resit": note.raw_is_resit if official else note.is_resit,
         "has_override": False if official else note.has_override,
         "editable": not official,
@@ -93,8 +94,8 @@ def calculate_ues(notes: list[Note], settings: list[UeSetting]) -> list[dict]:
         setting = setting_map.get(code)
         pass_notes = [note for note in ue_notes if note.source == "pass"]
         calculation_notes = pass_notes if pass_notes else ue_notes
-        normal_total = 0.0
-        normal_coefficients = 0.0
+        normal_total = Decimal("0")
+        normal_coefficients = Decimal("0")
         resits: list[Note] = []
         for note in calculation_notes:
             is_official = note.source == "pass"
@@ -110,12 +111,14 @@ def calculate_ues(notes: list[Note], settings: list[UeSetting]) -> list[dict]:
         used_resit = bool(resits)
         if resits:
             latest = max(resits, key=lambda item: (item.updated_at, item.detected_at))
-            average = round(
-                latest.raw_score if latest.source == "pass" else latest.score,
-                2,
+            average = float(
+                round(
+                    latest.raw_score if latest.source == "pass" else latest.score,
+                    2,
+                )
             )
         elif normal_coefficients > 0:
-            average = round(normal_total / normal_coefficients, 2)
+            average = float(round(normal_total / normal_coefficients, 2))
         else:
             average = None
 

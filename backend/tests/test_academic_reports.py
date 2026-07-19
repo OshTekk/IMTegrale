@@ -139,7 +139,7 @@ def test_shared_token_cannot_download_personal_report(client, monkeypatch) -> No
         response = delegated.get("/api/v1/academic-reports/personal.pdf")
 
     assert response.status_code == 403
-    assert "titulaire" in response.json()["detail"]
+    assert "titulaire" in response.json()["detail"]["message"]
 
 
 def test_report_rejects_an_empty_semester(client, monkeypatch) -> None:
@@ -151,4 +151,4 @@ def test_report_rejects_an_empty_semester(client, monkeypatch) -> None:
     )
 
     assert response.status_code == 409
-    assert "Aucune UE" in response.json()["detail"]
+    assert "Aucune UE" in response.json()["detail"]["message"]

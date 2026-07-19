@@ -5,7 +5,9 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .coverage
+/coverage.json
 htmlcov/
+/artifacts/
 *.egg-info/
 build/
 dist/
@@ -16,6 +18,22 @@ dist/
 frontend/node_modules/
 frontend/dist/
 frontend/*.tsbuildinfo
+frontend/playwright-report/
+frontend/test-results/
+
+# Private Parcours inputs and compiled releases never belong to the public tree.
+**/private/
+**/content/
+**/release/
+**/releases/
+/IMTegrale-Parcours-Private/
+/learning-private/
+/learning-content/
+/learning-releases/
+/frontend/public/learning/
+/frontend/public/parcours/
+/backend/app/static/learning/
+/backend/app/static/parcours/
 
 *.dump
 *.dump.age

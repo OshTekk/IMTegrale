@@ -11,7 +11,7 @@ export function formatDate(value: string | null | undefined, withTime = true): s
   if (Number.isNaN(date.getTime())) return "—";
   return new Intl.DateTimeFormat("fr-FR", {
     dateStyle: "medium",
-    ...(withTime ? { timeStyle: "short" as const } : {})
+    ...(withTime ? { timeStyle: "short" as const } : {}),
   }).format(date);
 }
 
@@ -25,7 +25,7 @@ export function relativeDate(value: string | null | undefined): string {
     ["month", 2_592_000],
     ["day", 86_400],
     ["hour", 3_600],
-    ["minute", 60]
+    ["minute", 60],
   ];
   for (const [unit, divisor] of units) {
     if (Math.abs(seconds) >= divisor) return formatter.format(Math.round(seconds / divisor), unit);

@@ -211,7 +211,7 @@ def test_scenario_limit_and_optimistic_version_conflict(
     assert conflict.json()["detail"] == {
         "code": "simulation_version_conflict",
         "message": "Cette simulation a été modifiée dans un autre onglet",
-        "current_version": saved.json()["version"],
+        "metadata": {"current_version": saved.json()["version"]},
     }
 
     stale_actions = (

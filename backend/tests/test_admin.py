@@ -1,14 +1,27 @@
 from __future__ import annotations
 
+from datetime import timedelta
+
 from app import main as main_module
 from app.admin_security import hash_admin_password, verify_admin_password
 from app.database import SessionLocal, utcnow
-from app.models import Account, AdminAuditLog, AdminUser, LeaderboardProfile, ShareToken, WebSession
+from app.models import (
+    Account,
+    AdminAuditLog,
+    AdminPasskeyCredential,
+    AdminSession,
+    AdminUser,
+    LeaderboardProfile,
+    ShareToken,
+    WebSession,
+)
+from app.routers import admin as admin_router
 from app.services.auth_protection import record_auth_outcome
 from app.services.imt import CompetencyUe, ImtPassClient, PassEntry, PassProfile
 from app.services.pass_gateway import client_reference, target_reference
 from fastapi.testclient import TestClient
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from tests.conftest import csrf_headers
 
@@ -44,6 +57,28 @@ def create_admin() -> None:
         db.commit()
 
 
+def mark_admin_mfa_ready() -> None:
+    with SessionLocal() as db:
+        user = db.scalar(select(AdminUser).where(AdminUser.username == "private-admin"))
+        assert user is not None
+        db.add(
+            AdminPasskeyCredential(
+                admin_user_id=user.id,
+                credential_id="c3ludGhldGljLWFkbWluLWNyZWRlbnRpYWw",
+                public_key=b"synthetic-public-key",
+                name="Passkey de test",
+            )
+        )
+        session = db.scalar(
+            select(AdminSession)
+            .where(AdminSession.admin_user_id == user.id)
+            .order_by(AdminSession.created_at.desc())
+        )
+        assert session is not None
+        session.mfa_verified_at = utcnow()
+        db.commit()
+
+
 def ready_admin(client: TestClient) -> TestClient:
     create_admin()
     admin = TestClient(client.app, base_url="https://testserver")
@@ -59,6 +94,7 @@ def ready_admin(client: TestClient) -> TestClient:
         },
         headers=admin_csrf_headers(admin),
     ).status_code == 200
+    mark_admin_mfa_ready()
     return admin
 
 
@@ -69,6 +105,20 @@ def test_admin_password_hash_is_salted_and_verified() -> None:
     assert first != second
     assert verify_admin_password("Strong-Administrator-Password-91!", first) is True
     assert verify_admin_password("incorrect-password", first) is False
+
+
+def test_admin_operations_metrics_are_private_and_aggregate(client: TestClient) -> None:
+    assert client.get("/api/v1/admin/operations/metrics").status_code == 401
+    admin = ready_admin(client)
+
+    response = admin.get("/api/v1/admin/operations/metrics")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert set(payload) == {"generated_at", "http", "sse", "queues", "workers", "pass", "calendar"}
+    assert [queue["name"] for queue in payload["queues"]] == ["sync", "calendar", "outbox"]
+    assert "account" not in response.text.casefold()
+    assert '"url":' not in response.text.casefold()
 
 
 def test_admin_portal_has_separate_session_and_immediate_account_controls(
@@ -111,6 +161,8 @@ def test_admin_portal_has_separate_session_and_immediate_account_controls(
     replay.cookies.set("__Host-botnote_admin_session", stolen_session)
     assert replay.get("/api/v1/admin/auth/session").json() == {"authenticated": False}
 
+    mark_admin_mfa_ready()
+
     accounts = admin.get("/api/v1/admin/accounts")
     assert accounts.status_code == 200
     assert accounts.json()["stats"]["accounts"] == 1
@@ -139,6 +191,17 @@ def test_admin_portal_has_separate_session_and_immediate_account_controls(
     assert enabled.status_code == 200
     assert enabled.json()["is_disabled"] is False
 
+    revoked = admin.post(
+        f"/api/v1/admin/accounts/{account_id}/actions",
+        json={"action": "revoke_access"},
+        headers=admin_csrf_headers(admin),
+    )
+    assert revoked.status_code == 200
+    with SessionLocal() as db:
+        account = db.get(Account, account_id)
+        assert account is not None
+        assert account.access_generation == 2
+
     logout = admin.post(
         "/api/v1/admin/auth/logout",
         json={},
@@ -162,6 +225,144 @@ def test_admin_api_is_hidden_outside_allowed_tailnet_identity(client: TestClient
     )
 
     assert response.status_code == 404
+
+
+def test_admin_passkey_is_mandatory_and_recent_step_up_is_server_enforced(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    create_admin()
+    admin = TestClient(client.app, base_url="https://testserver")
+    assert admin.post(
+        "/api/v1/admin/auth/login",
+        json={"username": "private-admin", "password": "Initial-Admin-Password-47!"},
+    ).status_code == 200
+    changed = admin.post(
+        "/api/v1/admin/auth/password",
+        json={
+            "current_password": "Initial-Admin-Password-47!",
+            "new_password": "Replacement-Admin-Password-58!",
+        },
+        headers=admin_csrf_headers(admin),
+    )
+    assert changed.status_code == 200
+    assert changed.json()["mfa_configured"] is False
+
+    blocked = admin.get("/api/v1/admin/accounts")
+    assert blocked.status_code == 428
+    assert blocked.json()["detail"]["code"] == "ADMIN_MFA_SETUP_REQUIRED"
+    assert admin.post("/api/v1/admin/auth/passkeys/registration/options").status_code == 403
+
+    options = admin.post(
+        "/api/v1/admin/auth/passkeys/registration/options",
+        headers=admin_csrf_headers(admin),
+    )
+    assert options.status_code == 200
+    selection = options.json()["publicKey"]["authenticatorSelection"]
+    assert selection["userVerification"] == "required"
+
+    def fake_register(
+        db: Session,
+        *,
+        user: AdminUser,
+        session: AdminSession,
+        challenge_id: str,
+        name: str,
+        credential: dict,
+    ) -> AdminPasskeyCredential:
+        del challenge_id, credential
+        row = AdminPasskeyCredential(
+            admin_user_id=user.id,
+            credential_id="c3ludGhldGljLWFkbWluLW1mYQ",
+            public_key=b"synthetic-public-key",
+            name=name,
+        )
+        db.add(row)
+        db.flush()
+        session.mfa_verified_at = utcnow()
+        return row
+
+    monkeypatch.setattr(admin_router, "register_admin_passkey", fake_register)
+    registered = admin.post(
+        "/api/v1/admin/auth/passkeys",
+        json={
+            "challenge_id": options.json()["challenge_id"],
+            "name": "Clé administrateur de test",
+            "credential": {},
+        },
+        headers=admin_csrf_headers(admin),
+    )
+    assert registered.status_code == 200
+    assert registered.json()["mfa_configured"] is True
+    assert registered.json()["mfa_verified"] is True
+    assert admin.get("/api/v1/admin/accounts").status_code == 200
+
+    with SessionLocal() as db:
+        session = db.scalar(select(AdminSession).order_by(AdminSession.created_at.desc()))
+        assert session is not None
+        session.mfa_verified_at = utcnow() - timedelta(minutes=11)
+        db.commit()
+
+    sensitive = admin.post(
+        "/api/v1/admin/pass/probe",
+        json={"account_id": "00000000-0000-0000-0000-000000000000", "reason": "Test"},
+        headers={**admin_csrf_headers(admin), "Idempotency-Key": "synthetic-step-up"},
+    )
+    assert sensitive.status_code == 403
+    assert sensitive.json()["detail"]["code"] == "ADMIN_STEP_UP_REQUIRED"
+    assert admin.get("/api/v1/admin/accounts").status_code == 200
+
+    assertion_options = admin.post(
+        "/api/v1/admin/auth/passkey/options",
+        headers=admin_csrf_headers(admin),
+    )
+    assert assertion_options.status_code == 200
+
+    def fake_verify(
+        db: Session,
+        *,
+        user: AdminUser,
+        session: AdminSession,
+        challenge_id: str,
+        credential: dict,
+    ) -> AdminPasskeyCredential:
+        del challenge_id, credential
+        row = db.scalar(
+            select(AdminPasskeyCredential).where(
+                AdminPasskeyCredential.admin_user_id == user.id
+            )
+        )
+        assert row is not None
+        session.mfa_verified_at = utcnow()
+        return row
+
+    monkeypatch.setattr(admin_router, "verify_admin_passkey", fake_verify)
+    verified = admin.post(
+        "/api/v1/admin/auth/passkey",
+        json={"challenge_id": assertion_options.json()["challenge_id"], "credential": {}},
+        headers=admin_csrf_headers(admin),
+    )
+    assert verified.status_code == 200
+    assert verified.json()["mfa_verified"] is True
+
+    passkeys = admin.get("/api/v1/admin/auth/passkeys").json()
+    last_delete = admin.delete(
+        f"/api/v1/admin/auth/passkeys/{passkeys[0]['id']}",
+        headers=admin_csrf_headers(admin),
+    )
+    assert last_delete.status_code == 409
+
+    next_session = TestClient(client.app, base_url="https://testserver")
+    relogin = next_session.post(
+        "/api/v1/admin/auth/login",
+        json={"username": "private-admin", "password": "Replacement-Admin-Password-58!"},
+    )
+    assert relogin.status_code == 200
+    assert relogin.json()["mfa_configured"] is True
+    assert relogin.json()["mfa_verified"] is False
+    requires_mfa = next_session.get("/api/v1/admin/accounts")
+    assert requires_mfa.status_code == 428
+    assert requires_mfa.json()["detail"]["code"] == "ADMIN_MFA_REQUIRED"
 
 
 def test_admin_corrects_unjoined_official_profile_and_manages_pass_cooldown(

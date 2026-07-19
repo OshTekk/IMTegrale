@@ -1,9 +1,4 @@
-import type {
-  SimulationEntry,
-  SimulationGrade,
-  SimulationScenario,
-  SimulationSemester,
-} from "../types";
+import type { SimulationEntry, SimulationGrade, SimulationScenario, SimulationSemester } from "../types";
 
 export const SIMULATION_GRADES: Array<{ grade: SimulationGrade; points: number }> = [
   { grade: "A", points: 4 },
@@ -15,14 +10,7 @@ export const SIMULATION_GRADES: Array<{ grade: SimulationGrade; points: number }
   { grade: "F", points: 0 },
 ];
 
-export const SIMULATION_SEMESTERS: SimulationSemester[] = [
-  "S5",
-  "S6",
-  "S7",
-  "S8",
-  "S9",
-  "S10",
-];
+export const SIMULATION_SEMESTERS: SimulationSemester[] = ["S5", "S6", "S7", "S8", "S9", "S10"];
 
 export interface SimulationDraftEntry {
   clientKey: string;
@@ -125,17 +113,13 @@ export function mergeSavedIds(
   saved: SimulationScenario,
   sentKeys: string[],
 ): SimulationDraft {
-  const savedByClientKey = new Map(
-    saved.entries.map((entry, index) => [sentKeys[index], entry] as const),
-  );
+  const savedByClientKey = new Map(saved.entries.map((entry, index) => [sentKeys[index], entry] as const));
   return {
     ...current,
     version: saved.version,
     entries: current.entries.map((entry) => {
       const persisted = savedByClientKey.get(entry.clientKey);
-      return persisted
-        ? { ...entry, id: persisted.id, server: persisted }
-        : entry;
+      return persisted ? { ...entry, id: persisted.id, server: persisted } : entry;
     }),
   };
 }

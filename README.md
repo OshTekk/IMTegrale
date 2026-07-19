@@ -19,7 +19,8 @@ IMTégrale est un projet étudiant indépendant. Il n'est ni affilié, ni approu
 - agenda de cours personnel importé depuis un lien iCalendar INPASS, conservé chiffré et actualisé chaque heure ;
 - calendrier d'alternance 2026-2027 pour les FIP 2027, 2028 et 2029, avec périodes école, entreprise et mobilité ;
 - relevé académique personnel en PDF, filtrable par semestre, avec provenance PASS/COMPETENCES, annexe facultative et lien vers le code source ;
-- leaderboard facultatif par promotion, avec deux classements : GPA par défaut et moyenne générale.
+- leaderboard facultatif par promotion, avec deux classements : GPA par défaut et moyenne générale ;
+- moteur générique IMTégrale Parcours pour des catalogues pédagogiques privés, avec autorisation serveur, recherche et progression personnelles ; aucune ressource pédagogique réelle n'est publiée dans ce dépôt.
 
 Le leaderboard utilise la moyenne calculée depuis les notes brutes PASS, le grade COMPETENCES lorsqu'il existe et les ECTS officiels. Lorsqu'un étudiant le rejoint, son identité PASS et ses deux scores deviennent immédiatement visibles par les participants actifs, tandis qu'il attend 48 heures avant de voir le moindre classement, rang ou nombre de participants. Il peut retirer ou effacer sa participation immédiatement puis revenir à tout moment ; chaque nouvelle activation relance intégralement les 48 heures d'attente avant consultation.
 
@@ -38,6 +39,14 @@ PASS ne fournit pas ici de délégation OAuth. Le worker doit donc pouvoir déch
 - Server-Sent Events pour pousser les changements vers l'interface ;
 - Nginx, mTLS entre le frontal et le LXC, Tailscale Serve/Funnel et systemd en production.
 
+## Frontière IMTégrale Parcours
+
+Le dépôt public fournit uniquement le moteur générique : modèle de bundle versionné, validation, API protégée, renderer sûr, interface et catalogue de démonstration explicitement fictif. Les documents sources, catalogues réels, corrections, illustrations, index et releases compilées appartiennent au dépôt privé `IMTegrale-Parcours-Private` et à son volume de production séparé. Ils ne doivent jamais être copiés dans ce dépôt, ses fixtures, ses logs ou ses artefacts frontend.
+
+Parcours refuse l'accès par défaut et contrôle chaque requête côté backend ; masquer sa navigation dans React est uniquement une amélioration UX. Les tokens partagés, y compris avec le rôle `owner`, n'accèdent jamais à cette surface. Lorsque le répertoire privé est absent ou invalide, Parcours est indisponible sans empêcher le reste d'IMTégrale de fonctionner.
+
+Une exception étroite protège le droit à l'effacement : `DELETE /api/v1/learning/progress` exige toujours la session primaire du propriétaire ainsi que les contrôles Origin/CSRF, et refuse tout token partagé, mais ne dépend ni d'une audience encore éligible ni du bundle. Il supprime la progression et les tentatives du compte pour toutes les audiences ; perdre l'accès à Parcours ne peut donc jamais empêcher leur effacement.
+
 ## Lancer le projet en local
 
 Prérequis : Python 3.11+, Node.js 22+ et `pnpm`.
@@ -52,7 +61,7 @@ cp .env.development.example .env
 .venv/bin/python -c "import secrets; print(secrets.token_urlsafe(48))"
 
 .venv/bin/alembic upgrade head
-.venv/bin/uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8080
+.venv/bin/uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8080 --no-access-log
 ```
 
 Dans un second terminal :
@@ -69,12 +78,16 @@ L'interface est alors disponible sur `http://127.0.0.1:5173`. Utilisez uniquemen
 
 ```bash
 .venv/bin/ruff check backend
+.venv/bin/ruff check --select S backend/app
+.venv/bin/python scripts/check_secrets.py
 .venv/bin/pytest
 .venv/bin/pip-audit
 
 cd frontend
 pnpm typecheck
 pnpm test
+pnpm exec playwright install chromium  # première exécution locale uniquement
+pnpm test:e2e                           # API locale doublée, données DÉMO FICTIVE
 pnpm build
 pnpm audit --prod
 ```
@@ -87,8 +100,10 @@ pnpm audit --prod
 - [relevé académique personnel et transparence](docs/academic-report.md) ;
 - [données, consentements et cadre d'utilisation](docs/data-and-usage.md) ;
 - [actualisation automatique](docs/automatic-sync.md) et [synchronisation manuelle](docs/manual-sync.md) ;
+- [exploitation et observabilité](docs/operations.md) et [politique d'arrondi académique](docs/academic-rounding.md) ;
 - [déploiement et rollback](deploy/README.md) ;
-- [politique de sécurité](SECURITY.md), [historique des versions](CHANGELOG.md) et [guide de contribution](CONTRIBUTING.md).
+- [politique de sécurité](SECURITY.md), [modèle de menace](docs/security/threat-model.md), [rotation des clés](docs/security/key-rotation.md) et [niveaux d'assurance](docs/security/authentication-assurance.md) ;
+- [historique des versions](CHANGELOG.md) et [guide de contribution](CONTRIBUTING.md).
 
 Les exemples de déploiement doivent être adaptés à votre réseau. Les secrets, dumps, rapports d'audit et configurations rendues restent volontairement hors de Git.
 

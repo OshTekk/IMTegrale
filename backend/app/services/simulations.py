@@ -17,7 +17,7 @@ from app.limits import (
     MAX_SIMULATION_SCENARIOS_PER_ACCOUNT,
 )
 from app.models import Account, Note, SimulationEntry, SimulationScenario, UeSetting, new_id
-from app.schemas import SimulationEntryInput
+from app.schemas_simulations import SimulationEntryInput
 from app.services.dashboard import calculate_ues
 from app.services.events import record_event
 

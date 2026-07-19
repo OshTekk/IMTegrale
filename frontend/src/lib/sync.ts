@@ -31,10 +31,7 @@ export function useServerCountdown(status: ManualSyncStatus | null | undefined):
   return remaining;
 }
 
-export function manualSyncMessage(
-  status: ManualSyncStatus | null | undefined,
-  remaining: number
-): string {
+export function manualSyncMessage(status: ManualSyncStatus | null | undefined, remaining: number): string {
   if (!status) return "Vérification de la disponibilité";
   if (status.state === "reauth_required") {
     return "Reconnexion IMT requise avant la prochaine synchronisation";

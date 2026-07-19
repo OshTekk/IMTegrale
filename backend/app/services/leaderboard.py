@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.calculations import grade_for_average, grade_from_code
 from app.database import utcnow
+from app.limits import MAX_LEADERBOARD_PARTICIPANTS_PER_SEGMENT
 from app.models import Account, LeaderboardProfile, Note, UeSetting
 
 LEADERBOARD_CONSENT_VERSION = "2026-07-18.4"
@@ -283,7 +284,7 @@ def calculate_raw_pass_score(
             coefficients = sum(note.raw_coefficient for note in ue_notes)
             if coefficients <= 0:
                 continue
-            average = round(total / coefficients, 2)
+            average = float(round(total / coefficients, 2))
             used_resit = False
         ects = ects_by_code.get(code)
         if ects is None or float(ects) <= 0:
@@ -631,46 +632,46 @@ def board_view(
     if metric not in METRICS:
         raise ValueError("Métrique de classement invalide")
     now = utcnow()
-    profiles = list(
-        db.scalars(
-            select(LeaderboardProfile)
-            .join(Account, Account.id == LeaderboardProfile.account_id)
-            .where(
-                LeaderboardProfile.is_participating.is_(True),
-                LeaderboardProfile.suspended_at.is_(None),
-                LeaderboardProfile.score_ects_basis.is_not(None),
-                LeaderboardProfile.consent_version == LEADERBOARD_CONSENT_VERSION,
-                LeaderboardProfile.consent_at.is_not(None),
-                Account.ue_metadata_refreshed_at.is_not(None),
-                LeaderboardProfile.score_basis_updated_at == Account.ue_metadata_refreshed_at,
-                Account.is_disabled.is_(False),
-                Account.official_first_name.is_not(None),
-                Account.official_last_name.is_not(None),
-            )
-        )
+    statement = select(LeaderboardProfile, Account).join(
+        Account,
+        Account.id == LeaderboardProfile.account_id,
+    ).where(
+        LeaderboardProfile.is_participating.is_(True),
+        LeaderboardProfile.suspended_at.is_(None),
+        LeaderboardProfile.score_ects_basis.is_not(None),
+        LeaderboardProfile.consent_version == LEADERBOARD_CONSENT_VERSION,
+        LeaderboardProfile.consent_at.is_not(None),
+        Account.ue_metadata_refreshed_at.is_not(None),
+        LeaderboardProfile.score_basis_updated_at == Account.ue_metadata_refreshed_at,
+        Account.is_disabled.is_(False),
+        Account.official_first_name.is_not(None),
+        Account.official_last_name.is_not(None),
+        Account.program == viewer.program,
+        Account.promotion_year == viewer.promotion_year,
     )
-    accounts = {
-        account.id: account
-        for account in db.scalars(
-            select(Account).where(Account.id.in_([profile.account_id for profile in profiles]))
+    if campus_filter != "all":
+        statement = statement.where(Account.campus == campus_filter)
+    rows = list(
+        db.execute(statement.limit(MAX_LEADERBOARD_PARTICIPANTS_PER_SEGMENT + 1))
+    )
+    if len(rows) > MAX_LEADERBOARD_PARTICIPANTS_PER_SEGMENT:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "LEADERBOARD_CAPACITY_EXCEEDED",
+                "message": "Ce segment est temporairement trop volumineux pour être classé.",
+            },
         )
-    }
-    selected = [
-        profile
-        for profile in profiles
-        if profile.account_id in accounts
-        and (campus_filter == "all" or accounts[profile.account_id].campus == campus_filter)
-        and accounts[profile.account_id].program == viewer.program
-        and accounts[profile.account_id].promotion_year == viewer.promotion_year
-    ]
-    scores = _scores_for_profiles(db, selected)
+    profiles = [profile for profile, _account in rows]
+    accounts = {participant.id: participant for _profile, participant in rows}
+    scores = _scores_for_profiles(db, profiles)
     sortable: list[
         tuple[float, tuple[str, str], LeaderboardProfile, str, datetime | None]
     ] = []
     unranked: list[
         tuple[tuple[str, str], float, LeaderboardProfile, str, datetime | None]
     ] = []
-    for profile in selected:
+    for profile in profiles:
         score = scores[profile.account_id]
         value = score.gpa if metric == "gpa" else score.average
         account = accounts[profile.account_id]
@@ -875,12 +876,11 @@ def delete_leaderboard_data(
     profile.left_at = None
     profile.consent_version = None
     profile.consent_at = None
-    profile.verification_status = "standard"
+    if profile.suspended_at is None:
+        profile.verification_status = "standard"
     profile.score_ects_basis = None
     profile.score_basis_updated_at = None
     profile.refresh_recommended_at = None
-    profile.suspended_at = None
-    profile.suspended_reason = None
     profile.rejoin_after = None
     profile.updated_at = now
     account.classification_review_required = _classification_review(account)

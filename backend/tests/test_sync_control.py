@@ -11,6 +11,7 @@ from app.models import Account, Event, Note, SyncRequest
 from app.services import sync as sync_service
 from app.services import sync_control
 from app.services.imt import ImtFetchError, ImtPassClient, PassEntry
+from app.services.jobs import process_one
 from app.services.sync_control import (
     SyncCooldownActive,
     SyncInProgress,
@@ -73,8 +74,10 @@ def test_manual_sync_uses_server_cooldown_retry_after_and_idempotency(
     assert login_cooldown.status_code == 429
     detail = login_cooldown.json()["detail"]
     assert detail["code"] == "SYNC_COOLDOWN"
-    assert detail["retry_after_seconds"] > 0
-    assert login_cooldown.headers["Retry-After"] == str(detail["retry_after_seconds"])
+    assert detail["metadata"]["retry_after_seconds"] > 0
+    assert login_cooldown.headers["Retry-After"] == str(
+        detail["metadata"]["retry_after_seconds"]
+    )
     assert "Réessaie dans" in detail["message"]
 
     clear_cooldown(account_id)
@@ -84,6 +87,8 @@ def test_manual_sync_uses_server_cooldown_retry_after_and_idempotency(
         json={},
         headers={**csrf_headers(client), "Idempotency-Key": key},
     )
+    assert accepted.status_code == 202
+    assert process_one("sync") is True
     replay = client.post(
         "/api/v1/sync",
         json={},
@@ -95,7 +100,6 @@ def test_manual_sync_uses_server_cooldown_retry_after_and_idempotency(
         headers={**csrf_headers(client), "Idempotency-Key": "manual-idempotency-002"},
     )
 
-    assert accepted.status_code == 202
     assert replay.status_code == 200
     assert replay.json()["idempotent_replay"] is True
     assert replay.json()["request_id"] == accepted.json()["request_id"]
@@ -142,7 +146,7 @@ def test_cooldown_is_shared_by_sessions_but_isolated_between_accounts(
     )
     assert concurrent.status_code == 409
     assert concurrent.json()["detail"]["code"] == "SYNC_IN_PROGRESS"
-    assert concurrent.json()["detail"]["retry_after_seconds"] > 0
+    assert concurrent.json()["detail"]["metadata"]["retry_after_seconds"] > 0
     assert second_session.get("/api/v1/sync/status").json()["state"] == "in_progress"
 
     other = TestClient(client.app, base_url="https://testserver")
@@ -232,13 +236,14 @@ def test_timeout_is_sanitized_keeps_cooldown_and_replay_does_not_restart(
         json={},
         headers={**csrf_headers(client), "Idempotency-Key": key},
     )
+    assert accepted.status_code == 202
+    assert process_one("sync") is True
     replay = client.post(
         "/api/v1/sync",
         json={},
         headers={**csrf_headers(client), "Idempotency-Key": key},
     )
 
-    assert accepted.status_code == 202
     assert replay.status_code == 200
     assert replay.json()["status"] == "failed"
     assert replay.json()["error_code"] == "SYNC_UPSTREAM_FAILED"
@@ -290,6 +295,7 @@ def test_invalid_partial_pass_response_does_not_write_partial_notes(
         headers={**csrf_headers(client), "Idempotency-Key": "partial-response-key-001"},
     )
     assert accepted.status_code == 202
+    assert process_one("sync") is True
     with SessionLocal() as db:
         final_notes = list(db.scalars(select(Note).where(Note.account_id == account_id)))
         request = db.get(SyncRequest, accepted.json()["request_id"])

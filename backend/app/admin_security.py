@@ -19,8 +19,10 @@ from app.security import (
     LoginRateLimiter,
     client_identity,
     ensure_utc,
+    matches_token_digest,
     secure_compare,
     token_digest,
+    token_digests,
 )
 
 ADMIN_USERNAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{2,79}$")
@@ -29,6 +31,7 @@ SCRYPT_R = 8
 SCRYPT_P = 1
 SCRYPT_DKLEN = 32
 MAX_ADMIN_SESSIONS = 5
+ADMIN_STEP_UP_TTL = timedelta(minutes=10)
 
 
 def _b64encode(value: bytes) -> str:
@@ -111,6 +114,7 @@ class AdminAuthContext:
     user: AdminUser
     session: AdminSession
     identity: str
+    mfa_configured: bool = False
 
 
 def admin_cookie_names(settings: Settings) -> tuple[str, str]:
@@ -142,12 +146,32 @@ def clear_admin_cookies(response: Response, settings: Settings) -> None:
         response.delete_cookie(name, path="/", secure=settings.secure_cookies, samesite="strict")
 
 
-def require_admin_network(request: Request, settings: Settings) -> str:
+def require_allowed_network_identity(
+    request: Request,
+    settings: Settings,
+    allowed_identities: list[str],
+) -> str:
+    """Resolve a proxy-authenticated identity against an exact allowlist.
+
+    The reverse proxy identity header is trusted only through ``client_identity``;
+    untrusted peers cannot promote themselves by sending the header directly.
+    Callers deliberately share this primitive so admin and personal Parcours
+    ingress cannot drift to subtly different trust rules.
+    """
+
     identity = client_identity(request, settings).casefold()
-    allowed = {item.casefold() for item in settings.admin_allowed_identities}
+    allowed = {item.casefold() for item in allowed_identities}
     if not allowed or identity not in allowed:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route introuvable")
     return identity
+
+
+def require_admin_network(request: Request, settings: Settings) -> str:
+    return require_allowed_network_identity(
+        request,
+        settings,
+        settings.admin_allowed_identities,
+    )
 
 
 def create_admin_session(
@@ -174,6 +198,7 @@ def create_admin_session(
         csrf_digest=token_digest(raw_csrf, settings),
         identity_digest=token_digest(f"admin-identity:{identity}", settings),
         user_agent=user_agent[:300],
+        password_verified_at=utcnow(),
         expires_at=utcnow() + timedelta(hours=settings.admin_session_ttl_hours),
     )
     db.add(admin_session)
@@ -187,28 +212,56 @@ def get_admin_context(
     settings: Settings = Depends(get_settings),
 ) -> AdminAuthContext:
     identity = require_admin_network(request, settings)
-    session_cookie, _ = admin_cookie_names(settings)
+    session_cookie, csrf_cookie = admin_cookie_names(settings)
     raw_token = request.cookies.get(session_cookie, "")
     if not raw_token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentification requise")
-    admin_session = db.scalar(
-        select(AdminSession).where(AdminSession.digest == token_digest(raw_token, settings))
-    )
+    digests = token_digests(raw_token, settings)
+    admin_session = db.scalar(select(AdminSession).where(AdminSession.digest.in_(digests)))
     if admin_session is None or ensure_utc(admin_session.expires_at) <= utcnow():
         if admin_session is not None:
             db.delete(admin_session)
             db.commit()
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expirée")
-    expected_identity = token_digest(f"admin-identity:{identity}", settings)
-    if not secure_compare(admin_session.identity_digest, expected_identity):
+    identity_value = f"admin-identity:{identity}"
+    if not matches_token_digest(admin_session.identity_digest, identity_value, settings):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session invalide")
     user = db.get(AdminUser, admin_session.admin_user_id)
     if user is None or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Accès administrateur désactivé")
-    if ensure_utc(admin_session.last_seen_at) + timedelta(minutes=5) < utcnow():
+    if admin_session.password_verified_at is None:
+        db.delete(admin_session)
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Reconnexion administrateur requise",
+        )
+    rotated = False
+    active_session_digest = digests[0]
+    if not secure_compare(admin_session.digest, active_session_digest):
+        admin_session.digest = active_session_digest
+        rotated = True
+    active_identity_digest = token_digest(identity_value, settings)
+    if not secure_compare(admin_session.identity_digest, active_identity_digest):
+        admin_session.identity_digest = active_identity_digest
+        rotated = True
+    raw_csrf = request.cookies.get(csrf_cookie, "")
+    if raw_csrf and matches_token_digest(admin_session.csrf_digest, raw_csrf, settings):
+        active_csrf_digest = token_digest(raw_csrf, settings)
+        if not secure_compare(admin_session.csrf_digest, active_csrf_digest):
+            admin_session.csrf_digest = active_csrf_digest
+            rotated = True
+    if rotated or ensure_utc(admin_session.last_seen_at) + timedelta(minutes=5) < utcnow():
         admin_session.last_seen_at = utcnow()
         db.commit()
-    return AdminAuthContext(user=user, session=admin_session, identity=identity)
+    from app.services.admin_passkeys import admin_passkey_count
+
+    return AdminAuthContext(
+        user=user,
+        session=admin_session,
+        identity=identity,
+        mfa_configured=admin_passkey_count(db, user.id) > 0,
+    )
 
 
 def require_admin_action(
@@ -224,27 +277,82 @@ def require_admin_action(
     header_value = request.headers.get("x-csrf-token", "")
     if not cookie_value or not header_value or not secure_compare(cookie_value, header_value):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Jeton CSRF invalide")
-    if not secure_compare(auth.session.csrf_digest, token_digest(header_value, settings)):
+    if not matches_token_digest(auth.session.csrf_digest, header_value, settings):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Jeton CSRF invalide")
     return auth
 
 
-def require_admin_ready(auth: AdminAuthContext = Depends(get_admin_context)) -> AdminAuthContext:
+def ensure_admin_ready(auth: AdminAuthContext) -> AdminAuthContext:
     if auth.user.must_change_password:
         raise HTTPException(
             status_code=status.HTTP_428_PRECONDITION_REQUIRED,
-            detail="Le mot de passe initial doit être remplacé",
+            detail={
+                "code": "ADMIN_PASSWORD_CHANGE_REQUIRED",
+                "message": "Le mot de passe initial doit être remplacé.",
+            },
+        )
+    if not auth.mfa_configured:
+        raise HTTPException(
+            status_code=status.HTTP_428_PRECONDITION_REQUIRED,
+            detail={
+                "code": "ADMIN_MFA_SETUP_REQUIRED",
+                "message": "Une passkey administrateur doit être enregistrée.",
+            },
+        )
+    if auth.session.mfa_verified_at is None:
+        raise HTTPException(
+            status_code=status.HTTP_428_PRECONDITION_REQUIRED,
+            detail={
+                "code": "ADMIN_MFA_REQUIRED",
+                "message": "La passkey administrateur doit être vérifiée.",
+            },
         )
     return auth
+
+
+def require_admin_ready(auth: AdminAuthContext = Depends(get_admin_context)) -> AdminAuthContext:
+    return ensure_admin_ready(auth)
 
 
 def require_admin_ready_action(
     auth: AdminAuthContext = Depends(require_admin_action),
 ) -> AdminAuthContext:
-    if auth.user.must_change_password:
+    return ensure_admin_ready(auth)
+
+
+def ensure_admin_recent_mfa(auth: AdminAuthContext) -> AdminAuthContext:
+    ensure_admin_ready(auth)
+    verified_at = auth.session.mfa_verified_at
+    if verified_at is None or ensure_utc(verified_at) + ADMIN_STEP_UP_TTL <= utcnow():
         raise HTTPException(
-            status_code=status.HTTP_428_PRECONDITION_REQUIRED,
-            detail="Le mot de passe initial doit être remplacé",
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "ADMIN_STEP_UP_REQUIRED",
+                "message": "Vérifie de nouveau la passkey administrateur pour continuer.",
+            },
+        )
+    return auth
+
+
+def require_admin_recent_mfa_action(
+    auth: AdminAuthContext = Depends(require_admin_action),
+) -> AdminAuthContext:
+    return ensure_admin_recent_mfa(auth)
+
+
+def ensure_admin_mfa_enrollment(auth: AdminAuthContext) -> AdminAuthContext:
+    if auth.user.must_change_password:
+        return ensure_admin_ready(auth)
+    if auth.mfa_configured:
+        return ensure_admin_recent_mfa(auth)
+    verified_at = auth.session.password_verified_at
+    if verified_at is None or ensure_utc(verified_at) + ADMIN_STEP_UP_TTL <= utcnow():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "ADMIN_PASSWORD_REAUTH_REQUIRED",
+                "message": "Reconnecte-toi avec le mot de passe administrateur pour ajouter la passkey.",
+            },
         )
     return auth
 

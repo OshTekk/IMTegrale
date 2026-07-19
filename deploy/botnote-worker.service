@@ -10,8 +10,8 @@ Type=oneshot
 User=botnote
 Group=botnote
 WorkingDirectory=/opt/botnote/current
-EnvironmentFile=/etc/botnote/botnote.env
 EnvironmentFile=/etc/botnote/botnote-runtime.env
+EnvironmentFile=/etc/botnote/botnote.env
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
 ExecStart=/opt/botnote/runtime/bin/botnote sync-due

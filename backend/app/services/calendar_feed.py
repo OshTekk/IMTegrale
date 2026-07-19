@@ -30,7 +30,7 @@ from app.limits import (
     MAX_CALENDAR_FEED_BYTES,
 )
 from app.models import Account, CalendarEvent, CalendarFetchAttempt, CalendarSubscription
-from app.security import cipher_for, ensure_utc, token_digest
+from app.security import cipher_for, ensure_utc, token_digest, token_digests
 from app.services.events import record_event
 
 CALENDAR_FEED_HOST = "inpass.imt-atlantique.fr"
@@ -49,6 +49,7 @@ _CHECK_PATTERN = re.compile(r"^[a-fA-F0-9]{32}$")
 _CONTROL_PATTERN = re.compile(r"[\x00-\x1f\x7f]+")
 _UPSTREAM_LOCK = threading.Lock()
 _UPSTREAM_LAST_CALL = 0.0
+_CONNECT_ADMISSION_LOCK = threading.Lock()
 
 
 class CalendarFeedError(RuntimeError):
@@ -448,6 +449,40 @@ def _record_attempt(db: Session, account_id: str, *, kind: str, outcome: str) ->
     )
 
 
+def _lock_connect_admission(db: Session, account_id: str) -> None:
+    if db.bind is None or db.bind.dialect.name != "postgresql":
+        return
+    digest = hashlib.blake2b(f"calendar-connect\0{account_id}".encode(), digest_size=8).digest()
+    lock_id = int.from_bytes(digest, "big", signed=True)
+    db.execute(select(func.pg_advisory_xact_lock(lock_id)))
+
+
+def _reserve_connect_attempt(db: Session, account_id: str) -> int:
+    with _CONNECT_ADMISSION_LOCK:
+        _lock_connect_admission(db, account_id)
+        try:
+            assert_connect_allowed(db, account_id)
+        except Exception:
+            db.rollback()
+            raise
+        attempt = CalendarFetchAttempt(
+            account_id=account_id,
+            kind="connect",
+            # A crash before finalization remains a conservative failed attempt.
+            outcome="upstream",
+            attempted_at=utcnow(),
+        )
+        db.add(attempt)
+        db.commit()
+        return attempt.id
+
+
+def _finalize_connect_attempt(db: Session, attempt_id: int, outcome: str) -> None:
+    attempt = db.get(CalendarFetchAttempt, attempt_id)
+    if attempt is not None:
+        attempt.outcome = outcome
+
+
 def assert_connect_allowed(db: Session, account_id: str) -> None:
     now = utcnow()
     attempts = list(
@@ -491,17 +526,18 @@ def _replace_events(
 
 
 def connect_feed(db: Session, account: Account, value: str, *, actor: str) -> dict:
-    assert_connect_allowed(db, account.id)
     validated = validate_feed_url(value, account)
-    digest = token_digest(validated.normalized)
+    digests = token_digests(validated.normalized)
+    digest = digests[0]
     duplicate = db.scalar(
         select(CalendarSubscription.account_id).where(
-            CalendarSubscription.url_digest == digest,
+            CalendarSubscription.url_digest.in_(digests),
             CalendarSubscription.account_id != account.id,
         )
     )
     if duplicate is not None:
         raise CalendarFeedRejected("Ce lien calendrier est déjà rattaché à un autre compte")
+    attempt_id = _reserve_connect_attempt(db, account.id)
     try:
         fetched = fetch_feed(validated)
         if fetched.body is None:
@@ -512,7 +548,7 @@ def connect_feed(db: Session, account: Account, value: str, *, actor: str) -> di
             exc,
             (CalendarFeedInvalid, CalendarFeedRejected, CalendarFeedTooLarge),
         ) else "upstream"
-        _record_attempt(db, account.id, kind="connect", outcome=outcome)
+        _finalize_connect_attempt(db, attempt_id, outcome)
         db.commit()
         raise
     now = utcnow()
@@ -542,7 +578,7 @@ def connect_feed(db: Session, account: Account, value: str, *, actor: str) -> di
     subscription.last_status = "success"
     subscription.last_error_code = None
     _replace_events(db, subscription, parsed)
-    _record_attempt(db, account.id, kind="connect", outcome="success")
+    _finalize_connect_attempt(db, attempt_id, "success")
     record_event(
         db,
         account_id=account.id,

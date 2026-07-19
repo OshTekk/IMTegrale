@@ -1,0 +1,9 @@
+dist
+node_modules
+playwright-report
+src/generated
+test-results
+pnpm-lock.yaml
+public
+*.html
+*.css

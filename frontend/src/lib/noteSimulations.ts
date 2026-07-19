@@ -116,9 +116,7 @@ export function noteScenarioToDraft(scenario: NoteSimulationScenario): NoteSimul
   };
 }
 
-export function createNoteAssessment(
-  label = "Nouvelle évaluation",
-): NoteSimulationAssessmentDraft {
+export function createNoteAssessment(label = "Nouvelle évaluation"): NoteSimulationAssessmentDraft {
   return {
     clientKey: `assessment:${crypto.randomUUID()}`,
     id: null,
@@ -130,9 +128,7 @@ export function createNoteAssessment(
   };
 }
 
-export function createNoteUe(
-  semester: SimulationSemester | null,
-): NoteSimulationUeDraft {
+export function createNoteUe(semester: SimulationSemester | null): NoteSimulationUeDraft {
   return {
     clientKey: `ue:${crypto.randomUUID()}`,
     id: null,
@@ -185,9 +181,7 @@ export function noteDraftIsValid(draft: NoteSimulationDraft): boolean {
   return assessmentCount <= 600;
 }
 
-export function noteSimulationSentKeys(
-  draft: NoteSimulationDraft,
-): NoteSimulationSentKeys[] {
+export function noteSimulationSentKeys(draft: NoteSimulationDraft): NoteSimulationSentKeys[] {
   return draft.ues.map((ue) => ({
     ueKey: ue.clientKey,
     assessmentKeys: ue.assessments.map((assessment) => assessment.clientKey),
@@ -209,10 +203,9 @@ export function mergeSavedNoteIds(
       const persisted = savedByClientKey.get(ue.clientKey);
       if (!persisted) return ue;
       const assessmentsByClientKey = new Map(
-        persisted.ue.assessments.map((assessment, index) => [
-          persisted.keys?.assessmentKeys[index],
-          assessment,
-        ] as const),
+        persisted.ue.assessments.map(
+          (assessment, index) => [persisted.keys?.assessmentKeys[index], assessment] as const,
+        ),
       );
       return {
         ...ue,
@@ -220,19 +213,14 @@ export function mergeSavedNoteIds(
         server: persisted.ue,
         assessments: ue.assessments.map((assessment) => {
           const savedAssessment = assessmentsByClientKey.get(assessment.clientKey);
-          return savedAssessment
-            ? { ...assessment, id: savedAssessment.id, server: savedAssessment }
-            : assessment;
+          return savedAssessment ? { ...assessment, id: savedAssessment.id, server: savedAssessment } : assessment;
         }),
       };
     }),
   };
 }
 
-function gradeForAverage(
-  average: number | null,
-  usedResit: boolean,
-): SimulationGrade | null {
+function gradeForAverage(average: number | null, usedResit: boolean): SimulationGrade | null {
   if (average === null) return null;
   if (usedResit && average >= 10) return "E";
   if (average >= 17) return "A";
@@ -243,9 +231,7 @@ function gradeForAverage(
   return "F";
 }
 
-export function calculateNoteUeProjection(
-  ue: NoteSimulationUeDraft,
-): NoteUeDraftProjection {
+export function calculateNoteUeProjection(ue: NoteSimulationUeDraft): NoteUeDraftProjection {
   const scored = ue.assessments.filter((assessment) => assessment.score !== "");
   const resits = scored.filter((assessment) => assessment.is_resit);
   const normal = scored.filter((assessment) => !assessment.is_resit);
@@ -313,17 +299,15 @@ function aggregateUes(ues: NoteSimulationUeDraft[]) {
   };
 }
 
-export function calculateNoteDraftProjection(
-  ues: NoteSimulationUeDraft[],
-): NoteDraftAggregate {
+export function calculateNoteDraftProjection(ues: NoteSimulationUeDraft[]): NoteDraftAggregate {
   const global = aggregateUes(ues);
   const creditsEntered = ues.reduce((total, ue) => {
     const credits = Number(ue.credits_ects);
     return total + (ue.credits_ects && Number.isFinite(credits) && credits > 0 ? credits : 0);
   }, 0);
-  const missingEctsCount = ues.filter((ue) => (
-    calculateNoteUeProjection(ue).average !== null && !ue.credits_ects
-  )).length;
+  const missingEctsCount = ues.filter(
+    (ue) => calculateNoteUeProjection(ue).average !== null && !ue.credits_ects,
+  ).length;
   const bySemester = new Map<SimulationSemester, NoteSimulationUeDraft[]>();
   for (const ue of ues) {
     if (!ue.semester) continue;
@@ -335,12 +319,11 @@ export function calculateNoteDraftProjection(
     ...global,
     creditsEntered: round(creditsEntered),
     missingEctsCount,
-    completionRate: global.assessmentCount
-      ? Math.round((global.scoredCount / global.assessmentCount) * 100)
-      : 0,
-    semesters: SIMULATION_SEMESTERS
-      .filter((semester) => bySemester.has(semester))
-      .map((semester) => ({ semester, ...aggregateUes(bySemester.get(semester) ?? []) })),
+    completionRate: global.assessmentCount ? Math.round((global.scoredCount / global.assessmentCount) * 100) : 0,
+    semesters: SIMULATION_SEMESTERS.filter((semester) => bySemester.has(semester)).map((semester) => ({
+      semester,
+      ...aggregateUes(bySemester.get(semester) ?? []),
+    })),
   };
 }
 

@@ -21,7 +21,12 @@ def test_internal_proxy_requires_mutual_tls_and_a_trusted_identity_header() -> N
     assert "X-BotNote-Client-Identity $botnote_client_identity" in nginx
     assert "Tailscale-Funnel-Request".casefold().replace("-", "_") in nginx.casefold()
     assert '"internet:$http_x_forwarded_for"' in nginx
-    assert "$botnote_admin_ingress = 0" in nginx
+    assert 'default "peer:$remote_addr";' in nginx
+    assert '~^443\\| "lan:$remote_addr";' in nginx
+    assert 'default "lan:$remote_addr";' not in nginx
+    assert "$botnote_private_ingress = 0" in nginx
+    assert "~^443\\|\\|$ 1;" in nginx
+    assert "~^18080\\|\\|.+$ 1;" in nginx
     assert "--port 8443" in service
     assert "tcp dport 8443" in firewall
     assert "tcp dport 8080" not in firewall
@@ -45,17 +50,28 @@ def test_admin_console_uses_api_limits_while_admin_login_stays_strict() -> None:
 
 def test_services_share_the_atomic_release_runtime() -> None:
     web_service = read("deploy/botnote-web.service")
-    worker_service = read("deploy/botnote-worker.service")
+    legacy_worker_service = read("deploy/botnote-worker.service")
+    worker_service = read("deploy/botnote-job-worker@.service")
+    scheduler_service = read("deploy/botnote-scheduler.service")
     cli = read("deploy/botnote-cli")
     runtime_env = read("deploy/botnote-runtime.env")
 
-    for config in (web_service, worker_service, cli):
+    for config in (
+        web_service,
+        legacy_worker_service,
+        worker_service,
+        scheduler_service,
+        cli,
+    ):
         assert "/opt/botnote/runtime/bin/botnote" in config
         assert "/opt/botnote/venv/bin/botnote" not in config
         assert "/etc/botnote/botnote-runtime.env" in config
 
     assert "cd /opt/botnote/current" in cli
-    assert "ExecStart=/opt/botnote/runtime/bin/botnote sync-due" in worker_service
+    assert "ExecStart=/opt/botnote/runtime/bin/botnote sync-due" in legacy_worker_service
+    assert "ConditionPathExists=/etc/botnote/enable-legacy-worker" in legacy_worker_service
+    assert "ExecStart=/opt/botnote/runtime/bin/botnote worker %i" in worker_service
+    assert "ExecStart=/opt/botnote/runtime/bin/botnote worker scheduler" in scheduler_service
     timer = read("deploy/botnote-worker.timer")
     assert "OnCalendar=*-*-* *:00/15:00" in timer
     assert "OnUnitActiveSec" not in timer
@@ -63,6 +79,14 @@ def test_services_share_the_atomic_release_runtime() -> None:
     assert "BOTNOTE_BIND_HOST=192.168.50.18" in runtime_env
     assert "BOTNOTE_TRUSTED_PROXY_IPS='[\"192.168.50.5\"]'" in runtime_env
     assert "BOTNOTE_BACKEND_TLS_CERT=/etc/botnote/mtls/server.crt" in runtime_env
+
+
+def test_api_process_does_not_own_background_schedulers() -> None:
+    main = read("backend/app/main.py")
+
+    assert "BackgroundTasks" not in read("backend/app/routers/sync.py")
+    assert "automatic_sync_scheduler" not in main
+    assert "calendar_sync_scheduler" not in main
 
 
 def test_tailnet_management_filter_runs_before_tailscale_acceptance() -> None:
@@ -88,6 +112,7 @@ def test_deployment_shell_helpers_are_syntactically_valid() -> None:
         "deploy/pve/botnote-renew-backend-mtls",
         "deploy/pve/botnote-renew-cert",
         "deploy/backup.sh",
+        "deploy/restore-test.sh",
     ]
     for helper in helpers:
         result = subprocess.run(
@@ -108,6 +133,36 @@ def test_database_backups_are_streamed_directly_to_recipient_encryption() -> Non
     assert "--file=\"${TEMP}\"" not in backup
     assert "pg_restore --list \"${TEMP}\"" not in backup
     assert "/etc/botnote/backup-age-recipient" in service
+    assert 'latest.dump.age' in backup
+    assert 'LATEST_TEMP' in backup
+    assert 'mv -Tf "${LATEST_TEMP}" "${LATEST}"' in backup
+    assert 'ExecStart=/usr/local/libexec/botnote-backup' in service
+
+
+def test_encrypted_backup_restore_is_isolated_and_never_writes_plaintext() -> None:
+    restore = read("deploy/restore-test.sh")
+    service = read("deploy/botnote-restore-test.service")
+    timer = read("deploy/botnote-restore-test.timer")
+
+    assert 'ACTUAL_DATABASE' in restore
+    assert 'botnote_restore_test' in restore
+    assert 'RESTORE_TARGET_NOT_ISOLATED' in restore
+    assert 'age --decrypt --identity "${IDENTITY_FILE}" "${BACKUP_FILE}" \\' in restore
+    assert '| pg_restore --clean --if-exists --exit-on-error' in restore
+    assert '.dump"' not in restore
+    assert 'current --check-heads' in restore
+    assert 'User=botnote-restore' in service
+    assert 'ReadWritePaths=/var/lib/botnote-restore' in service
+    assert 'OnCalendar=monthly' in timer
+
+
+def test_operational_alert_timer_uses_only_stable_aggregate_codes() -> None:
+    service = read("deploy/botnote-operations-check.service")
+    timer = read("deploy/botnote-operations-check.timer")
+
+    assert 'botnote operations-check' in service
+    assert 'OnUnitActiveSec=5min' in timer
+    assert 'Persistent=true' in timer
 
 
 def test_alembic_paths_are_anchored_to_the_config_file() -> None:

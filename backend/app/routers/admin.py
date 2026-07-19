@@ -2,18 +2,22 @@ from __future__ import annotations
 
 import hashlib
 from collections import defaultdict
+from datetime import timedelta
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from app.admin_security import (
+    ADMIN_STEP_UP_TTL,
     AdminAuthContext,
     admin_login_identity_rate_limiter,
     admin_login_rate_limiter,
     clear_admin_cookies,
     create_admin_session,
+    ensure_admin_mfa_enrollment,
+    ensure_admin_recent_mfa,
     get_admin_context,
     hash_admin_password,
     normalize_admin_username,
@@ -21,32 +25,70 @@ from app.admin_security import (
     require_admin_action,
     require_admin_network,
     require_admin_ready,
-    require_admin_ready_action,
+    require_admin_recent_mfa_action,
     set_admin_cookies,
     validate_admin_password,
     verify_admin_password,
 )
+from app.api_models import (
+    AdminAccountDeleteResponse,
+    AdminAccountResponse,
+    AdminAccountsResponse,
+    AdminAuditResponse,
+    AdminAuthenticatedSessionResponse,
+    AdminAuthThrottleResponse,
+    AdminLearningGrantResponse,
+    AdminLearningGrantsResponse,
+    AdminOperationsMetricsResponse,
+    AdminPassMetricsResponse,
+    AdminPassSessionResponse,
+    AdminPassStatusResponse,
+    AdminSessionResponse,
+    OkResponse,
+    PasskeyResponse,
+    SyncStartResponse,
+    WebAuthnOptionsResponse,
+)
 from app.config import Settings, get_settings
 from app.database import get_db, utcnow
-from app.limits import MAX_RETAINED_SHARE_TOKENS_PER_ACCOUNT
+from app.limits import (
+    MAX_LEARNING_ACCESS_GRANTS_PER_ACCOUNT,
+    MAX_LEARNING_GRANT_DURATION_DAYS,
+    MAX_RETAINED_SHARE_TOKENS_PER_ACCOUNT,
+)
 from app.models import (
     Account,
     AdminAuditLog,
+    AdminPasskeyCredential,
     AdminSession,
     AdminUser,
     LeaderboardProfile,
+    LearningAccessGrant,
     PasskeyCredential,
     ShareToken,
     WebSession,
 )
-from app.schemas import (
+from app.schemas import PasskeyAuthenticationVerify, PasskeyRegistrationVerify
+from app.schemas_admin import (
     AdminAccountAction,
     AdminDeleteRequest,
     AdminLeaderboardUpdate,
+    AdminLearningGrantCreate,
+    AdminLearningGrantRevoke,
     AdminLoginRequest,
     AdminPassProbe,
     AdminPasswordChange,
     AdminSyncRequest,
+)
+from app.security import ensure_utc
+from app.services.admin_passkeys import (
+    AdminPasskeyError,
+    admin_authentication_options,
+    admin_passkey_count,
+    admin_passkey_view,
+    admin_registration_options,
+    register_admin_passkey,
+    verify_admin_passkey,
 )
 from app.services.auth_protection import auth_throttle_view, clear_target_cooldown
 from app.services.events import record_event
@@ -57,6 +99,7 @@ from app.services.leaderboard import (
     refresh_leaderboard_score_basis,
     update_leaderboard_classification,
 )
+from app.services.operations import operations_metrics
 from app.services.pass_gateway import (
     metrics_view,
     pass_status_view,
@@ -67,7 +110,7 @@ from app.services.pass_sessions import (
     service_session_admin_rows,
     service_session_view,
 )
-from app.services.sync import SyncAlreadyRunning, account_sync_lock, run_sync_background
+from app.services.sync import SyncAlreadyRunning, account_sync_lock
 from app.services.sync_control import (
     InvalidIdempotencyKey,
     SyncInProgress,
@@ -80,15 +123,24 @@ _DUMMY_PASSWORD_HASH = hash_admin_password("Dummy-Admin-Password-Only-For-Timing
 
 
 def _session_view(auth: AdminAuthContext) -> dict:
+    mfa_verified_at = auth.session.mfa_verified_at
     return {
         "authenticated": True,
         "username": auth.user.username,
         "must_change_password": auth.user.must_change_password,
+        "mfa_configured": auth.mfa_configured,
+        "mfa_verified": mfa_verified_at is not None,
+        "mfa_verified_at": mfa_verified_at,
+        "step_up_expires_at": (
+            ensure_utc(mfa_verified_at) + ADMIN_STEP_UP_TTL
+            if mfa_verified_at is not None
+            else None
+        ),
         "expires_at": auth.session.expires_at.isoformat(),
     }
 
 
-@router.get("/auth/session")
+@router.get("/auth/session", response_model=AdminSessionResponse)
 def admin_session_status(
     request: Request,
     db: Session = Depends(get_db),
@@ -104,7 +156,7 @@ def admin_session_status(
     return _session_view(auth)
 
 
-@router.post("/auth/login")
+@router.post("/auth/login", response_model=AdminAuthenticatedSessionResponse)
 def admin_login(
     payload: AdminLoginRequest,
     request: Request,
@@ -136,17 +188,26 @@ def admin_login(
         settings=settings,
     )
     user.last_login_at = utcnow()
-    auth = AdminAuthContext(user=user, session=admin_session, identity=identity)
+    auth = AdminAuthContext(
+        user=user,
+        session=admin_session,
+        identity=identity,
+        mfa_configured=admin_passkey_count(db, user.id) > 0,
+    )
     record_admin_audit(db, auth=auth, action="auth.login")
     db.commit()
     admin_login_rate_limiter.reset(limiter_key)
     admin_login_identity_rate_limiter.reset(identity_limiter_key)
-    response = JSONResponse(_session_view(auth))
+    response = JSONResponse(
+        AdminAuthenticatedSessionResponse.model_validate(_session_view(auth)).model_dump(
+            mode="json"
+        )
+    )
     set_admin_cookies(response, session_token, csrf_token, settings)
     return response
 
 
-@router.post("/auth/password")
+@router.post("/auth/password", response_model=AdminAuthenticatedSessionResponse)
 def change_admin_password(
     payload: AdminPasswordChange,
     request: Request,
@@ -154,6 +215,8 @@ def change_admin_password(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> Response:
+    if not auth.user.must_change_password:
+        ensure_admin_recent_mfa(auth)
     if not verify_admin_password(payload.current_password, auth.user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Mot de passe actuel incorrect")
     try:
@@ -181,15 +244,171 @@ def change_admin_password(
         user=auth.user,
         session=admin_session,
         identity=auth.identity,
+        mfa_configured=admin_passkey_count(db, auth.user.id) > 0,
     )
     record_admin_audit(db, auth=refreshed_auth, action="auth.password_changed")
     db.commit()
-    response = JSONResponse(_session_view(refreshed_auth))
+    response = JSONResponse(
+        AdminAuthenticatedSessionResponse.model_validate(
+            _session_view(refreshed_auth)
+        ).model_dump(mode="json")
+    )
     set_admin_cookies(response, session_token, csrf_token, settings)
     return response
 
 
-@router.post("/auth/logout")
+@router.get("/auth/passkeys", response_model=list[PasskeyResponse])
+def list_admin_passkeys(
+    auth: AdminAuthContext = Depends(get_admin_context),
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    if auth.user.must_change_password:
+        raise HTTPException(
+            status_code=status.HTTP_428_PRECONDITION_REQUIRED,
+            detail={
+                "code": "ADMIN_PASSWORD_CHANGE_REQUIRED",
+                "message": "Le mot de passe initial doit être remplacé.",
+            },
+        )
+    rows = list(
+        db.scalars(
+            select(AdminPasskeyCredential)
+            .where(AdminPasskeyCredential.admin_user_id == auth.user.id)
+            .order_by(AdminPasskeyCredential.created_at.desc())
+        )
+    )
+    return [admin_passkey_view(row) for row in rows]
+
+
+@router.post("/auth/passkeys/registration/options", response_model=WebAuthnOptionsResponse)
+def admin_passkey_registration_options(
+    auth: AdminAuthContext = Depends(require_admin_action),
+    db: Session = Depends(get_db),
+) -> dict:
+    ensure_admin_mfa_enrollment(auth)
+    try:
+        options = admin_registration_options(db, user=auth.user, session=auth.session)
+    except AdminPasskeyError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    db.commit()
+    return options
+
+
+@router.post("/auth/passkeys", response_model=AdminAuthenticatedSessionResponse)
+def create_admin_passkey(
+    payload: PasskeyRegistrationVerify,
+    auth: AdminAuthContext = Depends(require_admin_action),
+    db: Session = Depends(get_db),
+) -> dict:
+    ensure_admin_mfa_enrollment(auth)
+    try:
+        passkey = register_admin_passkey(
+            db,
+            user=auth.user,
+            session=auth.session,
+            challenge_id=payload.challenge_id,
+            name=payload.name,
+            credential=payload.credential,
+        )
+    except AdminPasskeyError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    auth.mfa_configured = True
+    record_admin_audit(
+        db,
+        auth=auth,
+        action="auth.passkey_created",
+        payload={"passkey_id": passkey.id},
+    )
+    db.commit()
+    return _session_view(auth)
+
+
+@router.post("/auth/passkey/options", response_model=WebAuthnOptionsResponse)
+def admin_passkey_authentication_options(
+    auth: AdminAuthContext = Depends(require_admin_action),
+    db: Session = Depends(get_db),
+) -> dict:
+    if auth.user.must_change_password or not auth.mfa_configured:
+        raise HTTPException(
+            status_code=status.HTTP_428_PRECONDITION_REQUIRED,
+            detail={
+                "code": "ADMIN_MFA_SETUP_REQUIRED",
+                "message": "Une passkey administrateur doit d'abord être enregistrée.",
+            },
+        )
+    try:
+        options = admin_authentication_options(db, user=auth.user, session=auth.session)
+    except AdminPasskeyError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    db.commit()
+    return options
+
+
+@router.post("/auth/passkey", response_model=AdminAuthenticatedSessionResponse)
+def verify_admin_passkey_assertion(
+    payload: PasskeyAuthenticationVerify,
+    auth: AdminAuthContext = Depends(require_admin_action),
+    db: Session = Depends(get_db),
+) -> dict:
+    if auth.user.must_change_password or not auth.mfa_configured:
+        raise HTTPException(
+            status_code=status.HTTP_428_PRECONDITION_REQUIRED,
+            detail={
+                "code": "ADMIN_MFA_SETUP_REQUIRED",
+                "message": "Une passkey administrateur doit d'abord être enregistrée.",
+            },
+        )
+    try:
+        passkey = verify_admin_passkey(
+            db,
+            user=auth.user,
+            session=auth.session,
+            challenge_id=payload.challenge_id,
+            credential=payload.credential,
+        )
+    except AdminPasskeyError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    record_admin_audit(
+        db,
+        auth=auth,
+        action="auth.mfa_verified",
+        payload={"passkey_id": passkey.id},
+    )
+    db.commit()
+    return _session_view(auth)
+
+
+@router.delete("/auth/passkeys/{passkey_id}", response_model=OkResponse)
+def delete_admin_passkey(
+    passkey_id: str,
+    auth: AdminAuthContext = Depends(require_admin_recent_mfa_action),
+    db: Session = Depends(get_db),
+) -> dict:
+    passkey = db.scalar(
+        select(AdminPasskeyCredential).where(
+            AdminPasskeyCredential.id == passkey_id,
+            AdminPasskeyCredential.admin_user_id == auth.user.id,
+        )
+    )
+    if passkey is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Passkey introuvable")
+    if admin_passkey_count(db, auth.user.id) <= 1:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="La dernière passkey administrateur ne peut pas être supprimée.",
+        )
+    record_admin_audit(
+        db,
+        auth=auth,
+        action="auth.passkey_deleted",
+        payload={"passkey_id": passkey.id},
+    )
+    db.delete(passkey)
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/auth/logout", response_model=OkResponse)
 def admin_logout(
     auth: AdminAuthContext = Depends(require_admin_action),
     db: Session = Depends(get_db),
@@ -356,7 +575,7 @@ def _single_account_view(
     )
 
 
-@router.get("/accounts")
+@router.get("/accounts", response_model=AdminAccountsResponse)
 def list_accounts(
     search: str = Query(default="", max_length=80),
     _auth: AdminAuthContext = Depends(require_admin_ready),
@@ -396,14 +615,180 @@ def _get_account(db: Session, account_id: str) -> Account:
     return account
 
 
-@router.post("/accounts/{account_id}/actions")
-def manage_account(
+def _get_account_for_update(db: Session, account_id: str) -> Account:
+    account = db.scalar(select(Account).where(Account.id == account_id).with_for_update())
+    if account is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Compte introuvable")
+    return account
+
+
+def _learning_grant_view(grant: LearningAccessGrant) -> dict:
+    return {
+        "id": grant.id,
+        "account_id": grant.account_id,
+        "audience": grant.audience,
+        "reason": grant.reason,
+        "granted_by_admin_id": grant.granted_by_admin_id,
+        "granted_at": ensure_utc(grant.granted_at),
+        "expires_at": ensure_utc(grant.expires_at),
+        "revoked_at": ensure_utc(grant.revoked_at) if grant.revoked_at is not None else None,
+    }
+
+
+@router.get(
+    "/accounts/{account_id}/learning-grants",
+    response_model=AdminLearningGrantsResponse,
+)
+def list_account_learning_grants(
     account_id: str,
-    payload: AdminAccountAction,
-    auth: AdminAuthContext = Depends(require_admin_ready_action),
+    _auth: AdminAuthContext = Depends(require_admin_ready),
     db: Session = Depends(get_db),
 ) -> dict:
     account = _get_account(db, account_id)
+    grants = list(
+        db.scalars(
+            select(LearningAccessGrant)
+            .where(LearningAccessGrant.account_id == account.id)
+            .order_by(
+                LearningAccessGrant.granted_at.desc(),
+                LearningAccessGrant.id.desc(),
+            )
+        )
+    )
+    return {"grants": [_learning_grant_view(grant) for grant in grants]}
+
+
+@router.post(
+    "/accounts/{account_id}/learning-grants",
+    status_code=status.HTTP_201_CREATED,
+    response_model=AdminLearningGrantResponse,
+)
+def create_account_learning_grant(
+    account_id: str,
+    payload: AdminLearningGrantCreate,
+    auth: AdminAuthContext = Depends(require_admin_recent_mfa_action),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    account = _get_account_for_update(db, account_id)
+    if payload.audience != settings.learning_audience_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Audience pédagogique non prise en charge",
+        )
+    now = utcnow()
+    expires_at = ensure_utc(payload.expires_at)
+    if expires_at <= now or expires_at > now + timedelta(days=MAX_LEARNING_GRANT_DURATION_DAYS):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                "L'expiration doit être future et limitée à "
+                f"{MAX_LEARNING_GRANT_DURATION_DAYS} jours"
+            ),
+        )
+    active_grants = (
+        select(LearningAccessGrant)
+        .where(
+            LearningAccessGrant.account_id == account.id,
+            LearningAccessGrant.revoked_at.is_(None),
+            LearningAccessGrant.expires_at > now,
+        )
+        .order_by(LearningAccessGrant.id)
+    )
+    if db.scalar(active_grants.where(LearningAccessGrant.audience == payload.audience).limit(1)):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Une autorisation active existe déjà pour cette audience",
+        )
+    active_grant_count = db.scalar(select(func.count()).select_from(active_grants.subquery())) or 0
+    if active_grant_count >= MAX_LEARNING_ACCESS_GRANTS_PER_ACCOUNT:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Limite d'autorisations pédagogiques actives atteinte",
+        )
+    grant = LearningAccessGrant(
+        account_id=account.id,
+        audience=payload.audience,
+        reason=payload.reason,
+        granted_by_admin_id=auth.user.id,
+        granted_at=now,
+        expires_at=expires_at,
+    )
+    db.add(grant)
+    db.flush()
+    record_admin_audit(
+        db,
+        auth=auth,
+        action="account.learning_grant_created",
+        target_account_id=account.id,
+        payload={
+            "grant_id": grant.id,
+            "audience": grant.audience,
+            "reason": grant.reason,
+            "expires_at": expires_at.isoformat(),
+        },
+    )
+    db.commit()
+    return _learning_grant_view(grant)
+
+
+@router.delete(
+    "/accounts/{account_id}/learning-grants/{grant_id}",
+    response_model=AdminLearningGrantResponse,
+)
+def revoke_account_learning_grant(
+    account_id: str,
+    grant_id: str,
+    payload: AdminLearningGrantRevoke,
+    auth: AdminAuthContext = Depends(require_admin_recent_mfa_action),
+    db: Session = Depends(get_db),
+) -> dict:
+    account = _get_account(db, account_id)
+    grant = db.scalar(
+        select(LearningAccessGrant)
+        .where(
+            LearningAccessGrant.id == grant_id,
+            LearningAccessGrant.account_id == account.id,
+        )
+        .with_for_update()
+    )
+    if grant is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Autorisation pédagogique introuvable",
+        )
+    if grant.revoked_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Autorisation pédagogique déjà révoquée",
+        )
+    grant.revoked_at = utcnow()
+    record_admin_audit(
+        db,
+        auth=auth,
+        action="account.learning_grant_revoked",
+        target_account_id=account.id,
+        payload={
+            "grant_id": grant.id,
+            "audience": grant.audience,
+            "reason": payload.reason,
+        },
+    )
+    db.commit()
+    return _learning_grant_view(grant)
+
+
+@router.post(
+    "/accounts/{account_id}/actions",
+    response_model=AdminAccountResponse,
+)
+def manage_account(
+    account_id: str,
+    payload: AdminAccountAction,
+    auth: AdminAuthContext = Depends(require_admin_recent_mfa_action),
+    db: Session = Depends(get_db),
+) -> dict:
+    account = _get_account_for_update(db, account_id)
     profile = db.get(LeaderboardProfile, account.id)
     reason = (payload.reason or "").strip()
     now = utcnow()
@@ -435,6 +820,7 @@ def manage_account(
         account.disabled_at = None
         account.disabled_reason = None
     elif payload.action == "revoke_access":
+        account.access_generation += 1
         db.execute(delete(WebSession).where(WebSession.account_id == account.id))
         db.execute(
             update(ShareToken)
@@ -517,11 +903,14 @@ def manage_account(
     return _single_account_view(db, account, profile)
 
 
-@router.patch("/accounts/{account_id}/leaderboard")
+@router.patch(
+    "/accounts/{account_id}/leaderboard",
+    response_model=AdminAccountResponse,
+)
 def correct_leaderboard_profile(
     account_id: str,
     payload: AdminLeaderboardUpdate,
-    auth: AdminAuthContext = Depends(require_admin_ready_action),
+    auth: AdminAuthContext = Depends(require_admin_recent_mfa_action),
     db: Session = Depends(get_db),
 ) -> dict:
     account = _get_account(db, account_id)
@@ -565,13 +954,16 @@ def correct_leaderboard_profile(
     return _single_account_view(db, account, profile)
 
 
-@router.post("/accounts/{account_id}/sync", status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/accounts/{account_id}/sync",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=SyncStartResponse,
+)
 def queue_account_sync(
     account_id: str,
     request: Request,
-    background_tasks: BackgroundTasks,
     payload: AdminSyncRequest | None = None,
-    auth: AdminAuthContext = Depends(require_admin_ready_action),
+    auth: AdminAuthContext = Depends(require_admin_recent_mfa_action),
     db: Session = Depends(get_db),
 ) -> dict:
     account = _get_account(db, account_id)
@@ -582,12 +974,15 @@ def queue_account_sync(
             status_code=status.HTTP_409_CONFLICT,
             detail="Une reconnexion IMT de l'étudiant est requise avant cette synchronisation.",
         )
+    bypass_reason = (payload.reason or "").strip() if payload else ""
     try:
         reservation = reserve_sync_request(
             account.id,
             actor="admin",
             idempotency_key=request.headers.get("idempotency-key"),
             enforce_cooldown=False,
+            quota_bypass=bool(bypass_reason),
+            bypass_reason=bypass_reason or None,
         )
     except InvalidIdempotencyKey as exc:
         raise HTTPException(
@@ -599,16 +994,6 @@ def queue_account_sync(
             status_code=status.HTTP_409_CONFLICT,
             detail=exc.detail(),
         ) from exc
-    bypass_reason = (payload.reason or "").strip() if payload else ""
-    if reservation.should_start:
-        background_tasks.add_task(
-            run_sync_background,
-            reservation.account_id,
-            reservation.request_id,
-            notify=True,
-            quota_bypass=bool(bypass_reason),
-            bypass_reason=bypass_reason or None,
-        )
     record_admin_audit(
         db,
         auth=auth,
@@ -626,7 +1011,10 @@ def queue_account_sync(
     return reservation_view(reservation)
 
 
-@router.get("/accounts/{account_id}/auth-status")
+@router.get(
+    "/accounts/{account_id}/auth-status",
+    response_model=AdminAuthThrottleResponse,
+)
 def get_account_auth_status(
     account_id: str,
     _auth: AdminAuthContext = Depends(require_admin_ready),
@@ -636,7 +1024,7 @@ def get_account_auth_status(
     return auth_throttle_view(db, target_reference(account.imt_username))
 
 
-@router.get("/pass/status")
+@router.get("/pass/status", response_model=AdminPassStatusResponse)
 def get_pass_status(
     _auth: AdminAuthContext = Depends(require_admin_ready),
     db: Session = Depends(get_db),
@@ -644,7 +1032,7 @@ def get_pass_status(
     return pass_status_view(db)
 
 
-@router.get("/pass/metrics")
+@router.get("/pass/metrics", response_model=AdminPassMetricsResponse)
 def get_pass_metrics(
     window: str = Query(default="24h", pattern=r"^(24h|7d|30d)$"),
     _auth: AdminAuthContext = Depends(require_admin_ready),
@@ -654,7 +1042,16 @@ def get_pass_metrics(
     return metrics_view(db, hours=hours)
 
 
-@router.get("/pass/sessions")
+@router.get("/operations/metrics", response_model=AdminOperationsMetricsResponse)
+def get_operations_metrics(
+    _auth: AdminAuthContext = Depends(require_admin_ready),
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+) -> dict:
+    return operations_metrics(db, settings)
+
+
+@router.get("/pass/sessions", response_model=list[AdminPassSessionResponse])
 def get_pass_sessions(
     _auth: AdminAuthContext = Depends(require_admin_ready),
     db: Session = Depends(get_db),
@@ -662,12 +1059,15 @@ def get_pass_sessions(
     return service_session_admin_rows(db)
 
 
-@router.post("/pass/probe", status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/pass/probe",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=SyncStartResponse,
+)
 def probe_pass(
     payload: AdminPassProbe,
     request: Request,
-    background_tasks: BackgroundTasks,
-    auth: AdminAuthContext = Depends(require_admin_ready_action),
+    auth: AdminAuthContext = Depends(require_admin_recent_mfa_action),
     db: Session = Depends(get_db),
 ) -> dict:
     account = _get_account(db, payload.account_id)
@@ -684,19 +1084,12 @@ def probe_pass(
             actor="admin",
             idempotency_key=request.headers.get("idempotency-key"),
             enforce_cooldown=False,
-        )
-    except (InvalidIdempotencyKey, SyncInProgress) as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    if reservation.should_start:
-        background_tasks.add_task(
-            run_sync_background,
-            reservation.account_id,
-            reservation.request_id,
-            notify=True,
             quota_bypass=True,
             bypass_reason=payload.reason,
             force_probe=True,
         )
+    except (InvalidIdempotencyKey, SyncInProgress) as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     record_admin_audit(
         db,
         auth=auth,
@@ -708,12 +1101,15 @@ def probe_pass(
     return reservation_view(reservation)
 
 
-@router.delete("/accounts/{account_id}/tokens/{token_id}")
+@router.delete(
+    "/accounts/{account_id}/tokens/{token_id}",
+    response_model=AdminAccountResponse,
+)
 def delete_account_token(
     account_id: str,
     token_id: str,
     payload: AdminDeleteRequest,
-    auth: AdminAuthContext = Depends(require_admin_ready_action),
+    auth: AdminAuthContext = Depends(require_admin_recent_mfa_action),
     db: Session = Depends(get_db),
 ) -> dict:
     account = _get_account(db, account_id)
@@ -746,11 +1142,14 @@ def delete_account_token(
     return _single_account_view(db, account)
 
 
-@router.delete("/accounts/{account_id}")
+@router.delete(
+    "/accounts/{account_id}",
+    response_model=AdminAccountDeleteResponse,
+)
 def delete_account(
     account_id: str,
     payload: AdminDeleteRequest,
-    auth: AdminAuthContext = Depends(require_admin_ready_action),
+    auth: AdminAuthContext = Depends(require_admin_recent_mfa_action),
     db: Session = Depends(get_db),
 ) -> dict:
     account = _get_account(db, account_id)
@@ -776,7 +1175,7 @@ def delete_account(
     return {"deleted": True, **account_snapshot}
 
 
-@router.get("/audit")
+@router.get("/audit", response_model=list[AdminAuditResponse])
 def get_admin_audit(
     _auth: AdminAuthContext = Depends(require_admin_ready),
     db: Session = Depends(get_db),

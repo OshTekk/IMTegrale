@@ -99,7 +99,9 @@ def _existing_scope_state(
 
 def _prune_throttle_states(db: Session, now: datetime, *, scope: str) -> int:
     maximum = (
-        MAX_TARGET_THROTTLE_STATES if scope == "target" else MAX_CLIENT_THROTTLE_STATES
+        MAX_TARGET_THROTTLE_STATES
+        if scope in {"target", "target_client"}
+        else MAX_CLIENT_THROTTLE_STATES
     )
     cutoff = now - THROTTLE_RETENTION
     db.execute(
@@ -156,16 +158,28 @@ def _prune_throttle_states(db: Session, now: datetime, *, scope: str) -> int:
     ) or 0
 
 
+def _target_client_reference(target_ref: str, client_ref: str) -> str:
+    return f"{target_ref[:31]}:{client_ref[:32]}"
+
+
+def _target_client_prefix(target_ref: str) -> str:
+    return f"{target_ref[:31]}:"
+
+
 def assert_auth_allowed(*, target_ref: str, client_ref: str) -> None:
     now = utcnow()
     with _AUTH_LOCK, SessionLocal() as db:
-        target = _existing_scope_state(db, scope="target", reference=target_ref)
+        target_client = _existing_scope_state(
+            db,
+            scope="target_client",
+            reference=_target_client_reference(target_ref, client_ref),
+        )
         client = _existing_scope_state(db, scope="client", reference=client_ref)
         system = db.get(PassSystemState, 1)
         blocked_until = [
             value
             for value in (
-                ensure_utc(target.blocked_until) if target is not None else None,
+                ensure_utc(target_client.blocked_until) if target_client is not None else None,
                 ensure_utc(client.blocked_until) if client is not None else None,
                 ensure_utc(system.auth_blocked_until) if system is not None else None,
             )
@@ -218,42 +232,47 @@ def record_auth_outcome(*, target_ref: str, client_ref: str, outcome: str) -> No
                 attempted_at=now,
             )
         )
-        target = _existing_scope_state(db, scope="target", reference=target_ref)
-        if outcome == "invalid" and target is None:
-            state_count = _prune_throttle_states(db, now, scope="target")
-            if state_count < MAX_TARGET_THROTTLE_STATES:
-                target = _scope_state(db, scope="target", reference=target_ref)
-        if outcome == "success" and target is not None:
-            target.consecutive_failures = 0
-            target.blocked_until = None
-            target.last_success_at = now
-        elif outcome == "invalid" and target is not None:
-            last_failure = ensure_utc(target.last_failure_at)
-            if last_failure is None or last_failure < now - TARGET_FAILURE_DECAY:
-                target.consecutive_failures = 0
-            target.consecutive_failures += 1
-            delay_index = min(target.consecutive_failures - 1, len(TARGET_DELAYS) - 1)
-            target.blocked_until = now + timedelta(seconds=TARGET_DELAYS[delay_index])
-            target.last_failure_at = now
+        references = (
+            ("target", target_ref),
+            ("target_client", _target_client_reference(target_ref, client_ref)),
+        )
+        for scope, reference in references:
+            state = _existing_scope_state(db, scope=scope, reference=reference)
+            if outcome == "invalid" and state is None:
+                state_count = _prune_throttle_states(db, now, scope=scope)
+                if state_count < MAX_TARGET_THROTTLE_STATES:
+                    state = _scope_state(db, scope=scope, reference=reference)
+            if outcome == "success" and state is not None:
+                state.consecutive_failures = 0
+                state.blocked_until = None
+                state.last_success_at = now
+            elif outcome == "invalid" and state is not None:
+                last_failure = ensure_utc(state.last_failure_at)
+                if last_failure is None or last_failure < now - TARGET_FAILURE_DECAY:
+                    state.consecutive_failures = 0
+                state.consecutive_failures += 1
+                delay_index = min(state.consecutive_failures - 1, len(TARGET_DELAYS) - 1)
+                state.blocked_until = now + timedelta(seconds=TARGET_DELAYS[delay_index])
+                state.last_failure_at = now
 
         db.flush()
-        if outcome == "invalid":
+        if outcome == "upstream":
             window_start = now - timedelta(minutes=15)
             total = db.scalar(
                 select(func.count(AuthAttempt.id)).where(
-                    AuthAttempt.outcome == "invalid",
+                    AuthAttempt.outcome == "upstream",
                     AuthAttempt.attempted_at >= window_start,
                 )
             )
             targets = db.scalar(
                 select(func.count(func.distinct(AuthAttempt.target_ref))).where(
-                    AuthAttempt.outcome == "invalid",
+                    AuthAttempt.outcome == "upstream",
                     AuthAttempt.attempted_at >= window_start,
                 )
             )
             clients = db.scalar(
                 select(func.count(func.distinct(AuthAttempt.client_ref))).where(
-                    AuthAttempt.outcome == "invalid",
+                    AuthAttempt.outcome == "upstream",
                     AuthAttempt.attempted_at >= window_start,
                 )
             )
@@ -263,7 +282,7 @@ def record_auth_outcome(*, target_ref: str, client_ref: str, outcome: str) -> No
                     system = PassSystemState(id=1)
                     db.add(system)
                 system.auth_blocked_until = now + timedelta(minutes=30)
-                system.auth_block_reason = "distributed_invalid_credentials"
+                system.auth_block_reason = "distributed_upstream_failures"
         db.commit()
 
 
@@ -278,6 +297,12 @@ def clear_target_cooldown(db: Session, target_ref: str) -> None:
         state.consecutive_failures = 0
         state.blocked_until = None
         state.last_failure_at = None
+    db.execute(
+        delete(AuthThrottleState).where(
+            AuthThrottleState.scope == "target_client",
+            AuthThrottleState.reference.like(f"{_target_client_prefix(target_ref)}%"),
+        )
+    )
 
 
 def auth_throttle_view(db: Session, target_ref: str) -> dict:
@@ -288,7 +313,15 @@ def auth_throttle_view(db: Session, target_ref: str) -> dict:
             AuthThrottleState.reference == target_ref,
         )
     )
-    blocked_until = ensure_utc(state.blocked_until) if state is not None else None
+    combined_blocked_values = db.scalars(
+        select(AuthThrottleState.blocked_until).where(
+            AuthThrottleState.scope == "target_client",
+            AuthThrottleState.reference.like(f"{_target_client_prefix(target_ref)}%"),
+            AuthThrottleState.blocked_until.is_not(None),
+        )
+    ).all()
+    blocked_values = [ensure_utc(value) for value in combined_blocked_values]
+    blocked_until = max((value for value in blocked_values if value is not None), default=None)
     return {
         "consecutive_failures": state.consecutive_failures if state is not None else 0,
         "blocked_until": blocked_until,

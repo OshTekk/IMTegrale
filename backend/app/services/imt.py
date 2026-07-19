@@ -20,10 +20,12 @@ from bs4 import BeautifulSoup, SoupStrainer
 logger = logging.getLogger(__name__)
 
 CAS_LOGIN_URL = "https://cas.imt-atlantique.fr/cas/login"
-PASS_LOGIN_URL = "https://pass.imt-atlantique.fr/OpDotNet/Noyau/Login.aspx"
-PASS_REPORT_URL = "https://pass.imt-atlantique.fr/OpDotNet/Commun/Assistant/Reporting/MSReportViewer.aspx"
+PASS_LOGIN_URL = "https://pass.imt-atlantique.fr/OpDotNet/Noyau/Login.aspx"  # noqa: S105
+PASS_REPORT_URL = (
+    "https://pass.imt-atlantique.fr/OpDotNet/Commun/Assistant/Reporting/MSReportViewer.aspx"  # noqa: S105
+)
 PASS_PROFILE_URL = (
-    "https://pass.imt-atlantique.fr/opdotnet/eplug/annuaire/accueil.aspx"
+    "https://pass.imt-atlantique.fr/opdotnet/eplug/annuaire/accueil.aspx"  # noqa: S105
     "?IdApplication=142&TypeAcces=MaFiche&IdLien=190"
 )
 COMPETENCIES_HOME_URL = "https://hub.imt-atlantique.fr/comp2/"
@@ -166,6 +168,19 @@ def _is_idp_sso_path(path: str) -> bool:
     )
 
 
+def _is_authenticated_service_page(response: requests.Response) -> bool:
+    origin = _url_origin(response.url)
+    path = urlsplit(response.url).path.casefold().rstrip("/") or "/"
+    if origin == HUB_ORIGIN:
+        return path == "/comp2" or path.startswith("/comp2/")
+    if origin == PASS_ORIGIN:
+        return (
+            path == "/opdotnet"
+            or path.startswith("/opdotnet/")
+        ) and path != "/opdotnet/noyau/login.aspx"
+    return False
+
+
 def _form_action(base_url: str, raw_action: object, allowed_origins: Collection[Origin]) -> str:
     action = raw_action if isinstance(raw_action, str) else ""
     return validate_imt_url(urljoin(base_url, action), allowed_origins)
@@ -186,6 +201,7 @@ class ImtPassClient:
     def __init__(self, *, timeout_seconds: int = 30) -> None:
         self.timeout_seconds = max(1, int(timeout_seconds))
         self.session = requests.Session()
+        self.session.trust_env = False
         self.session.headers.update({"User-Agent": USER_AGENT})
         self._operation_depth = 0
         self._deadline = 0.0
@@ -524,7 +540,11 @@ class ImtPassClient:
                     current = self._get(proceed_url)
                     self._ensure_success(current)
                     continue
-                return current
+                if _is_authenticated_service_page(current):
+                    return current
+                raise ImtFetchError(
+                    "Le parcours d'authentification IMT n'a pas atteint un service protégé"
+                )
 
             payload: list[tuple[str, str]] = []
             selected_radios = {

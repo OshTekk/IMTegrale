@@ -1,0 +1,48 @@
+[Unit]
+Description=IMTégrale durable %i worker
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=botnote
+Group=botnote
+WorkingDirectory=/opt/botnote/current
+EnvironmentFile=/etc/botnote/botnote-runtime.env
+EnvironmentFile=/etc/botnote/botnote.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/botnote/runtime/bin/botnote worker %i
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+MemoryMax=384M
+TasksMax=64
+RuntimeDirectory=botnote
+RuntimeDirectoryMode=0750
+UMask=0077
+
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

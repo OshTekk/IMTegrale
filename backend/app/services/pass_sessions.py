@@ -59,7 +59,7 @@ def serialize_service_cookies(session: requests.Session) -> str:
     cookies: list[dict[str, Any]] = []
     for cookie in session.cookies:
         domain = (cookie.domain or "").lstrip(".").casefold()
-        if domain not in _COOKIE_HOSTS or not cookie.secure:
+        if domain not in _COOKIE_HOSTS:
             continue
         name = str(cookie.name)
         value = str(cookie.value)
@@ -88,6 +88,9 @@ def serialize_service_cookies(session: requests.Session) -> str:
                 "value": value,
                 "domain": domain,
                 "path": path,
+                # PASS still emits legacy cookies without the Secure attribute.
+                # The client only permits HTTPS service origins; persist them with
+                # a stricter flag so a restored jar can never send them over HTTP.
                 "secure": True,
                 "expires": expires,
             }
@@ -103,6 +106,19 @@ def serialize_service_cookies(session: requests.Session) -> str:
     if len(snapshot.encode("utf-8")) > _MAX_SNAPSHOT_BYTES:
         raise RuntimeError("La session IMT dépasse la taille autorisée")
     return snapshot
+
+
+def service_snapshot_is_reusable(snapshot: str) -> bool:
+    validation_session = requests.Session()
+    try:
+        restore_service_cookies(validation_session, snapshot)
+        return any(
+            (cookie.domain or "").lstrip(".").casefold()
+            == "pass.imt-atlantique.fr"
+            for cookie in validation_session.cookies
+        )
+    finally:
+        validation_session.close()
 
 
 def restore_service_cookies(session: requests.Session, snapshot: str) -> None:
@@ -158,17 +174,8 @@ def restore_service_cookies(session: requests.Session, snapshot: str) -> None:
 
 
 def _validate_service_snapshot(snapshot: str) -> None:
-    validation_session = requests.Session()
-    try:
-        restore_service_cookies(validation_session, snapshot)
-        if not any(
-            (cookie.domain or "").lstrip(".").casefold()
-            == "pass.imt-atlantique.fr"
-            for cookie in validation_session.cookies
-        ):
-            raise RuntimeError("La session IMT ne contient aucun cookie PASS")
-    finally:
-        validation_session.close()
+    if not service_snapshot_is_reusable(snapshot):
+        raise RuntimeError("La session IMT ne contient aucun cookie PASS")
 
 
 def _end_session(
@@ -231,6 +238,27 @@ def store_service_session(
     account.auto_sync_paused_reason = None
     account.auto_sync_paused_at = None
     return row
+
+
+def store_service_session_if_reusable(
+    db: Session,
+    account: Account,
+    snapshot: str,
+    *,
+    hub_attempted: bool,
+    hub_succeeded: bool,
+    now: datetime | None = None,
+) -> PassServiceSession | None:
+    if not service_snapshot_is_reusable(snapshot):
+        return None
+    return store_service_session(
+        db,
+        account,
+        snapshot,
+        hub_attempted=hub_attempted,
+        hub_succeeded=hub_succeeded,
+        now=now,
+    )
 
 
 def _active_row(db: Session, account_id: str) -> PassServiceSession | None:

@@ -1,9 +1,9 @@
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 
+from app.api_models import ManualSyncResponse, SyncStartResponse
 from app.database import get_db, utcnow
-from app.security import AuthContext, require_owner, require_owner_action
-from app.services.sync import run_sync_background
+from app.security import AuthContext, require_owner, require_primary_owner_action
 from app.services.sync_control import (
     InvalidIdempotencyKey,
     SyncCooldownActive,
@@ -33,7 +33,7 @@ def _raise_rejection(exc: SyncCooldownActive | SyncInProgress) -> None:
     ) from exc
 
 
-@router.get("/status")
+@router.get("/status", response_model=ManualSyncResponse)
 def get_sync_status(
     auth: AuthContext = Depends(require_owner),
     db: Session = Depends(get_db),
@@ -41,12 +41,11 @@ def get_sync_status(
     return manual_sync_view(db, auth.account)
 
 
-@router.post("")
+@router.post("", response_model=SyncStartResponse)
 def start_sync(
     request: Request,
     response: Response,
-    background_tasks: BackgroundTasks,
-    auth: AuthContext = Depends(require_owner_action),
+    auth: AuthContext = Depends(require_primary_owner_action),
     db: Session = Depends(get_db),
 ) -> dict:
     current_view = manual_sync_view(db, auth.account)
@@ -103,13 +102,6 @@ def start_sync(
         ) from exc
     except (SyncCooldownActive, SyncInProgress) as exc:
         _raise_rejection(exc)
-    if reservation.should_start:
-        background_tasks.add_task(
-            run_sync_background,
-            reservation.account_id,
-            reservation.request_id,
-            notify=True,
-        )
     response.status_code = (
         status.HTTP_202_ACCEPTED
         if reservation.status in {"queued", "running"}

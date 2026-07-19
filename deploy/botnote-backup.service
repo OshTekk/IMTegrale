@@ -10,7 +10,7 @@ Group=botnote
 Environment=BOTNOTE_BACKUP_DIR=/var/backups/botnote
 Environment=BOTNOTE_BACKUP_RETENTION_DAYS=30
 Environment=BOTNOTE_BACKUP_AGE_RECIPIENT_FILE=/etc/botnote/backup-age-recipient
-ExecStart=/opt/botnote/current/deploy/backup.sh
+ExecStart=/usr/local/libexec/botnote-backup
 MemoryMax=512M
 TasksMax=64
 UMask=0077

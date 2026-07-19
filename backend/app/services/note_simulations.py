@@ -27,7 +27,7 @@ from app.models import (
     UeSetting,
     new_id,
 )
-from app.schemas import NoteSimulationUeInput
+from app.schemas_simulations import NoteSimulationUeInput
 from app.services.events import record_event
 from app.services.simulations import (
     SimulationEntryNotFound,

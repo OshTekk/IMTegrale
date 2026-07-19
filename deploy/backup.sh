@@ -8,6 +8,13 @@ RECIPIENT_FILE="${BOTNOTE_BACKUP_AGE_RECIPIENT_FILE:-/etc/botnote/backup-age-rec
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 TARGET="${BACKUP_DIR}/botnote-${STAMP}.dump.age"
 TEMP="${TARGET}.tmp"
+LATEST="${BACKUP_DIR}/latest.dump.age"
+LATEST_TEMP="${BACKUP_DIR}/.latest.dump.age.${STAMP}.tmp"
+
+cleanup() {
+    rm -f "${TEMP}" "${LATEST_TEMP}"
+}
+trap cleanup EXIT
 
 command -v age >/dev/null
 test -r "${RECIPIENT_FILE}"
@@ -22,4 +29,7 @@ pg_dump --format=custom --compress=9 --no-owner botnote \
 test -s "${TEMP}"
 test "$(head -n 1 "${TEMP}")" = "age-encryption.org/v1"
 mv "${TEMP}" "${TARGET}"
+ln -s "$(basename "${TARGET}")" "${LATEST_TEMP}"
+mv -Tf "${LATEST_TEMP}" "${LATEST}"
 find "${BACKUP_DIR}" -type f -name 'botnote-*.dump.age' -mtime "+${RETENTION_DAYS}" -delete
+trap - EXIT

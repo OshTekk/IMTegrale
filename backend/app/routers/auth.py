@@ -6,12 +6,21 @@ import threading
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
-from sqlalchemy import select
+from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
+from app.api_models import (
+    AuthenticatedSessionResponse,
+    OkResponse,
+    PasskeyResponse,
+    PassReconnectResponse,
+    SessionResponse,
+    WebAuthnOptionsResponse,
+)
 from app.config import Settings, get_settings
 from app.database import get_db, utcnow
-from app.models import Account, PasskeyCredential, ShareToken, new_id
+from app.learning.access import learning_session_view
+from app.models import Account, PasskeyCredential, ShareToken, WebSession, new_id
 from app.schemas import (
     ImtLoginRequest,
     PasskeyAuthenticationVerify,
@@ -29,10 +38,10 @@ from app.security import (
     get_auth_context,
     login_global_rate_limiter,
     login_rate_limiter,
-    login_target_rate_limiter,
+    matches_token_digest,
     require_action,
-    require_owner,
-    require_owner_action,
+    require_primary_owner,
+    require_primary_owner_action,
     secure_compare,
     set_session_cookies,
     share_token_prefix,
@@ -46,7 +55,10 @@ from app.services.pass_gateway import (
     attach_operation_account,
     perform_login_operation,
 )
-from app.services.pass_sessions import service_session_view, store_service_session
+from app.services.pass_sessions import (
+    service_session_view,
+    store_service_session_if_reusable,
+)
 from app.services.passkeys import (
     PasskeyError,
     authenticate_passkey,
@@ -63,7 +75,12 @@ _LOGIN_LIMITS_LOCK = threading.Lock()
 _GENERIC_IMT_LOGIN_ERROR = "Connexion IMT impossible avec ces informations."
 
 
-def _session_payload(auth: AuthContext) -> dict:
+def _session_payload(
+    auth: AuthContext,
+    db: Session,
+    settings: Settings,
+    request: Request,
+) -> dict:
     return {
         "authenticated": True,
         "role": auth.role,
@@ -75,6 +92,7 @@ def _session_payload(auth: AuthContext) -> dict:
             "display_name": auth.account.display_name,
             "imt_username": auth.account.imt_username if auth.role == "owner" else None,
         },
+        "learning": learning_session_view(db, auth, settings, request=request),
     }
 
 
@@ -85,25 +103,22 @@ def _rate_key(value: str) -> str:
 def _check_login_limits(
     request: Request,
     kind: str,
-    target: str | None,
+    _target: str | None,
     settings: Settings,
 ) -> tuple[str, str | None]:
     identity = client_identity(request, settings)
     client_key = _rate_key(f"{identity}|{kind}")
-    target_key = _rate_key(f"{kind}|{target}") if target else None
     checks = [(login_rate_limiter, client_key)]
-    if target_key:
-        checks.append((login_target_rate_limiter, target_key))
     checks.append((login_global_rate_limiter, "all-logins"))
     with _LOGIN_LIMITS_LOCK:
         for limiter, key in checks:
             limiter.check(key, consume=False)
         for limiter, key in checks:
             limiter.check(key)
-    return client_key, target_key
+    return client_key, None
 
 
-@router.get("/session")
+@router.get("/session", response_model=SessionResponse)
 def session_status(
     request: Request,
     db: Session = Depends(get_db),
@@ -113,17 +128,17 @@ def session_status(
         auth = get_auth_context(request, db, settings)
     except HTTPException:
         return {"authenticated": False}
-    return _session_payload(auth)
+    return _session_payload(auth, db, settings, request)
 
 
-@router.post("/login/imt")
+@router.post("/login/imt", response_model=AuthenticatedSessionResponse)
 async def login_imt(
     payload: ImtLoginRequest,
     request: Request,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> Response:
-    limiter_key, target_key = _check_login_limits(request, "imt", payload.username, settings)
+    limiter_key, _ = _check_login_limits(request, "imt", payload.username, settings)
     account = db.scalar(select(Account).where(Account.imt_username == payload.username))
     is_new = account is None
     if account is not None and account.is_disabled:
@@ -179,9 +194,11 @@ async def login_imt(
         db.add(account)
         db.flush()
 
-    account.last_login_at = utcnow()
+    now = utcnow()
+    account.last_login_at = now
+    account.student_status_verified_at = now
     if is_new:
-        set_login_sync_cooldown(account, utcnow())
+        set_login_sync_cooldown(account, now)
         apply_pass_entries(
             db,
             account,
@@ -189,15 +206,18 @@ async def login_imt(
             actor="owner",
             initial_import=True,
         )
-        apply_pass_profile(account, gateway.profile)
         apply_competency_ues(db, account, gateway.competency_ues, actor="owner")
-    store_service_session(
+    apply_pass_profile(account, gateway.profile)
+    stored_session = store_service_session_if_reusable(
         db,
         account,
         gateway.session_snapshot,
         hub_attempted=gateway.hub_attempted,
         hub_succeeded=gateway.hub_succeeded,
     )
+    if stored_session is None and account.auto_sync_enabled:
+        account.auto_sync_paused_reason = "reauth_required"
+        account.auto_sync_paused_at = now
     cleanup_sessions(db)
     web_session, session_token, csrf_token = create_web_session(
         db,
@@ -211,23 +231,32 @@ async def login_imt(
     db.commit()
     attach_operation_account(gateway.operation_id, account.id)
     login_rate_limiter.reset(limiter_key)
-    if target_key:
-        login_target_rate_limiter.reset(target_key)
 
-    response = JSONResponse(_session_payload(AuthContext(account=account, session=web_session)))
+    session_payload = await run_in_threadpool(
+        _session_payload,
+        AuthContext(account=account, session=web_session),
+        db,
+        settings,
+        request,
+    )
+    response = JSONResponse(
+        AuthenticatedSessionResponse.model_validate(session_payload).model_dump(
+            mode="json",
+        )
+    )
     set_session_cookies(response, session_token, csrf_token, settings)
     return response
 
 
-@router.post("/pass/reconnect")
+@router.post("/pass/reconnect", response_model=PassReconnectResponse)
 async def reconnect_pass(
     payload: PassReconnectRequest,
     request: Request,
-    auth: AuthContext = Depends(require_owner_action),
+    auth: AuthContext = Depends(require_primary_owner_action),
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> dict:
-    limiter_key, target_key = _check_login_limits(
+    limiter_key, _ = _check_login_limits(
         request,
         "pass-reconnect",
         auth.account.imt_username,
@@ -265,13 +294,18 @@ async def reconnect_pass(
             detail="La reconnexion à PASS est indisponible pour le moment.",
         ) from exc
 
-    store_service_session(
+    apply_pass_profile(auth.account, gateway.profile)
+    auth.account.student_status_verified_at = utcnow()
+    stored_session = store_service_session_if_reusable(
         db,
         auth.account,
         gateway.session_snapshot,
         hub_attempted=gateway.hub_attempted,
         hub_succeeded=gateway.hub_succeeded,
     )
+    if stored_session is None and auth.account.auto_sync_enabled:
+        auth.account.auto_sync_paused_reason = "reauth_required"
+        auth.account.auto_sync_paused_at = utcnow()
     record_event(
         db,
         account_id=auth.account.id,
@@ -281,12 +315,10 @@ async def reconnect_pass(
     )
     db.commit()
     login_rate_limiter.reset(limiter_key)
-    if target_key:
-        login_target_rate_limiter.reset(target_key)
     return {"ok": True, "service_session": service_session_view(db, auth.account)}
 
 
-@router.post("/login/token")
+@router.post("/login/token", response_model=AuthenticatedSessionResponse)
 def login_token(
     payload: TokenLoginRequest,
     request: Request,
@@ -294,7 +326,7 @@ def login_token(
     settings: Settings = Depends(get_settings),
 ) -> Response:
     prefix = share_token_prefix(payload.token)
-    limiter_key, target_key = _check_login_limits(request, "token", prefix, settings)
+    limiter_key, _ = _check_login_limits(request, "token", prefix, settings)
     if not prefix:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token invalide")
     share = db.scalar(select(ShareToken).where(ShareToken.prefix == prefix))
@@ -303,12 +335,19 @@ def login_token(
         or share.revoked_at is not None
         or (share.expires_at is not None and ensure_utc(share.expires_at) <= utcnow())
     )
-    if invalid or not secure_compare(share.digest, token_digest(payload.token, settings)):
+    if invalid or not matches_token_digest(share.digest, payload.token, settings):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token invalide ou expiré")
 
     account = db.get(Account, share.account_id)
-    if account is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Compte introuvable")
+    if (
+        account is None
+        or account.is_disabled
+        or share.access_generation != account.access_generation
+    ):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Accès révoqué")
+    active_digest = token_digest(payload.token, settings)
+    if not secure_compare(share.digest, active_digest):
+        share.digest = active_digest
     share.last_used_at = utcnow()
     cleanup_sessions(db)
     web_session, session_token, csrf_token = create_web_session(
@@ -317,6 +356,7 @@ def login_token(
         role=share.role,
         auth_method="token",
         share_token_id=share.id,
+        access_generation=share.access_generation,
         user_agent=request.headers.get("user-agent", ""),
         settings=settings,
     )
@@ -329,15 +369,23 @@ def login_token(
     )
     db.commit()
     login_rate_limiter.reset(limiter_key)
-    if target_key:
-        login_target_rate_limiter.reset(target_key)
 
-    response = JSONResponse(_session_payload(AuthContext(account=account, session=web_session)))
+    session_payload = _session_payload(
+        AuthContext(account=account, session=web_session),
+        db,
+        settings,
+        request,
+    )
+    response = JSONResponse(
+        AuthenticatedSessionResponse.model_validate(session_payload).model_dump(
+            mode="json",
+        )
+    )
     set_session_cookies(response, session_token, csrf_token, settings)
     return response
 
 
-@router.post("/login/passkey/options")
+@router.post("/login/passkey/options", response_model=WebAuthnOptionsResponse)
 def passkey_login_options(
     request: Request,
     db: Session = Depends(get_db),
@@ -349,7 +397,7 @@ def passkey_login_options(
     return result
 
 
-@router.post("/login/passkey")
+@router.post("/login/passkey", response_model=AuthenticatedSessionResponse)
 def login_passkey(
     payload: PasskeyAuthenticationVerify,
     request: Request,
@@ -374,6 +422,7 @@ def login_passkey(
         account=account,
         role="owner",
         auth_method="passkey",
+        access_generation=passkey.access_generation,
         user_agent=request.headers.get("user-agent", ""),
         settings=settings,
     )
@@ -385,14 +434,24 @@ def login_passkey(
         payload={"method": "passkey", "passkey_id": passkey.id},
     )
     db.commit()
-    response = JSONResponse(_session_payload(AuthContext(account=account, session=web_session)))
+    session_payload = _session_payload(
+        AuthContext(account=account, session=web_session),
+        db,
+        settings,
+        request,
+    )
+    response = JSONResponse(
+        AuthenticatedSessionResponse.model_validate(session_payload).model_dump(
+            mode="json",
+        )
+    )
     set_session_cookies(response, session_token, csrf_token, settings)
     return response
 
 
-@router.get("/passkeys")
+@router.get("/passkeys", response_model=list[PasskeyResponse])
 def list_passkeys(
-    auth: AuthContext = Depends(require_owner),
+    auth: AuthContext = Depends(require_primary_owner),
     db: Session = Depends(get_db),
 ) -> list[dict]:
     rows = list(
@@ -405,9 +464,9 @@ def list_passkeys(
     return [passkey_view(row) for row in rows]
 
 
-@router.post("/passkeys/registration/options")
+@router.post("/passkeys/registration/options", response_model=WebAuthnOptionsResponse)
 def passkey_registration_options(
-    auth: AuthContext = Depends(require_owner_action),
+    auth: AuthContext = Depends(require_primary_owner_action),
     db: Session = Depends(get_db),
 ) -> dict:
     try:
@@ -425,10 +484,10 @@ def passkey_registration_options(
     return result
 
 
-@router.post("/passkeys")
+@router.post("/passkeys", response_model=PasskeyResponse)
 def create_passkey(
     payload: PasskeyRegistrationVerify,
-    auth: AuthContext = Depends(require_owner_action),
+    auth: AuthContext = Depends(require_primary_owner_action),
     db: Session = Depends(get_db),
 ) -> dict:
     try:
@@ -440,6 +499,7 @@ def create_passkey(
             name=payload.name,
             credential=payload.credential,
         )
+        passkey.access_generation = auth.session.access_generation
     except PasskeyError as exc:
         db.commit()
         raise HTTPException(
@@ -458,10 +518,10 @@ def create_passkey(
     return passkey_view(passkey)
 
 
-@router.delete("/passkeys/{passkey_id}")
+@router.delete("/passkeys/{passkey_id}", response_model=OkResponse)
 def delete_passkey(
     passkey_id: str,
-    auth: AuthContext = Depends(require_owner_action),
+    auth: AuthContext = Depends(require_primary_owner_action),
     db: Session = Depends(get_db),
 ) -> dict:
     passkey = db.scalar(
@@ -472,6 +532,40 @@ def delete_passkey(
     )
     if passkey is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Passkey introuvable")
+    account = db.scalar(
+        select(Account)
+        .where(Account.id == auth.account.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if account is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Compte introuvable")
+    account.access_generation += 1
+    generation = account.access_generation
+    db.execute(
+        delete(WebSession).where(
+            WebSession.account_id == account.id,
+            WebSession.auth_method == "passkey",
+        )
+    )
+    db.execute(
+        update(WebSession)
+        .where(WebSession.account_id == account.id)
+        .values(access_generation=generation)
+    )
+    db.execute(
+        update(ShareToken)
+        .where(ShareToken.account_id == account.id)
+        .values(access_generation=generation)
+    )
+    db.execute(
+        update(PasskeyCredential)
+        .where(
+            PasskeyCredential.account_id == account.id,
+            PasskeyCredential.id != passkey.id,
+        )
+        .values(access_generation=generation)
+    )
     db.delete(passkey)
     record_event(
         db,
@@ -484,9 +578,9 @@ def delete_passkey(
     return {"ok": True}
 
 
-@router.post("/security-setup/complete")
+@router.post("/security-setup/complete", response_model=OkResponse)
 def complete_security_setup(
-    auth: AuthContext = Depends(require_owner_action),
+    auth: AuthContext = Depends(require_primary_owner_action),
     db: Session = Depends(get_db),
 ) -> dict:
     auth.account.security_setup_completed_at = utcnow()
@@ -500,7 +594,7 @@ def complete_security_setup(
     return {"ok": True}
 
 
-@router.post("/logout")
+@router.post("/logout", response_model=OkResponse)
 def logout(
     auth: AuthContext = Depends(require_action),
     db: Session = Depends(get_db),

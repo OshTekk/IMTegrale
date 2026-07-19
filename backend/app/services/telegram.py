@@ -57,12 +57,17 @@ def plain_text(message: str) -> str:
     return html.unescape(re.sub(r"<[^>]+>", "", message))
 
 
-def _post_telegram(url: str, payload: dict[str, object], deadline: float) -> requests.Response:
+def _post_telegram(
+    session: requests.Session,
+    url: str,
+    payload: dict[str, object],
+    deadline: float,
+) -> requests.Response:
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise TelegramError("Le délai global de notification Telegram est dépassé")
     try:
-        response = requests.post(
+        response = session.post(
             url,
             data=payload,
             timeout=(max(0.1, min(5.0, remaining)), max(0.1, min(20.0, remaining))),
@@ -109,29 +114,32 @@ def _post_telegram(url: str, payload: dict[str, object], deadline: float) -> req
 def send_telegram(bot_token: str, chat_id: str, message: str) -> None:
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     deadline = time.monotonic() + TELEGRAM_TOTAL_TIMEOUT_SECONDS
-    for chunk in split_message(message):
-        payload: dict[str, object] = {
-            "chat_id": chat_id,
-            "text": chunk,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": True,
-        }
-        response = _post_telegram(url, payload, deadline)
-        if response.ok:
-            continue
-        fallback = _post_telegram(
-            url,
-            {
+    with requests.Session() as session:
+        session.trust_env = False
+        for chunk in split_message(message):
+            payload: dict[str, object] = {
                 "chat_id": chat_id,
-                "text": plain_text(chunk),
+                "text": chunk,
+                "parse_mode": "HTML",
                 "disable_web_page_preview": True,
-            },
-            deadline,
-        )
-        try:
-            fallback.raise_for_status()
-        except requests.RequestException as exc:
-            raise TelegramError("Telegram n'a pas accepté la notification") from exc
+            }
+            response = _post_telegram(session, url, payload, deadline)
+            if response.ok:
+                continue
+            fallback = _post_telegram(
+                session,
+                url,
+                {
+                    "chat_id": chat_id,
+                    "text": plain_text(chunk),
+                    "disable_web_page_preview": True,
+                },
+                deadline,
+            )
+            try:
+                fallback.raise_for_status()
+            except requests.RequestException as exc:
+                raise TelegramError("Telegram n'a pas accepté la notification") from exc
 
 
 def build_new_notes_message(new_notes: list[dict], ue_averages: dict[str, float]) -> str:

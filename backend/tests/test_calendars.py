@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -351,6 +352,48 @@ def test_connect_limit_is_hourly_per_account() -> None:
             calendar_feed.assert_connect_allowed(db, account.id)
 
     assert exc_info.value.available_at > now
+
+
+def test_concurrent_connect_admission_reserves_only_one_upstream_attempt() -> None:
+    with SessionLocal() as db:
+        account = Account(
+            imt_username="calendar-race@imt-atlantique.fr",
+            display_name="Calendar race",
+        )
+        db.add(account)
+        db.commit()
+        account_id = account.id
+
+    barrier = threading.Barrier(2)
+    results: list[str] = []
+    results_lock = threading.Lock()
+
+    def reserve() -> None:
+        with SessionLocal() as db:
+            barrier.wait()
+            try:
+                calendar_feed._reserve_connect_attempt(db, account_id)
+                result = "admitted"
+            except calendar_feed.CalendarFetchThrottled:
+                result = "throttled"
+        with results_lock:
+            results.append(result)
+
+    threads = [threading.Thread(target=reserve) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert sorted(results) == ["admitted", "throttled"]
+    with SessionLocal() as db:
+        assert db.scalar(
+            select(func.count(CalendarFetchAttempt.id)).where(
+                CalendarFetchAttempt.account_id == account_id,
+                CalendarFetchAttempt.kind == "connect",
+            )
+        ) == 1
 
 
 def test_calendar_url_digest_is_unique_across_accounts() -> None:

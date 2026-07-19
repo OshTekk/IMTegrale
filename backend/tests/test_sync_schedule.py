@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from app.database import SessionLocal
-from app.models import Account
+from app.models import Account, DurableJob, SyncRequest
 from app.services import sync as sync_service
 from app.services.cohort_pulse import emit_cohort_pulse
 from app.services.imt import ImtPassClient, PassEntry
@@ -18,6 +18,7 @@ from app.services.sync_schedule import (
     update_adaptive_cadence,
 )
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from tests.conftest import csrf_headers
 
@@ -250,23 +251,20 @@ def test_worker_selects_only_due_consenting_accounts(monkeypatch) -> None:
         due_id = due.id
 
     monkeypatch.setattr(sync_service, "utcnow", lambda: now)
-    called: list[tuple[str, str]] = []
-
-    def fake_sync(account_id: str, *, notify: bool = True, actor: str = "system") -> dict:
-        called.append((account_id, actor))
-        return {"total": 0, "inserted": 0, "updated": 0}
-
-    monkeypatch.setattr(sync_service, "sync_account", fake_sync)
-
     results = sync_service.sync_due_accounts()
 
-    assert called == [(due_id, "automatic")]
-    assert results == [
-        {"account_id": due_id, "ok": True, "total": 0, "inserted": 0, "updated": 0}
-    ]
+    assert len(results) == 1
+    assert results[0]["account_id"] == due_id
+    assert results[0]["ok"] is True
+    assert results[0]["queued"] is True
+    with SessionLocal() as db:
+        request = db.get(SyncRequest, results[0]["request_id"])
+        job = db.scalar(select(DurableJob).where(DurableJob.account_id == due_id))
+        assert request is not None and request.actor == "automatic"
+        assert job is not None and job.status == "queued"
 
 
-def test_worker_rotates_after_a_terminal_failure(monkeypatch) -> None:
+def test_scheduler_rotates_between_due_accounts(monkeypatch) -> None:
     now = datetime(2026, 7, 16, 10, 0, tzinfo=UTC)
     with SessionLocal() as db:
         first = account_for_schedule(
@@ -284,17 +282,16 @@ def test_worker_rotates_after_a_terminal_failure(monkeypatch) -> None:
         db.commit()
 
     monkeypatch.setattr(sync_service, "utcnow", lambda: now)
-    called: list[str] = []
+    first_result = sync_service.sync_due_accounts()
+    second_result = sync_service.sync_due_accounts()
 
-    def failing_sync(account_id: str, *, notify: bool = True, actor: str = "system") -> dict:
-        called.append(account_id)
-        raise RuntimeError("upstream failed")
-
-    monkeypatch.setattr(sync_service, "sync_account", failing_sync)
-    sync_service.sync_due_accounts()
-    sync_service.sync_due_accounts()
-
-    assert called == [first_id, second_id]
+    assert first_result[0]["account_id"] == first_id
+    assert second_result[0]["account_id"] == second_id
+    with SessionLocal() as db:
+        queued_accounts = set(
+            db.scalars(select(DurableJob.account_id).where(DurableJob.kind == "sync"))
+        )
+        assert queued_accounts == {first_id, second_id}
 
 
 def test_automatic_sync_rechecks_consent_after_worker_selection(monkeypatch) -> None:

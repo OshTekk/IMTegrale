@@ -6,34 +6,18 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
+from app.api_models import (
+    CalendarEventResponse,
+    CalendarStatusResponse,
+    FipTrainingCalendarResponse,
+)
 from app.database import get_db
 from app.schemas import CalendarSubscriptionUpdate
-from app.security import AuthContext, require_owner, require_owner_action
+from app.security import AuthContext, require_primary_owner, require_primary_owner_action
 from app.services import calendar_feed
 from app.services.fip_calendar import is_fip, training_calendar_view
 
 router = APIRouter(prefix="/api/v1/calendar", tags=["calendar"])
-
-
-def require_primary_owner(auth: AuthContext = Depends(require_owner)) -> AuthContext:
-    if auth.session.share_token_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="L'agenda personnel reste privé au propriétaire du compte",
-        )
-    return auth
-
-
-def require_primary_owner_action(
-    auth: AuthContext = Depends(require_owner_action),
-) -> AuthContext:
-    if auth.session.share_token_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="L'agenda personnel reste privé au propriétaire du compte",
-        )
-    return auth
-
 
 def _run(operation) -> Any:  # noqa: ANN001
     try:
@@ -56,7 +40,7 @@ def _run(operation) -> Any:  # noqa: ANN001
         ) from exc
 
 
-@router.get("/status")
+@router.get("/status", response_model=CalendarStatusResponse)
 def calendar_status(
     auth: AuthContext = Depends(require_primary_owner),
     db: Session = Depends(get_db),
@@ -68,7 +52,7 @@ def calendar_status(
     }
 
 
-@router.get("/events")
+@router.get("/events", response_model=list[CalendarEventResponse])
 def calendar_events(
     start: datetime = Query(),
     end: datetime = Query(),
@@ -85,7 +69,7 @@ def calendar_events(
     )
 
 
-@router.put("/subscription")
+@router.put("/subscription", response_model=CalendarStatusResponse)
 def calendar_connect(
     payload: CalendarSubscriptionUpdate,
     auth: AuthContext = Depends(require_primary_owner_action),
@@ -114,7 +98,7 @@ def calendar_disconnect(
     calendar_feed.disconnect_feed(db, auth.account, actor=auth.actor)
 
 
-@router.get("/training")
+@router.get("/training", response_model=FipTrainingCalendarResponse)
 def fip_training_calendar(
     auth: AuthContext = Depends(require_primary_owner),
 ) -> dict:

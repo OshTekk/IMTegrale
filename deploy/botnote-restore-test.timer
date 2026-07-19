@@ -1,0 +1,11 @@
+[Unit]
+Description=Verify an encrypted IMTégrale backup every month
+
+[Timer]
+OnCalendar=monthly
+RandomizedDelaySec=12h
+Persistent=true
+Unit=botnote-restore-test.service
+
+[Install]
+WantedBy=timers.target

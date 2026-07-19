@@ -2,8 +2,14 @@ import { CheckCircle2, X, XCircle } from "lucide-react";
 import { createContext, type ReactNode, useCallback, useContext, useMemo, useState } from "react";
 
 type ToastKind = "success" | "error";
-interface ToastItem { id: number; message: string; kind: ToastKind }
-interface ToastContextValue { showToast: (message: string, kind?: ToastKind) => void }
+interface ToastItem {
+  id: number;
+  message: string;
+  kind: ToastKind;
+}
+interface ToastContextValue {
+  showToast: (message: string, kind?: ToastKind) => void;
+}
 
 const ToastContext = createContext<ToastContextValue | null>(null);
 
@@ -18,12 +24,22 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={value}>
       {children}
-      <div className="toast-region" aria-label="Notifications">
+      <div className="toast-region" role="region" aria-label="Notifications">
         {toasts.map((toast) => (
-          <div className={`toast toast-${toast.kind}`} key={toast.id} role={toast.kind === "error" ? "alert" : "status"}>
+          <div
+            className={`toast toast-${toast.kind}`}
+            key={toast.id}
+            role={toast.kind === "error" ? "alert" : "status"}
+          >
             {toast.kind === "success" ? <CheckCircle2 size={18} /> : <XCircle size={18} />}
             <span>{toast.message}</span>
-            <button type="button" aria-label="Masquer" onClick={() => setToasts((items) => items.filter((item) => item.id !== toast.id))}><X size={15} /></button>
+            <button
+              type="button"
+              aria-label="Masquer"
+              onClick={() => setToasts((items) => items.filter((item) => item.id !== toast.id))}
+            >
+              <X size={15} />
+            </button>
           </div>
         ))}
       </div>

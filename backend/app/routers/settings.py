@@ -8,6 +8,7 @@ from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.api_models import SettingsResponse, TelegramTestResponse
 from app.database import get_db, utcnow
 from app.models import PasskeyCredential
 from app.schemas import (
@@ -17,7 +18,14 @@ from app.schemas import (
     TelegramToggle,
     TelegramUpdate,
 )
-from app.security import AuthContext, cipher_for, get_auth_context, require_owner_action
+from app.security import (
+    AuthContext,
+    cipher_for,
+    get_auth_context,
+    require_owner_action,
+    require_primary_owner,
+    require_primary_owner_action,
+)
 from app.services.events import record_event
 from app.services.pass_gateway import pass_status_view
 from app.services.pass_sessions import service_session_view
@@ -86,7 +94,7 @@ def settings_view(auth: AuthContext, db: Session | None = None) -> dict:
     }
 
 
-@router.get("")
+@router.get("", response_model=SettingsResponse)
 def get_settings(
     auth: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db),
@@ -94,12 +102,14 @@ def get_settings(
     return settings_view(auth, db)
 
 
-@router.patch("/auto-sync")
+@router.patch("/auto-sync", response_model=SettingsResponse)
 def update_auto_sync(
     payload: AutoSyncUpdate,
     auth: AuthContext = Depends(require_owner_action),
     db: Session = Depends(get_db),
 ) -> dict:
+    if payload.enabled:
+        require_primary_owner(auth)
     account = auth.account
     was_enabled = account.auto_sync_enabled
     account.auto_sync_enabled = payload.enabled
@@ -136,12 +146,14 @@ def update_auto_sync(
     return settings_view(auth, db)
 
 
-@router.put("/sync-setup")
+@router.put("/sync-setup", response_model=SettingsResponse)
 def complete_sync_setup(
     payload: SyncSetupUpdate,
     auth: AuthContext = Depends(require_owner_action),
     db: Session = Depends(get_db),
 ) -> dict:
+    if payload.enabled:
+        require_primary_owner(auth)
     account = auth.account
     now = utcnow()
     account.auto_sync_enabled = payload.enabled
@@ -174,7 +186,7 @@ def complete_sync_setup(
     return settings_view(auth, db)
 
 
-@router.patch("/account")
+@router.patch("/account", response_model=SettingsResponse)
 def update_account(
     payload: AccountUpdate,
     auth: AuthContext = Depends(require_owner_action),
@@ -191,10 +203,10 @@ def update_account(
     return settings_view(auth, db)
 
 
-@router.put("/telegram")
+@router.put("/telegram", response_model=SettingsResponse)
 def configure_telegram(
     payload: TelegramUpdate,
-    auth: AuthContext = Depends(require_owner_action),
+    auth: AuthContext = Depends(require_primary_owner_action),
     db: Session = Depends(get_db),
 ) -> dict:
     cipher = cipher_for()
@@ -218,7 +230,7 @@ def configure_telegram(
     return settings_view(auth, db)
 
 
-@router.patch("/telegram")
+@router.patch("/telegram", response_model=SettingsResponse)
 def toggle_telegram(
     payload: TelegramToggle,
     auth: AuthContext = Depends(require_owner_action),
@@ -240,7 +252,7 @@ def toggle_telegram(
     return settings_view(auth, db)
 
 
-@router.post("/telegram/test")
+@router.post("/telegram/test", response_model=TelegramTestResponse)
 async def test_telegram(
     auth: AuthContext = Depends(require_owner_action),
     db: Session = Depends(get_db),

@@ -2,8 +2,8 @@
 set -eu
 
 set -a
-. /etc/botnote/botnote.env
 . /etc/botnote/botnote-runtime.env
+. /etc/botnote/botnote.env
 set +a
 
 cd /opt/botnote/current

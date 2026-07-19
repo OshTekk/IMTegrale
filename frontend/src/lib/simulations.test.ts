@@ -42,22 +42,29 @@ const scenario: SimulationScenario = {
       official: false,
     },
   },
-  entries: [{
-    id: "entry-id",
-    lineage_key: "source:SIT130",
-    semester: "S5",
-    ue_code: "SIT130",
-    title: "Mathématiques",
-    credits_ects: 4,
-    grade: "B",
-    gpa_points: 3.8,
-    status: "validated",
-    nature: "imported",
-    source: { ue_code: "SIT130", status: "current", grade_source: "competences", observed_at: "2026-07-18T10:00:00Z" },
-    baseline: { semester: "S5", ue_code: "SIT130", title: "Mathématiques", credits_ects: 4, grade: "B" },
-    created_at: "2026-07-18T10:00:00Z",
-    updated_at: "2026-07-18T10:00:00Z",
-  }],
+  entries: [
+    {
+      id: "entry-id",
+      lineage_key: "source:SIT130",
+      semester: "S5",
+      ue_code: "SIT130",
+      title: "Mathématiques",
+      credits_ects: 4,
+      grade: "B",
+      gpa_points: 3.8,
+      status: "validated",
+      nature: "imported",
+      source: {
+        ue_code: "SIT130",
+        status: "current",
+        grade_source: "competences",
+        observed_at: "2026-07-18T10:00:00Z",
+      },
+      baseline: { semester: "S5", ue_code: "SIT130", title: "Mathématiques", credits_ects: 4, grade: "B" },
+      created_at: "2026-07-18T10:00:00Z",
+      updated_at: "2026-07-18T10:00:00Z",
+    },
+  ],
 };
 
 describe("simulation drafts", () => {
@@ -68,14 +75,16 @@ describe("simulation drafts", () => {
     expect(simulationPayload(draft)).toEqual({
       version: 2,
       name: "Projection",
-      entries: [{
-        id: "entry-id",
-        semester: "S5",
-        ue_code: "SIT130",
-        title: "Mathématiques",
-        credits_ects: 4,
-        grade: "A",
-      }],
+      entries: [
+        {
+          id: "entry-id",
+          semester: "S5",
+          ue_code: "SIT130",
+          title: "Mathématiques",
+          credits_ects: 4,
+          grade: "A",
+        },
+      ],
     });
   });
 

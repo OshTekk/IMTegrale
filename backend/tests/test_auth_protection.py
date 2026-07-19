@@ -68,6 +68,29 @@ def test_target_cooldown_progresses_and_success_resets(monkeypatch) -> None:
     assert state.blocked_until is None
 
 
+def test_target_failures_do_not_block_a_later_valid_authentication(monkeypatch) -> None:
+    monkeypatch.setattr(auth_protection, "utcnow", lambda: NOW)
+    target = "attacker-selected-target"
+
+    record_auth_outcome(target_ref=target, client_ref="first-client", outcome="invalid")
+
+    state = throttle("target", target)
+    assert auth_protection.ensure_utc(state.blocked_until) == NOW + timedelta(seconds=30)
+    assert_auth_allowed(target_ref=target, client_ref="legitimate-client")
+
+
+def test_target_failure_blocks_only_the_same_client_pair(monkeypatch) -> None:
+    monkeypatch.setattr(auth_protection, "utcnow", lambda: NOW)
+    target = "same-target"
+    client = "same-client"
+
+    record_auth_outcome(target_ref=target, client_ref=client, outcome="invalid")
+
+    with pytest.raises(AuthProtectionRejected) as rejected:
+        assert_auth_allowed(target_ref=target, client_ref=client)
+    assert rejected.value.retry_after_seconds == 30
+
+
 def test_allowed_preflight_does_not_persist_attacker_selected_state(monkeypatch) -> None:
     monkeypatch.setattr(auth_protection, "utcnow", lambda: NOW)
     for index in range(20):
@@ -121,7 +144,7 @@ def test_client_limit_counts_real_authentications_but_not_outages(monkeypatch) -
     assert_auth_allowed(target_ref="healthy-target", client_ref=outage_client)
 
 
-def test_distributed_invalid_credentials_suspend_new_imt_auth(monkeypatch) -> None:
+def test_distributed_invalid_credentials_do_not_suspend_new_imt_auth(monkeypatch) -> None:
     monkeypatch.setattr(auth_protection, "utcnow", lambda: NOW)
     for index in range(10):
         record_auth_outcome(
@@ -131,9 +154,24 @@ def test_distributed_invalid_credentials_suspend_new_imt_auth(monkeypatch) -> No
         )
 
     with SessionLocal() as db:
+        assert db.get(PassSystemState, 1) is None
+
+    assert_auth_allowed(target_ref="unrelated-target", client_ref="unrelated-client")
+
+
+def test_distributed_upstream_failures_open_the_system_circuit(monkeypatch) -> None:
+    monkeypatch.setattr(auth_protection, "utcnow", lambda: NOW)
+    for index in range(10):
+        record_auth_outcome(
+            target_ref=f"target-{index % 6}",
+            client_ref=f"client-{index % 3}",
+            outcome="upstream",
+        )
+
+    with SessionLocal() as db:
         system = db.get(PassSystemState, 1)
         assert system is not None
-        assert system.auth_block_reason == "distributed_invalid_credentials"
+        assert system.auth_block_reason == "distributed_upstream_failures"
 
     with pytest.raises(AuthProtectionRejected):
         assert_auth_allowed(target_ref="unrelated-target", client_ref="unrelated-client")

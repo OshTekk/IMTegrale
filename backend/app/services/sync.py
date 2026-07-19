@@ -12,14 +12,13 @@ from pathlib import Path
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
+from app.academic_numbers import coefficient_decimal, ects_decimal, score_decimal
 from app.calculations import clean_text, ue_code, ue_year
 from app.config import get_settings
 from app.database import SessionLocal, utcnow
 from app.limits import MAX_ARCHIVED_PASS_NOTES_PER_ACCOUNT, MAX_UE_SETTINGS_PER_ACCOUNT
 from app.models import Account, Note, SyncRequest, UeSetting
-from app.security import cipher_for
 from app.services.cohort_pulse import emit_cohort_pulse
-from app.services.dashboard import calculate_ues
 from app.services.events import record_event
 from app.services.imt import (
     MAX_NOTE_COEFFICIENT,
@@ -32,6 +31,7 @@ from app.services.imt import (
     PassEntry,
     PassProfile,
 )
+from app.services.jobs import enqueue_telegram_notification
 from app.services.leaderboard import (
     apply_detected_academic_profile,
     apply_detected_campus,
@@ -58,7 +58,6 @@ from app.services.sync_schedule import (
     defer_automatic_sync,
     update_adaptive_cadence,
 )
-from app.services.telegram import TelegramError, build_new_notes_message, send_telegram
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +145,8 @@ def apply_pass_entries(
     for entry in entries:
         code = ue_code(entry.ue_code)
         key = pass_source_key(entry)
+        score = score_decimal(entry.score)
+        coefficient = coefficient_decimal(entry.coefficient)
         active_keys.add(key)
         note = existing.get(key)
         if note is None:
@@ -155,8 +156,8 @@ def apply_pass_entries(
                 source_key=key,
                 ue_code=code,
                 raw_label=clean_text(entry.label),
-                raw_score=entry.score,
-                raw_coefficient=entry.coefficient,
+                raw_score=score,
+                raw_coefficient=coefficient,
                 raw_is_resit=entry.is_resit,
             )
             db.add(note)
@@ -166,8 +167,8 @@ def apply_pass_entries(
             values = (
                 code,
                 clean_text(entry.label),
-                entry.score,
-                entry.coefficient,
+                score,
+                coefficient,
                 entry.is_resit,
                 False,
             )
@@ -182,8 +183,8 @@ def apply_pass_entries(
             if values != current:
                 note.ue_code = code
                 note.raw_label = clean_text(entry.label)
-                note.raw_score = entry.score
-                note.raw_coefficient = entry.coefficient
+                note.raw_score = score
+                note.raw_coefficient = coefficient
                 note.raw_is_resit = entry.is_resit
                 note.archived = False
                 note.updated_at = utcnow()
@@ -228,7 +229,7 @@ def apply_pass_entries(
                     "note_id": note.id,
                     "ue_code": note.ue_code,
                     "label": note.raw_label,
-                    "score": note.raw_score,
+                    "score": float(note.raw_score),
                 },
             )
     record_event(
@@ -310,8 +311,8 @@ def apply_competency_ues(
     for entry in entries:
         code = ue_code(entry.ue_code)
         title = clean_text(entry.title)
-        credits = float(entry.credits_ects)
-        earned_credits = (
+        credits_number = float(entry.credits_ects)
+        earned_credits_number = (
             float(entry.earned_credits_ects)
             if entry.earned_credits_ects is not None
             else None
@@ -320,12 +321,19 @@ def apply_competency_ues(
             raise ImtFetchError("COMPETENCES a fourni un code UE invalide")
         if not title or len(title) > 200:
             raise ImtFetchError("COMPETENCES a fourni un intitulé d'UE invalide")
-        if not math.isfinite(credits) or not 0 < credits <= 60:
+        if not math.isfinite(credits_number) or not 0 < credits_number <= 60:
             raise ImtFetchError("COMPETENCES a fourni des crédits ECTS invalides")
-        if earned_credits is not None and (
-            not math.isfinite(earned_credits) or not 0 <= earned_credits <= credits
+        if earned_credits_number is not None and (
+            not math.isfinite(earned_credits_number)
+            or not 0 <= earned_credits_number <= credits_number
         ):
             raise ImtFetchError("COMPETENCES a fourni des crédits obtenus invalides")
+        credits = ects_decimal(credits_number)
+        earned_credits = (
+            ects_decimal(earned_credits_number)
+            if earned_credits_number is not None
+            else None
+        )
         if entry.semester is not None and not re.fullmatch(r"S(?:[5-9]|10)", entry.semester):
             raise ImtFetchError("COMPETENCES a fourni un semestre invalide")
         if entry.source_semester is not None and len(entry.source_semester) > 32:
@@ -372,38 +380,6 @@ def apply_competency_ues(
             payload={"total": len(entries), "updated": updated, "source": "competences"},
         )
     return {"total": len(entries), "updated": updated}
-
-
-def _notify_new_notes(db: Session, account: Account, inserted: list[Note]) -> None:
-    if not inserted or not account.telegram_enabled:
-        return
-    if not account.encrypted_telegram_token or not account.encrypted_telegram_chat_id:
-        return
-    cipher = cipher_for()
-    token = cipher.decrypt(account.encrypted_telegram_token, context=f"telegram-token:{account.id}")
-    chat_id = cipher.decrypt(account.encrypted_telegram_chat_id, context=f"telegram-chat:{account.id}")
-    all_notes = list(
-        db.scalars(
-            select(Note).where(
-                Note.account_id == account.id,
-                Note.archived.is_(False),
-                Note.hidden_by_user.is_(False),
-            )
-        )
-    )
-    all_settings = list(db.scalars(select(UeSetting).where(UeSetting.account_id == account.id)))
-    averages = {item["code"]: item["average"] for item in calculate_ues(all_notes, all_settings)}
-    payload = [
-        {
-            "ue_code": note.ue_code,
-            "label": note.raw_label,
-            "score": note.raw_score,
-            "coefficient": note.raw_coefficient,
-            "is_resit": note.raw_is_resit,
-        }
-        for note in inserted
-    ]
-    send_telegram(token, chat_id, build_new_notes_message(payload, averages))
 
 
 def _sync_error(exc: Exception) -> tuple[str, str]:
@@ -627,23 +603,13 @@ def execute_sync_request(
                 account.leaderboard_profile.refresh_recommended_at = None
             account.auto_sync_paused_reason = None
             account.auto_sync_paused_at = None
-            db.commit()
             if notify:
-                try:
-                    _notify_new_notes(db, account, result["inserted"])
-                except TelegramError as exc:
-                    logger.warning(
-                        "Telegram notification failed sync_ref=%s error_type=%s",
-                        sync_log_reference(account.id),
-                        type(exc).__name__,
-                    )
-                    record_event(
-                        db,
-                        account_id=account.id,
-                        kind="telegram:error",
-                        payload={"code": "TELEGRAM_DELIVERY_FAILED"},
-                    )
-                    db.commit()
+                enqueue_telegram_notification(
+                    db,
+                    account=account,
+                    notes=result["inserted"],
+                    sync_request_id=request.id,
+                )
             response = {
                 "total": result["total"],
                 "inserted": len(result["inserted"]),
@@ -671,34 +637,6 @@ def execute_sync_request(
         raise
 
 
-def run_sync_background(
-    account_id: str,
-    request_id: str,
-    *,
-    notify: bool = True,
-    quota_bypass: bool = False,
-    bypass_reason: str | None = None,
-    force_probe: bool = False,
-) -> None:
-    try:
-        execute_sync_request(
-            account_id,
-            request_id,
-            notify=notify,
-            quota_bypass=quota_bypass,
-            bypass_reason=bypass_reason,
-            force_probe=force_probe,
-        )
-    except AutomaticSyncNotAllowed:
-        return
-    except Exception as exc:
-        logger.error(
-            "Background sync failed sync_ref=%s error_type=%s",
-            sync_log_reference(account_id),
-            type(exc).__name__,
-        )
-
-
 def sync_account(
     account_id: str,
     *,
@@ -723,6 +661,11 @@ def sync_account(
         actor=actor,
         idempotency_key=server_idempotency_key(actor),
         enforce_cooldown=False,
+        notify=notify,
+        quota_bypass=quota_bypass,
+        bypass_reason=bypass_reason,
+        force_probe=force_probe,
+        enqueue=False,
         now=now,
     )
     return execute_sync_request(
@@ -793,11 +736,19 @@ def sync_due_accounts() -> list[dict]:
     results: list[dict] = []
     for account_id in account_ids:
         try:
+            reservation = reserve_sync_request(
+                account_id,
+                actor="automatic",
+                idempotency_key=server_idempotency_key("automatic"),
+                enforce_cooldown=False,
+                now=now,
+            )
             results.append(
                 {
                     "account_id": account_id,
                     "ok": True,
-                    **sync_account(account_id, actor="automatic"),
+                    "queued": reservation.status in ACTIVE_SYNC_STATUSES,
+                    "request_id": reservation.request_id,
                 }
             )
         except AutomaticSyncNotAllowed:
@@ -809,16 +760,6 @@ def sync_due_accounts() -> list[dict]:
                     "ok": True,
                     "skipped": True,
                     "reason": "in_progress",
-                }
-            )
-        except PassAccessRejected as exc:
-            results.append(
-                {
-                    "account_id": account_id,
-                    "ok": True,
-                    "skipped": True,
-                    "reason": exc.code,
-                    "retry_after_seconds": exc.retry_after_seconds,
                 }
             )
         except Exception as exc:  # Worker must continue syncing other consenting accounts

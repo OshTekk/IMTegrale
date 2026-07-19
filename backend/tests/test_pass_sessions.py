@@ -44,7 +44,7 @@ def pass_snapshot(value: str = "opaque-pass-cookie") -> str:
         source.close()
 
 
-def test_cookie_snapshot_keeps_only_secure_service_hosts() -> None:
+def test_cookie_snapshot_filters_hosts_and_normalizes_secure_transport() -> None:
     source = requests.Session()
     source.cookies.set(
         "pass-cookie",
@@ -81,7 +81,7 @@ def test_cookie_snapshot_keeps_only_secure_service_hosts() -> None:
 
     assert "pass-value" in snapshot
     assert "hub-value" in snapshot
-    assert "must-not-persist" not in snapshot
+    assert "must-not-persist" in snapshot
     assert "foreign-cookie" not in snapshot
 
     restored = requests.Session()
@@ -92,6 +92,7 @@ def test_cookie_snapshot_keeps_only_secure_service_hosts() -> None:
         restored.close()
     assert set(cookies) == {
         ("pass.imt-atlantique.fr", "pass-cookie"),
+        ("pass.imt-atlantique.fr", "insecure-cookie"),
         ("hub.imt-atlantique.fr", "hub-cookie"),
     }
     assert all(cookie.secure for cookie in cookies.values())

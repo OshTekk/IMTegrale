@@ -6,6 +6,7 @@ import App from "./App";
 import { AppErrorBoundary } from "./components/AppErrorBoundary";
 import { ToastProvider } from "./components/Toast";
 import { initializeTheme } from "./lib/theme";
+import "./styles/core.css";
 import "./styles.css";
 
 initializeTheme();
@@ -13,8 +14,8 @@ initializeTheme();
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: { retry: 1, refetchOnWindowFocus: true },
-    mutations: { retry: false }
-  }
+    mutations: { retry: false },
+  },
 });
 
 createRoot(document.getElementById("root")!).render(
@@ -28,5 +29,5 @@ createRoot(document.getElementById("root")!).render(
         </ToastProvider>
       </BrowserRouter>
     </QueryClientProvider>
-  </StrictMode>
+  </StrictMode>,
 );

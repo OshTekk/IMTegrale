@@ -1,3 +1,7 @@
+import type { LearningSessionAccess } from "./types/learning";
+
+export * from "./types/learning";
+
 export type Role = "owner" | "editor" | "viewer";
 export type AcademicSemester = "S5" | "S6" | "S7" | "S8" | "S9" | "S10";
 export type SimulationSemester = AcademicSemester;
@@ -13,6 +17,7 @@ export interface Session {
     display_name: string;
     imt_username: string | null;
   };
+  learning?: LearningSessionAccess;
 }
 
 export interface NoteItem {
@@ -86,14 +91,14 @@ export interface PassAccessStatus {
     reason: string | null;
     next_probe_at: string | null;
   };
-  quota: {
+  quota?: {
     hour: { used: number; limit: number; remaining: number };
     day: { used: number; limit: number; remaining: number };
     available_at: string;
     retry_after_seconds: number;
-  };
-  profile?: { refreshed_at: string | null; refresh_due: boolean };
-  service_session: ServiceSessionStatus;
+  } | null;
+  profile?: { refreshed_at: string | null; refresh_due: boolean } | null;
+  service_session?: ServiceSessionStatus | null;
 }
 
 export interface ServiceSessionStatus {
@@ -650,6 +655,10 @@ export interface AdminSession {
   authenticated: boolean;
   username?: string;
   must_change_password?: boolean;
+  mfa_configured?: boolean;
+  mfa_verified?: boolean;
+  mfa_verified_at?: string | null;
+  step_up_expires_at?: string | null;
   expires_at?: string;
 }
 
@@ -748,11 +757,14 @@ export interface AdminPassMetrics {
     established: number;
     completed: number;
     completed_duration_hours: { median: number | null; longest: number | null };
-    survival: Record<"24h" | "3d" | "7d" | "30d", {
-      eligible: number;
-      survived: number;
-      rate: number | null;
-    }>;
+    survival: Record<
+      "24h" | "3d" | "7d" | "30d",
+      {
+        eligible: number;
+        survived: number;
+        rate: number | null;
+      }
+    >;
     end_reasons: Record<string, number>;
   };
 }

@@ -6,39 +6,23 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
+from app.api_models import (
+    SimulationComparisonResponse,
+    SimulationListResponse,
+    SimulationScenarioResponse,
+)
 from app.database import get_db
-from app.schemas import (
+from app.schemas_simulations import (
     SimulationConflictResolution,
     SimulationCreate,
     SimulationDuplicate,
     SimulationUpdate,
     SimulationVersion,
 )
-from app.security import AuthContext, require_owner, require_owner_action
+from app.security import AuthContext, require_primary_owner, require_primary_owner_action
 from app.services import simulations
 
 router = APIRouter(prefix="/api/v1/simulations", tags=["simulations"])
-
-
-def require_primary_owner(auth: AuthContext = Depends(require_owner)) -> AuthContext:
-    if auth.session.share_token_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Les simulations restent privées au propriétaire du compte",
-        )
-    return auth
-
-
-def require_primary_owner_action(
-    auth: AuthContext = Depends(require_owner_action),
-) -> AuthContext:
-    if auth.session.share_token_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Les simulations restent privées au propriétaire du compte",
-        )
-    return auth
-
 
 def _run(operation: Callable[[], Any]) -> Any:
     try:
@@ -62,7 +46,7 @@ def _run(operation: Callable[[], Any]) -> Any:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
-@router.get("")
+@router.get("", response_model=SimulationListResponse)
 def simulation_list(
     auth: AuthContext = Depends(require_primary_owner),
     db: Session = Depends(get_db),
@@ -70,7 +54,11 @@ def simulation_list(
     return simulations.list_scenarios(db, auth.account)
 
 
-@router.post("", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    status_code=status.HTTP_201_CREATED,
+    response_model=SimulationScenarioResponse,
+)
 def simulation_create(
     payload: SimulationCreate,
     auth: AuthContext = Depends(require_primary_owner_action),
@@ -87,7 +75,7 @@ def simulation_create(
     )
 
 
-@router.get("/compare")
+@router.get("/compare", response_model=SimulationComparisonResponse)
 def simulation_compare(
     left_id: str = Query(min_length=36, max_length=36),
     right_id: str = Query(min_length=36, max_length=36),
@@ -104,7 +92,7 @@ def simulation_compare(
     )
 
 
-@router.get("/{scenario_id}")
+@router.get("/{scenario_id}", response_model=SimulationScenarioResponse)
 def simulation_get(
     scenario_id: str,
     auth: AuthContext = Depends(require_primary_owner),
@@ -113,7 +101,7 @@ def simulation_get(
     return _run(lambda: simulations.get_scenario(db, auth.account, scenario_id))
 
 
-@router.put("/{scenario_id}")
+@router.put("/{scenario_id}", response_model=SimulationScenarioResponse)
 def simulation_save(
     scenario_id: str,
     payload: SimulationUpdate,
@@ -132,7 +120,11 @@ def simulation_save(
     )
 
 
-@router.post("/{scenario_id}/duplicate", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/{scenario_id}/duplicate",
+    status_code=status.HTTP_201_CREATED,
+    response_model=SimulationScenarioResponse,
+)
 def simulation_duplicate(
     scenario_id: str,
     payload: SimulationDuplicate,
@@ -151,7 +143,7 @@ def simulation_duplicate(
     )
 
 
-@router.post("/{scenario_id}/reset")
+@router.post("/{scenario_id}/reset", response_model=SimulationScenarioResponse)
 def simulation_reset(
     scenario_id: str,
     payload: SimulationVersion,
@@ -169,7 +161,7 @@ def simulation_reset(
     )
 
 
-@router.post("/{scenario_id}/rebase")
+@router.post("/{scenario_id}/rebase", response_model=SimulationScenarioResponse)
 def simulation_rebase(
     scenario_id: str,
     payload: SimulationVersion,
@@ -187,7 +179,10 @@ def simulation_rebase(
     )
 
 
-@router.post("/{scenario_id}/entries/{entry_id}/resolve")
+@router.post(
+    "/{scenario_id}/entries/{entry_id}/resolve",
+    response_model=SimulationScenarioResponse,
+)
 def simulation_resolve_conflict(
     scenario_id: str,
     entry_id: str,

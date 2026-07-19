@@ -37,17 +37,19 @@ const scenario: NoteSimulationScenario = {
     pending_count: 0,
     missing_ects_count: 0,
     completion_rate: 100,
-    semesters: [{
-      semester: "S5",
-      average: 16,
-      gpa: 3.8,
-      credits_included: 4,
-      ue_count: 1,
-      calculated_ue_count: 1,
-      assessment_count: 2,
-      scored_count: 2,
-      pending_count: 0,
-    }],
+    semesters: [
+      {
+        semester: "S5",
+        average: 16,
+        gpa: 3.8,
+        credits_included: 4,
+        ue_count: 1,
+        calculated_ue_count: 1,
+        assessment_count: 2,
+        scored_count: 2,
+        pending_count: 0,
+      },
+    ],
     warnings: [],
     formula: {
       version: "notes-weighted-v1",
@@ -61,57 +63,59 @@ const scenario: NoteSimulationScenario = {
       official: false,
     },
   },
-  ues: [{
-    id: "ue-id",
-    lineage_key: "source:SIT130",
-    semester: "S5",
-    ue_code: "SIT130",
-    title: "Outils mathématiques",
-    credits_ects: 4,
-    nature: "imported",
-    projection: {
-      average: 16,
-      grade: "B",
-      gpa_points: 3.8,
-      used_resit: false,
-      coefficient_total: 3,
-      assessment_count: 2,
-      scored_count: 2,
-      pending_count: 0,
+  ues: [
+    {
+      id: "ue-id",
+      lineage_key: "source:SIT130",
+      semester: "S5",
+      ue_code: "SIT130",
+      title: "Outils mathématiques",
+      credits_ects: 4,
+      nature: "imported",
+      projection: {
+        average: 16,
+        grade: "B",
+        gpa_points: 3.8,
+        used_resit: false,
+        coefficient_total: 3,
+        assessment_count: 2,
+        scored_count: 2,
+        pending_count: 0,
+      },
+      source: { ue_code: "SIT130", status: "current", observed_at: timestamp },
+      baseline: { semester: "S5", ue_code: "SIT130", title: "Outils mathématiques", credits_ects: 4 },
+      created_at: timestamp,
+      updated_at: timestamp,
+      assessments: [
+        {
+          id: "assessment-1",
+          lineage_key: "source:note-1",
+          label: "Contrôle",
+          score: 12,
+          coefficient: 1,
+          is_resit: false,
+          nature: "imported",
+          source: { note_key: "note-1", status: "current", observed_at: timestamp },
+          baseline: { label: "Contrôle", score: 12, coefficient: 1, is_resit: false },
+          created_at: timestamp,
+          updated_at: timestamp,
+        },
+        {
+          id: "assessment-2",
+          lineage_key: "source:note-2",
+          label: "Projet",
+          score: 18,
+          coefficient: 2,
+          is_resit: false,
+          nature: "imported",
+          source: { note_key: "note-2", status: "current", observed_at: timestamp },
+          baseline: { label: "Projet", score: 18, coefficient: 2, is_resit: false },
+          created_at: timestamp,
+          updated_at: timestamp,
+        },
+      ],
     },
-    source: { ue_code: "SIT130", status: "current", observed_at: timestamp },
-    baseline: { semester: "S5", ue_code: "SIT130", title: "Outils mathématiques", credits_ects: 4 },
-    created_at: timestamp,
-    updated_at: timestamp,
-    assessments: [
-      {
-        id: "assessment-1",
-        lineage_key: "source:note-1",
-        label: "Contrôle",
-        score: 12,
-        coefficient: 1,
-        is_resit: false,
-        nature: "imported",
-        source: { note_key: "note-1", status: "current", observed_at: timestamp },
-        baseline: { label: "Contrôle", score: 12, coefficient: 1, is_resit: false },
-        created_at: timestamp,
-        updated_at: timestamp,
-      },
-      {
-        id: "assessment-2",
-        lineage_key: "source:note-2",
-        label: "Projet",
-        score: 18,
-        coefficient: 2,
-        is_resit: false,
-        nature: "imported",
-        source: { note_key: "note-2", status: "current", observed_at: timestamp },
-        baseline: { label: "Projet", score: 18, coefficient: 2, is_resit: false },
-        created_at: timestamp,
-        updated_at: timestamp,
-      },
-    ],
-  }],
+  ],
 };
 
 describe("note simulation drafts", () => {
@@ -122,17 +126,19 @@ describe("note simulation drafts", () => {
     expect(noteSimulationPayload(draft)).toEqual({
       version: 2,
       name: "Semestre cible",
-      ues: [{
-        id: "ue-id",
-        semester: "S5",
-        ue_code: "SIT130",
-        title: "Outils mathématiques",
-        credits_ects: 4,
-        assessments: [
-          { id: "assessment-1", label: "Contrôle", score: 15, coefficient: 1, is_resit: false },
-          { id: "assessment-2", label: "Projet", score: 18, coefficient: 2, is_resit: false },
-        ],
-      }],
+      ues: [
+        {
+          id: "ue-id",
+          semester: "S5",
+          ue_code: "SIT130",
+          title: "Outils mathématiques",
+          credits_ects: 4,
+          assessments: [
+            { id: "assessment-1", label: "Contrôle", score: 15, coefficient: 1, is_resit: false },
+            { id: "assessment-2", label: "Projet", score: 18, coefficient: 2, is_resit: false },
+          ],
+        },
+      ],
     });
   });
 
@@ -141,9 +147,7 @@ describe("note simulation drafts", () => {
     const second = createNoteUe("S6");
     second.title = "Réseaux";
     second.credits_ects = "6";
-    second.assessments = [
-      { ...createNoteAssessment("Examen"), score: "10", coefficient: "1" },
-    ];
+    second.assessments = [{ ...createNoteAssessment("Examen"), score: "10", coefficient: "1" }];
     draft.ues.push(second);
 
     expect(calculateNoteUeProjection(draft.ues[0]!)).toMatchObject({

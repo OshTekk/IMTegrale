@@ -51,6 +51,34 @@ def fake_json_response(payload: object, *, url: str) -> requests.Response:
     )
 
 
+class RecordingSession:
+    def __init__(self, response: requests.Response) -> None:
+        self.response = response
+        self.trust_env = True
+        self.closed = False
+
+    def __enter__(self):  # noqa: ANN204
+        return self
+
+    def __exit__(self, *_args) -> None:  # noqa: ANN002
+        self.close()
+
+    def post(self, *_args, **_kwargs) -> requests.Response:  # noqa: ANN002, ANN003
+        assert self.trust_env is False
+        return self.response
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_imt_http_session_ignores_environment_proxies() -> None:
+    client = ImtPassClient()
+    try:
+        assert client.session.trust_env is False
+    finally:
+        client.session.close()
+
+
 def test_cas_password_form_cannot_forward_credentials_to_untrusted_action(monkeypatch) -> None:
     client = ImtPassClient()
     response = fake_response(
@@ -544,7 +572,7 @@ def test_cas_accepts_the_official_shibboleth_session_path(monkeypatch) -> None:
     ]
 
 
-def test_cas_does_not_submit_a_shibboleth_lookalike_path(monkeypatch) -> None:
+def test_cas_rejects_a_shibboleth_lookalike_terminal_page(monkeypatch) -> None:
     client = ImtPassClient()
     consent = fake_response(
         url="https://idp.imt-atlantique.fr/idp/profile/Shibboleth/SSO?execution=e1s2",
@@ -562,11 +590,12 @@ def test_cas_does_not_submit_a_shibboleth_lookalike_path(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_post", unexpected_post)
 
-    assert client._complete_cas(consent, "student", "secret") is consent
+    with pytest.raises(ImtFetchError, match="service protégé"):
+        client._complete_cas(consent, "student", "secret")
     assert called is False
 
 
-def test_cas_does_not_submit_an_unbounded_shibboleth_session_path(monkeypatch) -> None:
+def test_cas_rejects_an_unbounded_shibboleth_terminal_page(monkeypatch) -> None:
     client = ImtPassClient()
     consent = fake_response(
         url="https://idp.imt-atlantique.fr/idp/profile/Shibboleth/SSO",
@@ -584,8 +613,20 @@ def test_cas_does_not_submit_an_unbounded_shibboleth_session_path(monkeypatch) -
 
     monkeypatch.setattr(client, "_post", unexpected_post)
 
-    assert client._complete_cas(consent, "student", "secret") is consent
+    with pytest.raises(ImtFetchError, match="service protégé"):
+        client._complete_cas(consent, "student", "secret")
     assert called is False
+
+
+def test_cas_rejects_an_unknown_allowed_origin_terminal_page() -> None:
+    client = ImtPassClient()
+    terminal = fake_response(
+        url="https://pass.imt-atlantique.fr/unexpected/terminal",
+        body=b"generic upstream page",
+    )
+
+    with pytest.raises(ImtFetchError, match="service protégé"):
+        client._complete_cas(terminal, "student", "fictional-password")
 
 
 def test_cas_follows_an_official_action_only_saml_relay(monkeypatch) -> None:
@@ -745,17 +786,21 @@ def test_telegram_messages_have_stable_chunk_and_note_limits() -> None:
     ],
 )
 def test_telegram_rejects_redirects_and_oversized_responses(monkeypatch, response) -> None:
-    monkeypatch.setattr(requests, "post", lambda *_args, **_kwargs: response)
+    session = RecordingSession(response)
+    monkeypatch.setattr(requests, "Session", lambda: session)
     with pytest.raises(TelegramError):
         send_telegram("1234567890:abcdefghijklmnopqrstuvwxyz", "123", "test")
+    assert session.closed is True
 
 
 def test_telegram_streaming_read_enforces_global_deadline(monkeypatch) -> None:
     response = fake_response(body=b"")
     response.iter_content = lambda **_kwargs: iter([b"slow"])
-    monkeypatch.setattr(requests, "post", lambda *_args, **_kwargs: response)
+    session = RecordingSession(response)
+    monkeypatch.setattr(requests, "Session", lambda: session)
     values = iter([0.0, 0.0, 46.0])
     monkeypatch.setattr("app.services.telegram.time.monotonic", lambda: next(values))
 
     with pytest.raises(TelegramError, match="délai global"):
         send_telegram("1234567890:abcdefghijklmnopqrstuvwxyz", "123", "test")
+    assert session.closed is True

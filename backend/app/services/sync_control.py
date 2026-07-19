@@ -16,6 +16,7 @@ from app.config import get_settings
 from app.database import SessionLocal, utcnow
 from app.limits import MAX_SYNC_REQUESTS_PER_ACCOUNT
 from app.models import Account, SyncRequest, new_id
+from app.observability import current_correlation_id
 from app.services.events import record_event
 
 MANUAL_SYNC_COOLDOWN_SECONDS = 600
@@ -250,6 +251,11 @@ def reserve_sync_request(
     actor: str,
     idempotency_key: str | None = None,
     enforce_cooldown: bool,
+    notify: bool = True,
+    quota_bypass: bool = False,
+    bypass_reason: str | None = None,
+    force_probe: bool = False,
+    enqueue: bool = True,
     now: datetime | None = None,
 ) -> SyncReservation:
     current = ensure_utc(now or utcnow())
@@ -346,18 +352,29 @@ def reserve_sync_request(
 
         db.expire(account)
         account = db.get(Account, account_id)
-        assert account is not None
+        if account is None:  # pragma: no cover - locked account cannot disappear here
+            raise RuntimeError("Account disappeared during sync reservation")
         _recover_expired_requests(db, account, current)
         request = SyncRequest(
             id=request_id,
+            correlation_id=current_correlation_id(),
             account_id=account_id,
             idempotency_digest=digest,
             actor=actor,
             status="queued",
+            notify=notify,
+            quota_bypass=quota_bypass,
+            bypass_reason=bypass_reason,
+            force_probe=force_probe,
             accepted_at=current,
             lease_expires_at=lease_expires_at,
         )
         db.add(request)
+        db.flush()
+        if enqueue:
+            from app.services.jobs import enqueue_sync_job
+
+            enqueue_sync_job(db, request)
         record_event(db, account_id=account.id, kind="sync:accepted", actor=actor)
         _prune_sync_requests(db, account.id)
         try:

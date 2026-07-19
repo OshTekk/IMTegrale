@@ -14,7 +14,7 @@ Les routes sont réservées à la session principale du propriétaire. Les sessi
 
 La connexion déclenche un premier import, limité à trois tentatives par heure et à une tentative par minute pour un même compte. Les téléchargements sortants sont sérialisés et espacés. Aucune redirection n'est suivie, les proxys d'environnement sont ignorés, les délais réseau et la taille du corps sont bornés.
 
-L'ordonnanceur embarqué vérifie ensuite le flux toutes les heures. Il utilise `ETag` et `Last-Modified` lorsque le serveur les fournit. Une erreur conserve les derniers cours valides et planifie une nouvelle tentative une heure plus tard ; elle ne provoque pas de boucle rapide.
+L'ordonnanceur systemd ajoute ensuite un job PostgreSQL échu chaque heure ; le worker calendrier le réclame avec un bail et une clé d'idempotence propres à cette échéance. Il utilise `ETag` et `Last-Modified` lorsque le serveur les fournit. Une erreur conserve les derniers cours valides et planifie une nouvelle tentative une heure plus tard ; elle ne provoque pas de boucle rapide.
 
 Le parseur conserve uniquement le titre, le lieu, les bornes temporelles et le caractère journée entière. Les descriptions, commentaires, organisateurs, participants et métadonnées de calendrier sont ignorés. L'expansion est limitée à la fenêtre comprise entre 400 jours dans le passé et 730 jours dans le futur, avec 5 000 événements maximum. Les récurrences horaires ou plus fréquentes sont refusées.
 

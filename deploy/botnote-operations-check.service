@@ -1,0 +1,27 @@
+[Unit]
+Description=IMTégrale operational health alert
+After=postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=oneshot
+User=botnote
+Group=botnote
+WorkingDirectory=/opt/botnote/current
+EnvironmentFile=/etc/botnote/botnote-runtime.env
+EnvironmentFile=/etc/botnote/botnote.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/botnote/runtime/bin/botnote operations-check
+UMask=0077
+
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+CapabilityBoundingSet=

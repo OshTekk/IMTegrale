@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import uuid
 from datetime import datetime
 from decimal import Decimal
 
@@ -9,7 +8,6 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
-    Float,
     ForeignKey,
     Index,
     Integer,
@@ -20,20 +18,26 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
+from sqlalchemy.ext.mutable import MutableList
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base, utcnow
-
-
-def new_id() -> str:
-    return str(uuid.uuid4())
+from app.model_helpers import new_id
+from app.models_operations import (
+    DurableJob as DurableJob,
+)
+from app.models_operations import (
+    NotificationOutbox as NotificationOutbox,
+)
+from app.models_operations import (
+    RuntimeHeartbeat as RuntimeHeartbeat,
+)
 
 
 class Account(Base):
     __tablename__ = "accounts"
     __table_args__ = (
         UniqueConstraint("imt_username", name="accounts_imt_username_key"),
-        Index("ix_accounts_imt_username", "imt_username", unique=True),
         CheckConstraint(
             "auto_sync_interval_hours IN (2, 4, 6, 8, 12, 24)",
             name="ck_accounts_auto_sync_interval",
@@ -45,6 +49,7 @@ class Account(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    access_generation: Mapped[int] = mapped_column(Integer, default=1)
     imt_username: Mapped[str] = mapped_column(String(160))
     display_name: Mapped[str] = mapped_column(String(120))
     encrypted_telegram_token: Mapped[str | None] = mapped_column(Text)
@@ -96,6 +101,7 @@ class Account(Base):
     promotion_year: Mapped[int | None] = mapped_column(Integer)
     academic_source: Mapped[str] = mapped_column(String(24), default="unknown")
     academic_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    student_status_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     classification_review_required: Mapped[bool] = mapped_column(Boolean, default=False)
     last_note_change_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     security_setup_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -119,6 +125,15 @@ class Account(Base):
     pass_service_sessions: Mapped[list[PassServiceSession]] = relationship(
         back_populates="account", cascade="all, delete-orphan"
     )
+    learning_access_grants: Mapped[list[LearningAccessGrant]] = relationship(
+        back_populates="account", cascade="all, delete-orphan"
+    )
+    learning_progress: Mapped[list[LearningProgress]] = relationship(
+        back_populates="account", cascade="all, delete-orphan"
+    )
+    learning_attempts: Mapped[list[LearningAttempt]] = relationship(
+        back_populates="account", cascade="all, delete-orphan"
+    )
 
 
 class Note(Base):
@@ -135,12 +150,12 @@ class Note(Base):
     source_key: Mapped[str] = mapped_column(String(96))
     ue_code: Mapped[str] = mapped_column(String(32))
     raw_label: Mapped[str] = mapped_column(String(240))
-    raw_score: Mapped[float] = mapped_column(Float)
-    raw_coefficient: Mapped[float] = mapped_column(Float, default=1)
+    raw_score: Mapped[Decimal] = mapped_column(Numeric(5, 2))
+    raw_coefficient: Mapped[Decimal] = mapped_column(Numeric(7, 3), default=Decimal("1"))
     raw_is_resit: Mapped[bool] = mapped_column(Boolean, default=False)
     label_override: Mapped[str | None] = mapped_column(String(240))
-    score_override: Mapped[float | None] = mapped_column(Float)
-    coefficient_override: Mapped[float | None] = mapped_column(Float)
+    score_override: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    coefficient_override: Mapped[Decimal | None] = mapped_column(Numeric(7, 3))
     is_resit_override: Mapped[bool | None] = mapped_column(Boolean)
     detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
@@ -154,11 +169,11 @@ class Note(Base):
         return self.label_override if self.label_override is not None else self.raw_label
 
     @property
-    def score(self) -> float:
+    def score(self) -> Decimal:
         return self.score_override if self.score_override is not None else self.raw_score
 
     @property
-    def coefficient(self) -> float:
+    def coefficient(self) -> Decimal:
         return self.coefficient_override if self.coefficient_override is not None else self.raw_coefficient
 
     @property
@@ -185,8 +200,8 @@ class UeSetting(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), index=True)
     code: Mapped[str] = mapped_column(String(32))
-    credits_ects: Mapped[float | None] = mapped_column(Float)
-    earned_credits_ects: Mapped[float | None] = mapped_column(Float)
+    credits_ects: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
+    earned_credits_ects: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
     title: Mapped[str] = mapped_column(String(200), default="")
     year: Mapped[str] = mapped_column(String(16), default="")
     semester: Mapped[str | None] = mapped_column(String(16))
@@ -553,12 +568,17 @@ class SyncRequest(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    correlation_id: Mapped[str | None] = mapped_column(String(36), index=True)
     account_id: Mapped[str] = mapped_column(
         ForeignKey("accounts.id", ondelete="CASCADE"), index=True
     )
     idempotency_digest: Mapped[str] = mapped_column(String(64))
     actor: Mapped[str] = mapped_column(String(32))
     status: Mapped[str] = mapped_column(String(16), default="queued")
+    notify: Mapped[bool] = mapped_column(Boolean, default=True)
+    quota_bypass: Mapped[bool] = mapped_column(Boolean, default=False)
+    bypass_reason: Mapped[str | None] = mapped_column(String(240))
+    force_probe: Mapped[bool] = mapped_column(Boolean, default=False)
     accepted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -715,6 +735,7 @@ class PasskeyCredential(Base):
     account_id: Mapped[str] = mapped_column(
         ForeignKey("accounts.id", ondelete="CASCADE"), index=True
     )
+    access_generation: Mapped[int] = mapped_column(Integer, default=1)
     credential_id: Mapped[str] = mapped_column(String(1024), unique=True)
     public_key: Mapped[bytes] = mapped_column(LargeBinary)
     sign_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -761,11 +782,11 @@ class ShareToken(Base):
     __tablename__ = "share_tokens"
     __table_args__ = (
         UniqueConstraint("prefix", name="share_tokens_prefix_key"),
-        Index("ix_share_tokens_prefix", "prefix", unique=True),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), index=True)
+    access_generation: Mapped[int] = mapped_column(Integer, default=1)
     name: Mapped[str] = mapped_column(String(120))
     prefix: Mapped[str] = mapped_column(String(16))
     digest: Mapped[str] = mapped_column(String(64))
@@ -780,7 +801,6 @@ class WebSession(Base):
     __tablename__ = "web_sessions"
     __table_args__ = (
         UniqueConstraint("digest", name="web_sessions_digest_key"),
-        Index("ix_web_sessions_digest", "digest", unique=True),
         Index("ix_web_sessions_expires_at", "expires_at"),
     )
 
@@ -789,6 +809,7 @@ class WebSession(Base):
     share_token_id: Mapped[str | None] = mapped_column(
         ForeignKey("share_tokens.id", ondelete="SET NULL"), index=True
     )
+    access_generation: Mapped[int] = mapped_column(Integer, default=1)
     digest: Mapped[str] = mapped_column(String(64))
     csrf_digest: Mapped[str] = mapped_column(String(64))
     role: Mapped[str] = mapped_column(String(16))
@@ -806,7 +827,6 @@ class LeaderboardProfile(Base):
             "pseudonym_key",
             name="uq_leaderboard_profiles_pseudonym_key",
         ),
-        Index("ix_leaderboard_profiles_pseudonym_key", "pseudonym_key"),
     )
 
     account_id: Mapped[str] = mapped_column(
@@ -837,7 +857,6 @@ class AdminUser(Base):
     __tablename__ = "admin_users"
     __table_args__ = (
         UniqueConstraint("username", name="uq_admin_users_username"),
-        Index("ix_admin_users_username", "username", unique=True),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
@@ -849,12 +868,15 @@ class AdminUser(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
+    granted_learning_access: Mapped[list[LearningAccessGrant]] = relationship(
+        back_populates="granted_by_admin", passive_deletes=True
+    )
+
 
 class AdminSession(Base):
     __tablename__ = "admin_sessions"
     __table_args__ = (
         UniqueConstraint("digest", name="uq_admin_sessions_digest"),
-        Index("ix_admin_sessions_digest", "digest", unique=True),
         Index("ix_admin_sessions_expires_at", "expires_at"),
     )
 
@@ -866,9 +888,54 @@ class AdminSession(Base):
     csrf_digest: Mapped[str] = mapped_column(String(64))
     identity_digest: Mapped[str] = mapped_column(String(64))
     user_agent: Mapped[str] = mapped_column(String(300), default="")
+    password_verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+    mfa_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AdminPasskeyCredential(Base):
+    __tablename__ = "admin_passkey_credentials"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    admin_user_id: Mapped[str] = mapped_column(
+        ForeignKey("admin_users.id", ondelete="CASCADE"), index=True
+    )
+    credential_id: Mapped[str] = mapped_column(String(1024), unique=True)
+    public_key: Mapped[bytes] = mapped_column(LargeBinary)
+    sign_count: Mapped[int] = mapped_column(Integer, default=0)
+    transports: Mapped[list] = mapped_column(JSON, default=list)
+    name: Mapped[str] = mapped_column(String(80))
+    device_type: Mapped[str | None] = mapped_column(String(32))
+    backed_up: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AdminWebAuthnChallenge(Base):
+    __tablename__ = "admin_webauthn_challenges"
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('registration', 'authentication')",
+            name="ck_admin_webauthn_challenges_kind",
+        ),
+        Index("ix_admin_webauthn_challenges_expires_at", "expires_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    kind: Mapped[str] = mapped_column(String(16))
+    admin_user_id: Mapped[str] = mapped_column(
+        ForeignKey("admin_users.id", ondelete="CASCADE"), index=True
+    )
+    admin_session_id: Mapped[str] = mapped_column(
+        ForeignKey("admin_sessions.id", ondelete="CASCADE"), index=True
+    )
+    challenge: Mapped[str] = mapped_column(String(256))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class AdminAuditLog(Base):
@@ -885,3 +952,174 @@ class AdminAuditLog(Base):
     action: Mapped[str] = mapped_column(String(64))
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class LearningAccessGrant(Base):
+    __tablename__ = "learning_access_grants"
+    __table_args__ = (
+        Index(
+            "ix_learning_access_grants_account_audience_revoked_expires",
+            "account_id",
+            "audience",
+            "revoked_at",
+            "expires_at",
+        ),
+        Index(
+            "ix_learning_access_grants_revoked_expires",
+            "revoked_at",
+            "expires_at",
+        ),
+        CheckConstraint(
+            "length(trim(audience)) BETWEEN 1 AND 64",
+            name="ck_learning_access_grants_audience",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) BETWEEN 1 AND 240",
+            name="ck_learning_access_grants_reason",
+        ),
+        CheckConstraint(
+            "expires_at > granted_at",
+            name="ck_learning_access_grants_expiry",
+        ),
+        CheckConstraint(
+            "revoked_at IS NULL OR revoked_at >= granted_at",
+            name="ck_learning_access_grants_revocation",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    account_id: Mapped[str] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), index=True
+    )
+    audience: Mapped[str] = mapped_column(String(64))
+    reason: Mapped[str] = mapped_column(String(240))
+    granted_by_admin_id: Mapped[str] = mapped_column(
+        ForeignKey("admin_users.id", ondelete="RESTRICT"), index=True
+    )
+    granted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    account: Mapped[Account] = relationship(back_populates="learning_access_grants")
+    granted_by_admin: Mapped[AdminUser] = relationship(
+        back_populates="granted_learning_access"
+    )
+
+
+class LearningProgress(Base):
+    __tablename__ = "learning_progress"
+    __table_args__ = (
+        UniqueConstraint(
+            "account_id",
+            "audience",
+            "content_id",
+            name="uq_learning_progress_account_audience_content",
+        ),
+        Index(
+            "ix_learning_progress_account_audience_updated",
+            "account_id",
+            "audience",
+            "updated_at",
+        ),
+        CheckConstraint(
+            "length(trim(audience)) BETWEEN 1 AND 64",
+            name="ck_learning_progress_audience",
+        ),
+        CheckConstraint(
+            "length(trim(content_id)) BETWEEN 1 AND 128",
+            name="ck_learning_progress_content_id",
+        ),
+        CheckConstraint(
+            "last_section_id IS NULL OR "
+            "length(trim(last_section_id)) BETWEEN 1 AND 128",
+            name="ck_learning_progress_last_section_id",
+        ),
+        CheckConstraint(
+            "last_page IS NULL OR (last_page >= 1 AND last_page <= 100000)",
+            name="ck_learning_progress_last_page",
+        ),
+        CheckConstraint(
+            "self_assessment IS NULL OR self_assessment BETWEEN 1 AND 5",
+            name="ck_learning_progress_self_assessment",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    account_id: Mapped[str] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), index=True
+    )
+    audience: Mapped[str] = mapped_column(String(64))
+    content_id: Mapped[str] = mapped_column(String(128))
+    last_section_id: Mapped[str | None] = mapped_column(String(128))
+    last_page: Mapped[int | None] = mapped_column(Integer)
+    completed: Mapped[bool] = mapped_column(Boolean, default=False)
+    exercise_viewed: Mapped[bool] = mapped_column(Boolean, default=False)
+    opened_hint_ids: Mapped[list[str]] = mapped_column(
+        MutableList.as_mutable(JSON), default=list
+    )
+    self_assessment: Mapped[int | None] = mapped_column(Integer)
+    favorite: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    account: Mapped[Account] = relationship(back_populates="learning_progress")
+
+
+class LearningAttempt(Base):
+    __tablename__ = "learning_attempts"
+    __table_args__ = (
+        Index(
+            "ix_learning_attempts_account_audience_exercise_at",
+            "account_id",
+            "audience",
+            "exercise_id",
+            "attempted_at",
+        ),
+        Index(
+            "ix_learning_attempts_account_attempted_at",
+            "account_id",
+            "attempted_at",
+        ),
+        CheckConstraint(
+            "length(trim(audience)) BETWEEN 1 AND 64",
+            name="ck_learning_attempts_audience",
+        ),
+        CheckConstraint(
+            "length(trim(exercise_id)) BETWEEN 1 AND 128",
+            name="ck_learning_attempts_exercise_id",
+        ),
+        CheckConstraint(
+            "attempt_kind IN ('viewed', 'hint_opened', 'self_assessed', 'completed')",
+            name="ck_learning_attempts_kind",
+        ),
+        CheckConstraint(
+            "self_assessment IS NULL OR self_assessment BETWEEN 1 AND 5",
+            name="ck_learning_attempts_self_assessment",
+        ),
+        CheckConstraint(
+            "(attempt_kind = 'hint_opened' AND hint_id IS NOT NULL AND "
+            "length(trim(hint_id)) BETWEEN 1 AND 128) "
+            "OR (attempt_kind <> 'hint_opened' AND hint_id IS NULL)",
+            name="ck_learning_attempts_hint_payload",
+        ),
+        CheckConstraint(
+            "(attempt_kind = 'self_assessed' AND self_assessment IS NOT NULL) "
+            "OR (attempt_kind <> 'self_assessed' AND self_assessment IS NULL)",
+            name="ck_learning_attempts_assessment_payload",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    account_id: Mapped[str] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), index=True
+    )
+    audience: Mapped[str] = mapped_column(String(64))
+    exercise_id: Mapped[str] = mapped_column(String(128))
+    attempt_kind: Mapped[str] = mapped_column(String(24))
+    hint_id: Mapped[str | None] = mapped_column(String(128))
+    self_assessment: Mapped[int | None] = mapped_column(Integer)
+    attempted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    account: Mapped[Account] = relationship(back_populates="learning_attempts")

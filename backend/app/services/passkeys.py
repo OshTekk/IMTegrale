@@ -235,7 +235,11 @@ def authenticate_passkey(
     if passkey is None:
         raise PasskeyError("Passkey inconnue")
     account = db.get(Account, passkey.account_id)
-    if account is None or account.is_disabled:
+    if (
+        account is None
+        or account.is_disabled
+        or passkey.access_generation != account.access_generation
+    ):
         raise PasskeyError("Passkey indisponible")
     user_handle = credential.get("response", {}).get("userHandle")
     if not isinstance(user_handle, str):

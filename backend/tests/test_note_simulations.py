@@ -223,7 +223,7 @@ def test_import_rejects_an_oversized_academic_snapshot_without_partial_creation(
     )
 
     assert response.status_code == 409
-    assert response.json()["detail"] == expected_detail
+    assert response.json()["detail"]["message"] == expected_detail
     assert client.get("/api/v1/note-simulations").json()["scenarios"] == []
 
 

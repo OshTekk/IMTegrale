@@ -8,6 +8,8 @@ import { SecuritySetupModal } from "./components/SecuritySetupModal";
 import { SyncSetupModal } from "./components/SyncSetupModal";
 import { SimulationLayout } from "./components/SimulationLayout";
 import { LoginPage } from "./pages/LoginPage";
+import { isPrimaryOwnerSession } from "./lib/auth";
+import { learningDocumentTitle } from "./lib/learning";
 import { clearAccountState, queryKeys, replaceSessionState, useSession } from "./lib/queries";
 import { broadcastSessionChange, subscribeToSessionChanges } from "./lib/sessionSync";
 
@@ -21,16 +23,22 @@ const loadLeaderboardPage = () => import("./pages/LeaderboardPage");
 const loadSimulationsPage = () => import("./pages/SimulationsPage");
 const loadNoteSimulationsPage = () => import("./pages/NoteSimulationsPage");
 const loadCalendarPage = () => import("./pages/CalendarPage");
+const loadLearningPage = () => import("./pages/LearningPage");
 const OverviewPage = lazy(() => loadOverviewPage().then((module) => ({ default: module.OverviewPage })));
 const NotesPage = lazy(() => loadNotesPage().then((module) => ({ default: module.NotesPage })));
 const UesPage = lazy(() => loadUesPage().then((module) => ({ default: module.UesPage })));
-const AcademicReportPage = lazy(() => loadAcademicReportPage().then((module) => ({ default: module.AcademicReportPage })));
+const AcademicReportPage = lazy(() =>
+  loadAcademicReportPage().then((module) => ({ default: module.AcademicReportPage })),
+);
 const SharingPage = lazy(() => loadSharingPage().then((module) => ({ default: module.SharingPage })));
 const SettingsPage = lazy(() => loadSettingsPage().then((module) => ({ default: module.SettingsPage })));
 const LeaderboardPage = lazy(() => loadLeaderboardPage().then((module) => ({ default: module.LeaderboardPage })));
 const SimulationsPage = lazy(() => loadSimulationsPage().then((module) => ({ default: module.SimulationsPage })));
-const NoteSimulationsPage = lazy(() => loadNoteSimulationsPage().then((module) => ({ default: module.NoteSimulationsPage })));
+const NoteSimulationsPage = lazy(() =>
+  loadNoteSimulationsPage().then((module) => ({ default: module.NoteSimulationsPage })),
+);
 const CalendarPage = lazy(() => loadCalendarPage().then((module) => ({ default: module.CalendarPage })));
+const LearningPage = lazy(() => loadLearningPage().then((module) => ({ default: module.LearningPage })));
 const AdminPortal = lazy(() => import("./pages/AdminPortal").then((module) => ({ default: module.AdminPortal })));
 const TrustPage = lazy(() => import("./pages/TrustPage").then((module) => ({ default: module.TrustPage })));
 const DemoPage = lazy(() => import("./pages/DemoPage").then((module) => ({ default: module.DemoPage })));
@@ -47,6 +55,7 @@ const studentRouteLoaders: Record<string, () => Promise<unknown>> = {
   "/simulations/notes": loadNoteSimulationsPage,
   "/sharing": loadSharingPage,
   "/settings": loadSettingsPage,
+  "/parcours": loadLearningPage,
 };
 
 const documentTitles: Record<string, string> = {
@@ -70,6 +79,7 @@ function preloadStudentRoute(path: string) {
 
 function studentDocumentTitle(path: string): string | undefined {
   if (path.startsWith("/simulations")) return "Simulations";
+  if (path.startsWith("/parcours")) return learningDocumentTitle(path);
   return documentTitles[path];
 }
 
@@ -88,7 +98,11 @@ export default function App() {
   }, [location.pathname]);
 
   if (location.pathname.startsWith("/admin")) {
-    return <Suspense fallback={<div className="route-loading skeleton" />}><AdminPortal /></Suspense>;
+    return (
+      <Suspense fallback={<div className="route-loading skeleton" />}>
+        <AdminPortal />
+      </Suspense>
+    );
   }
   if (location.pathname === "/confiance" || location.pathname === "/demo") {
     return (
@@ -129,20 +143,37 @@ function StudentApp() {
     return () => window.removeEventListener("botnote:unauthorized", handleUnauthorized);
   }, [queryClient]);
 
-  useEffect(() => subscribeToSessionChanges(() => {
-    clearAccountState(queryClient);
-    queryClient.invalidateQueries({ queryKey: queryKeys.session });
-  }), [queryClient]);
+  useEffect(() => {
+    const handleLearningReverification = () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.session });
+    };
+    window.addEventListener("botnote:learning-reverify", handleLearningReverification);
+    return () => window.removeEventListener("botnote:learning-reverify", handleLearningReverification);
+  }, [queryClient]);
+
+  useEffect(
+    () =>
+      subscribeToSessionChanges(() => {
+        clearAccountState(queryClient);
+        queryClient.invalidateQueries({ queryKey: queryKeys.session });
+      }),
+    [queryClient],
+  );
 
   if (session.isPending) {
-    return <div className="app-loading"><Logo /><span className="loading-line" /></div>;
+    return (
+      <div className="app-loading">
+        <Logo />
+        <span className="loading-line" />
+      </div>
+    );
   }
   if (!session.data?.authenticated || !session.data.account || !session.data.role) {
     return <LoginPage />;
   }
 
   const isOwner = session.data.role === "owner";
-  const isPrimaryOwner = isOwner && session.data.auth_method !== "token";
+  const isPrimaryOwner = isPrimaryOwnerSession(session.data);
   return (
     <>
       <Routes>
@@ -159,20 +190,18 @@ function StudentApp() {
             <Route path="notes" element={<NoteSimulationsPage />} />
           </Route>
           <Route path="sharing" element={isOwner ? <SharingPage /> : <Navigate to="/" replace />} />
-          <Route path="settings" element={<SettingsPage role={session.data.role} />} />
+          <Route path="parcours/*" element={<LearningPage session={session.data} />} />
+          <Route path="settings" element={<SettingsPage role={session.data.role} isPrimaryOwner={isPrimaryOwner} />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>
       <SecuritySetupModal
-        open={Boolean(isOwner && session.data.needs_security_setup)}
+        open={Boolean(isPrimaryOwner && session.data.needs_security_setup)}
+        isPrimaryOwner={isPrimaryOwner}
         onComplete={() => queryClient.invalidateQueries({ queryKey: queryKeys.session })}
       />
       <SyncSetupModal
-        open={Boolean(
-          isOwner
-          && !session.data.needs_security_setup
-          && session.data.needs_sync_setup
-        )}
+        open={Boolean(isPrimaryOwner && !session.data.needs_security_setup && session.data.needs_sync_setup)}
         onComplete={() => queryClient.invalidateQueries({ queryKey: queryKeys.session })}
       />
     </>

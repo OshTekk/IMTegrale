@@ -6,39 +6,23 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
+from app.api_models import (
+    NoteSimulationComparisonResponse,
+    NoteSimulationListResponse,
+    NoteSimulationScenarioResponse,
+)
 from app.database import get_db
-from app.schemas import (
+from app.schemas_simulations import (
     NoteSimulationUpdate,
     SimulationConflictResolution,
     SimulationCreate,
     SimulationDuplicate,
     SimulationVersion,
 )
-from app.security import AuthContext, require_owner, require_owner_action
+from app.security import AuthContext, require_primary_owner, require_primary_owner_action
 from app.services import note_simulations
 
 router = APIRouter(prefix="/api/v1/note-simulations", tags=["note-simulations"])
-
-
-def require_primary_owner(auth: AuthContext = Depends(require_owner)) -> AuthContext:
-    if auth.session.share_token_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Les simulations restent privées au propriétaire du compte",
-        )
-    return auth
-
-
-def require_primary_owner_action(
-    auth: AuthContext = Depends(require_owner_action),
-) -> AuthContext:
-    if auth.session.share_token_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Les simulations restent privées au propriétaire du compte",
-        )
-    return auth
-
 
 def _run(operation: Callable[[], Any]) -> Any:
     try:
@@ -62,7 +46,7 @@ def _run(operation: Callable[[], Any]) -> Any:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
-@router.get("")
+@router.get("", response_model=NoteSimulationListResponse)
 def scenario_list(
     auth: AuthContext = Depends(require_primary_owner),
     db: Session = Depends(get_db),
@@ -70,7 +54,11 @@ def scenario_list(
     return note_simulations.list_scenarios(db, auth.account)
 
 
-@router.post("", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    status_code=status.HTTP_201_CREATED,
+    response_model=NoteSimulationScenarioResponse,
+)
 def scenario_create(
     payload: SimulationCreate,
     auth: AuthContext = Depends(require_primary_owner_action),
@@ -87,7 +75,7 @@ def scenario_create(
     )
 
 
-@router.get("/compare")
+@router.get("/compare", response_model=NoteSimulationComparisonResponse)
 def scenario_compare(
     left_id: str = Query(min_length=36, max_length=36),
     right_id: str = Query(min_length=36, max_length=36),
@@ -104,7 +92,7 @@ def scenario_compare(
     )
 
 
-@router.get("/{scenario_id}")
+@router.get("/{scenario_id}", response_model=NoteSimulationScenarioResponse)
 def scenario_get(
     scenario_id: str,
     auth: AuthContext = Depends(require_primary_owner),
@@ -113,7 +101,7 @@ def scenario_get(
     return _run(lambda: note_simulations.get_scenario(db, auth.account, scenario_id))
 
 
-@router.put("/{scenario_id}")
+@router.put("/{scenario_id}", response_model=NoteSimulationScenarioResponse)
 def scenario_save(
     scenario_id: str,
     payload: NoteSimulationUpdate,
@@ -132,7 +120,11 @@ def scenario_save(
     )
 
 
-@router.post("/{scenario_id}/duplicate", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/{scenario_id}/duplicate",
+    status_code=status.HTTP_201_CREATED,
+    response_model=NoteSimulationScenarioResponse,
+)
 def scenario_duplicate(
     scenario_id: str,
     payload: SimulationDuplicate,
@@ -151,7 +143,7 @@ def scenario_duplicate(
     )
 
 
-@router.post("/{scenario_id}/reset")
+@router.post("/{scenario_id}/reset", response_model=NoteSimulationScenarioResponse)
 def scenario_reset(
     scenario_id: str,
     payload: SimulationVersion,
@@ -169,7 +161,7 @@ def scenario_reset(
     )
 
 
-@router.post("/{scenario_id}/rebase")
+@router.post("/{scenario_id}/rebase", response_model=NoteSimulationScenarioResponse)
 def scenario_rebase(
     scenario_id: str,
     payload: SimulationVersion,
@@ -187,7 +179,10 @@ def scenario_rebase(
     )
 
 
-@router.post("/{scenario_id}/ues/{ue_id}/resolve")
+@router.post(
+    "/{scenario_id}/ues/{ue_id}/resolve",
+    response_model=NoteSimulationScenarioResponse,
+)
 def resolve_ue_conflict(
     scenario_id: str,
     ue_id: str,
@@ -207,7 +202,10 @@ def resolve_ue_conflict(
     )
 
 
-@router.post("/{scenario_id}/assessments/{assessment_id}/resolve")
+@router.post(
+    "/{scenario_id}/assessments/{assessment_id}/resolve",
+    response_model=NoteSimulationScenarioResponse,
+)
 def resolve_assessment_conflict(
     scenario_id: str,
     assessment_id: str,

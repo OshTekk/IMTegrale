@@ -11,6 +11,7 @@ from sqlalchemy import select
 from app.config import Settings, get_settings
 from app.database import SessionLocal, utcnow
 from app.models import Event
+from app.observability import runtime_metrics
 from app.security import get_auth_context, session_is_active
 
 router = APIRouter(prefix="/api/v1/events", tags=["events"])
@@ -40,7 +41,11 @@ def get_stream_auth(
         )
 
 
-@router.get("")
+@router.get(
+    "",
+    response_class=StreamingResponse,
+    responses={200: {"content": {"text/event-stream": {}}}},
+)
 async def stream_events(
     request: Request,
     after: int = 0,
@@ -51,41 +56,48 @@ async def stream_events(
     include_simulations = auth.include_simulations
 
     async def event_stream():
-        last_id = max(0, after)
-        yield "retry: 3000\n\n"
-        idle = 0
-        while not await request.is_disconnected():
-            with SessionLocal() as db:
-                active = session_is_active(db, session_id, account_id)
-                events = (
-                    list(
-                        db.scalars(
-                            select(Event)
-                            .where(Event.account_id == account_id, Event.id > last_id)
-                            .order_by(Event.id.asc())
-                            .limit(100)
+        runtime_metrics.open_sse()
+        try:
+            last_id = max(0, after)
+            yield "retry: 3000\n\n"
+            idle = 0
+            while not await request.is_disconnected():
+                with SessionLocal() as db:
+                    active = session_is_active(db, session_id, account_id)
+                    events = (
+                        list(
+                            db.scalars(
+                                select(Event)
+                                .where(Event.account_id == account_id, Event.id > last_id)
+                                .order_by(Event.id.asc())
+                                .limit(100)
+                            )
                         )
+                        if active
+                        else []
                     )
-                    if active
-                    else []
-                )
-            if not active:
-                payload = json.dumps({"detail": "Session expirée"}, ensure_ascii=False)
-                yield f"event: unauthorized\ndata: {payload}\n\n"
-                break
-            for event in events:
-                last_id = event.id
-                if not include_simulations and event.kind.startswith("simulation:"):
-                    continue
-                payload = stream_event_payload(event)
-                yield f"id: {event.id}\nevent: update\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
-                idle = 0
-            idle += 1
-            if idle >= 15:
-                ping = json.dumps({"time": utcnow().isoformat(), "last_id": last_id})
-                yield f"event: ping\ndata: {ping}\n\n"
-                idle = 0
-            await asyncio.sleep(2)
+                if not active:
+                    payload = json.dumps({"detail": "Session expirée"}, ensure_ascii=False)
+                    yield f"event: unauthorized\ndata: {payload}\n\n"
+                    break
+                for event in events:
+                    last_id = event.id
+                    if not include_simulations and event.kind.startswith("simulation:"):
+                        continue
+                    payload = stream_event_payload(event)
+                    yield (
+                        f"id: {event.id}\nevent: update\n"
+                        f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    )
+                    idle = 0
+                idle += 1
+                if idle >= 15:
+                    ping = json.dumps({"time": utcnow().isoformat(), "last_id": last_id})
+                    yield f"event: ping\ndata: {ping}\n\n"
+                    idle = 0
+                await asyncio.sleep(2)
+        finally:
+            runtime_metrics.close_sse()
 
     return StreamingResponse(
         event_stream(),

@@ -5,6 +5,7 @@ from datetime import timedelta
 import pytest
 from app.database import SessionLocal, utcnow
 from app.models import Account, LeaderboardProfile, Note, UeSetting
+from app.services import leaderboard as leaderboard_service
 from app.services.imt import CompetencyUe, ImtPassClient, PassEntry, PassProfile
 from app.services.leaderboard import (
     account_leaderboard_score,
@@ -332,6 +333,62 @@ def test_pending_participant_can_erase_leaderboard_data_immediately(
         assert profile.consent_at is None
 
 
+def test_leaderboard_erasure_preserves_administrative_suspension(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(ImtPassClient, "fetch_entries", leaderboard_notes)
+    account_id = prepare_owner(client, "suspended-privacy@imt-atlantique.fr")
+    join(client)
+    with SessionLocal() as db:
+        profile = db.get(LeaderboardProfile, account_id)
+        assert profile is not None
+        profile.suspended_at = utcnow()
+        profile.suspended_reason = "Fictional administrative review"
+        profile.verification_status = "suspended"
+        db.commit()
+
+    erased = client.delete("/api/v1/leaderboard/data", headers=csrf_headers(client))
+
+    assert erased.status_code == 200
+    assert erased.json()["state"] == "suspended"
+    assert erased.json()["can_delete_data"] is False
+    with SessionLocal() as db:
+        profile = db.get(LeaderboardProfile, account_id)
+        assert profile is not None
+        assert profile.consent_at is None
+        assert profile.suspended_at is not None
+        assert profile.suspended_reason == "Fictional administrative review"
+        assert profile.verification_status == "suspended"
+
+
+def test_leaderboard_segment_has_a_hard_participant_bound(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(ImtPassClient, "fetch_entries", leaderboard_notes)
+    second = TestClient(client.app, base_url="https://testserver")
+    try:
+        first_id = prepare_owner(client, "capacity-first@imt-atlantique.fr")
+        second_id = prepare_owner(second, "capacity-second@imt-atlantique.fr")
+        join(client)
+        join(second)
+        make_visible(first_id)
+        make_visible(second_id)
+        monkeypatch.setattr(
+            leaderboard_service,
+            "MAX_LEADERBOARD_PARTICIPANTS_PER_SEGMENT",
+            1,
+        )
+
+        response = client.get("/api/v1/leaderboard")
+
+        assert response.status_code == 503
+        assert response.json()["detail"]["code"] == "LEADERBOARD_CAPACITY_EXCEEDED"
+    finally:
+        second.close()
+
+
 def test_shared_token_cannot_join_or_read_leaderboard(client: TestClient, monkeypatch) -> None:
     monkeypatch.setattr(ImtPassClient, "fetch_entries", leaderboard_notes)
     prepare_owner(client, "owner@imt-atlantique.fr")
@@ -495,7 +552,7 @@ def test_join_requires_complete_ects(client: TestClient, monkeypatch) -> None:
     )
 
     assert response.status_code == 409
-    assert "ECTS" in response.json()["detail"]
+    assert "ECTS" in response.json()["detail"]["message"]
 
 
 def test_manual_ects_cannot_be_used_to_join_the_public_leaderboard(
@@ -552,7 +609,7 @@ def test_manual_ects_cannot_be_used_to_join_the_public_leaderboard(
     )
 
     assert response.status_code == 409
-    assert "COMPETENCES" in response.json()["detail"]
+    assert "COMPETENCES" in response.json()["detail"]["message"]
     with SessionLocal() as db:
         profile = db.get(LeaderboardProfile, login.json()["account"]["id"])
         assert profile is None or profile.is_participating is False
@@ -646,4 +703,4 @@ def test_join_requires_official_pass_identity(client: TestClient, monkeypatch) -
     )
 
     assert response.status_code == 409
-    assert "prénom" in response.json()["detail"]
+    assert "prénom" in response.json()["detail"]["message"]

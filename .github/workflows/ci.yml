@@ -13,7 +13,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  content-boundary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - name: Verify public content boundary
+        run: python scripts/check_content_boundary.py
+
   backend:
+    needs: content-boundary
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -27,13 +41,75 @@ jobs:
       - name: Install
         run: python -m pip install --disable-pip-version-check -e '.[dev]'
       - name: Lint
-        run: ruff check backend
+        run: ruff check backend scripts
+      - name: Security static analysis
+        run: ruff check --select S backend/app
+      - name: Secret-shaped material scan
+        run: python scripts/check_secrets.py
+      - name: Verify OpenAPI artifact
+        run: PYTHONPATH=backend python scripts/export_openapi.py openapi/imtegrale.openapi.json --check
       - name: Tests
-        run: pytest
+        run: pytest --cov=app --cov-branch --cov-report=term-missing --cov-report=json:coverage.json
+      - name: Enforce line and branch coverage floors
+        run: >-
+          python scripts/check_coverage.py coverage.json
+          --min-lines 87.4
+          --min-branches 68.5
+          --module-floor backend/app/calculations.py:90:85
+      - name: Build and verify backend wheel boundary
+        shell: bash
+        run: |
+          wheel_out="$(mktemp -d)"
+          python -m pip wheel --no-deps --no-build-isolation --wheel-dir "$wheel_out" .
+          mapfile -t wheels < <(find "$wheel_out" -maxdepth 1 -type f -name '*.whl' -print)
+          test "${#wheels[@]}" -eq 1
+          python scripts/check_content_boundary.py --wheel "${wheels[0]}"
       - name: Dependency audit
         run: pip-audit
 
+  postgres-backend:
+    needs: content-boundary
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: botnote_test
+          POSTGRES_USER: botnote_ci
+          POSTGRES_PASSWORD: postgres-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U botnote_ci -d botnote_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      BOTNOTE_ENVIRONMENT: test
+      BOTNOTE_DATABASE_URL: postgresql+psycopg://botnote_ci:postgres-ci-only@127.0.0.1:5432/botnote_test
+      BOTNOTE_POSTGRES_TEST_URL: postgresql+psycopg://botnote_ci:postgres-ci-only@127.0.0.1:5432/botnote_test
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: python -m pip install --disable-pip-version-check -e '.[dev]'
+      - name: Create schema from migrations
+        run: alembic upgrade head
+      - name: PostgreSQL constraints and concurrency
+        run: pytest backend/postgres_tests
+      - name: Verify migration rollback and replay
+        run: |
+          alembic downgrade base
+          alembic upgrade head
+
   frontend:
+    needs: content-boundary
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -47,6 +123,9 @@ jobs:
         with:
           version: 11.9.0
           run_install: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "22"
@@ -54,9 +133,74 @@ jobs:
           cache-dependency-path: frontend/pnpm-lock.yaml
       - name: Install
         run: pnpm install --frozen-lockfile
+      - name: Verify generated API client
+        run: pnpm check:api
+      - name: Lint and format
+        run: |
+          pnpm lint
+          pnpm format:check
       - name: Tests
         run: pnpm test
       - name: Build and typecheck
         run: pnpm build
+      - name: Install E2E browser
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Parcours E2E (synthetic fixtures only)
+        run: pnpm test:e2e:ci
+      - name: Verify built content boundary
+        run: python ../scripts/check_content_boundary.py --repo-root .. --dist frontend/dist
       - name: Dependency audit
         run: pnpm audit --prod
+
+  release-artifact:
+    needs: [backend, postgres-backend, frontend]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+        with:
+          version: 11.9.0
+          run_install: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Install production locks
+        run: |
+          python -m pip install --disable-pip-version-check -r deploy/requirements.lock
+          pnpm --dir frontend install --frozen-lockfile
+      - name: Build exact release artifacts
+        run: |
+          mkdir -p artifacts/wheel
+          python -m pip wheel --no-deps --no-build-isolation --wheel-dir artifacts/wheel .
+          pnpm --dir frontend build
+          python scripts/generate_sbom.py --output artifacts/imtegrale.cdx.json
+      - name: Audit manifest and smoke-test built artifacts
+        shell: bash
+        run: |
+          mapfile -t wheels < <(find artifacts/wheel -maxdepth 1 -type f -name '*.whl' -print)
+          test "${#wheels[@]}" -eq 1
+          python scripts/check_content_boundary.py --wheel "${wheels[0]}" --dist frontend/dist
+          python scripts/audit_release.py \
+            --wheel "${wheels[0]}" \
+            --dist frontend/dist \
+            --sbom artifacts/imtegrale.cdx.json \
+            --output artifacts/release-manifest.json
+          python scripts/smoke_release.py --wheel "${wheels[0]}" --dist frontend/dist
+          cp -R frontend/dist artifacts/frontend
+          sha256sum "${wheels[0]}" artifacts/imtegrale.cdx.json artifacts/release-manifest.json
+      - name: Retain audited release bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: imtegrale-${{ github.sha }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 30

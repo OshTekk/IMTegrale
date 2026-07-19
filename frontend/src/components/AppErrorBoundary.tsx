@@ -28,7 +28,9 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
       <main className="fatal-error-page">
         <Logo />
         <section role="alert">
-          <span><AlertTriangle size={24} /></span>
+          <span>
+            <AlertTriangle size={24} />
+          </span>
           <div>
             <p>Erreur d'affichage</p>
             <h1>Cette page n'a pas pu être chargée.</h1>

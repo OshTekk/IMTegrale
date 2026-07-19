@@ -1,10 +1,11 @@
-import { api } from "./api";
+import {
+  authCreatePasskey,
+  authLoginPasskey,
+  authPasskeyLoginOptions,
+  authPasskeyRegistrationOptions,
+} from "../generated/api/sdk.gen";
 import type { PasskeyItem, Session } from "../types";
-
-interface WebAuthnOptionsResponse {
-  challenge_id: string;
-  publicKey: Record<string, unknown>;
-}
+import { apiData, throwOnApiError } from "./generatedApi";
 
 function decodeBase64url(value: string): ArrayBuffer {
   const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
@@ -29,7 +30,7 @@ function decodeDescriptors(value: unknown): PublicKeyCredentialDescriptor[] | un
   });
 }
 
-function creationOptions(raw: Record<string, unknown>): PublicKeyCredentialCreationOptions {
+export function creationOptions(raw: Record<string, unknown>): PublicKeyCredentialCreationOptions {
   const user = raw.user as { id: string; name: string; displayName: string };
   return {
     ...raw,
@@ -39,7 +40,7 @@ function creationOptions(raw: Record<string, unknown>): PublicKeyCredentialCreat
   } as PublicKeyCredentialCreationOptions;
 }
 
-function requestOptions(raw: Record<string, unknown>): PublicKeyCredentialRequestOptions {
+export function requestOptions(raw: Record<string, unknown>): PublicKeyCredentialRequestOptions {
   return {
     ...raw,
     challenge: decodeBase64url(raw.challenge as string),
@@ -47,7 +48,7 @@ function requestOptions(raw: Record<string, unknown>): PublicKeyCredentialReques
   } as PublicKeyCredentialRequestOptions;
 }
 
-function credentialPayload(credential: PublicKeyCredential): Record<string, unknown> {
+export function credentialPayload(credential: PublicKeyCredential): Record<string, unknown> {
   const response = credential.response;
   const base = {
     id: credential.id,
@@ -84,41 +85,57 @@ export function passkeysSupported(): boolean {
   return typeof window.PublicKeyCredential !== "undefined" && Boolean(navigator.credentials);
 }
 
-export async function registerPasskey(name: string): Promise<PasskeyItem> {
-  if (!passkeysSupported()) throw new Error("Les passkeys ne sont pas disponibles sur ce navigateur.");
-  const options = await api<WebAuthnOptionsResponse>(
-    "/api/v1/auth/passkeys/registration/options",
-    { method: "POST", body: "{}" },
-  );
+export async function createPasskeyCredential(publicKey: Record<string, unknown>): Promise<Record<string, unknown>> {
   const credential = await navigator.credentials.create({
-    publicKey: creationOptions(options.publicKey),
+    publicKey: creationOptions(publicKey),
   });
   if (!(credential instanceof PublicKeyCredential)) throw new Error("Création de passkey annulée.");
-  return api<PasskeyItem>("/api/v1/auth/passkeys", {
-    method: "POST",
-    body: JSON.stringify({
-      challenge_id: options.challenge_id,
-      name,
-      credential: credentialPayload(credential),
-    }),
+  return credentialPayload(credential);
+}
+
+export async function getPasskeyCredential(publicKey: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const credential = await navigator.credentials.get({
+    publicKey: requestOptions(publicKey),
   });
+  if (!(credential instanceof PublicKeyCredential)) throw new Error("Vérification de passkey annulée.");
+  return credentialPayload(credential);
+}
+
+export async function registerPasskey(name: string): Promise<PasskeyItem> {
+  if (!passkeysSupported()) throw new Error("Les passkeys ne sont pas disponibles sur ce navigateur.");
+  const options = await apiData(
+    authPasskeyRegistrationOptions({
+      throwOnError: throwOnApiError,
+    }),
+  );
+  const credential = await createPasskeyCredential(options.publicKey);
+  return apiData(
+    authCreatePasskey({
+      body: {
+        challenge_id: options.challenge_id,
+        name,
+        credential,
+      },
+      throwOnError: throwOnApiError,
+    }),
+  );
 }
 
 export async function authenticateWithPasskey(): Promise<Session> {
   if (!passkeysSupported()) throw new Error("Les passkeys ne sont pas disponibles sur ce navigateur.");
-  const options = await api<WebAuthnOptionsResponse>(
-    "/api/v1/auth/login/passkey/options",
-    { method: "POST", body: "{}" },
-  );
-  const credential = await navigator.credentials.get({
-    publicKey: requestOptions(options.publicKey),
-  });
-  if (!(credential instanceof PublicKeyCredential)) throw new Error("Connexion par passkey annulée.");
-  return api<Session>("/api/v1/auth/login/passkey", {
-    method: "POST",
-    body: JSON.stringify({
-      challenge_id: options.challenge_id,
-      credential: credentialPayload(credential),
+  const options = await apiData(
+    authPasskeyLoginOptions({
+      throwOnError: throwOnApiError,
     }),
-  });
+  );
+  const credential = await getPasskeyCredential(options.publicKey);
+  return apiData(
+    authLoginPasskey({
+      body: {
+        challenge_id: options.challenge_id,
+        credential,
+      },
+      throwOnError: throwOnApiError,
+    }),
+  );
 }

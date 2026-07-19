@@ -1,0 +1,28 @@
+[Unit]
+Description=Verify an encrypted IMTégrale backup on an isolated database
+ConditionPathExists=/etc/botnote-restore/restore-test.env
+ConditionPathExists=/etc/botnote-restore/age-identity
+After=network-online.target postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=oneshot
+User=botnote-restore
+Group=botnote-restore
+WorkingDirectory=/opt/botnote/current
+EnvironmentFile=/etc/botnote/botnote-runtime.env
+EnvironmentFile=/etc/botnote-restore/restore-test.env
+ExecStart=/opt/botnote/current/deploy/restore-test.sh
+UMask=0077
+
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/botnote-restore
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+CapabilityBoundingSet=

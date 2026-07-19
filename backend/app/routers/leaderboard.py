@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
+from app.api_models import LeaderboardResponse
 from app.database import get_db
 from app.models import LeaderboardProfile
 from app.schemas import LeaderboardJoinRequest
@@ -37,7 +38,7 @@ def _view(
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
 
 
-@router.get("")
+@router.get("", response_model=LeaderboardResponse)
 def get_leaderboard(
     metric: str = Query(default="gpa"),
     campus: str = Query(default="all"),
@@ -48,7 +49,11 @@ def get_leaderboard(
     return _view(db, auth, metric, campus, cohort)
 
 
-@router.post("/participation", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/participation",
+    status_code=status.HTTP_201_CREATED,
+    response_model=LeaderboardResponse,
+)
 def activate_leaderboard(
     payload: LeaderboardJoinRequest,
     auth: AuthContext = Depends(require_owner_action),
@@ -72,7 +77,7 @@ def activate_leaderboard(
     db.commit()
     return _view(db, auth)
 
-@router.delete("/participation")
+@router.delete("/participation", response_model=LeaderboardResponse)
 def withdraw_from_leaderboard(
     auth: AuthContext = Depends(require_owner_action),
     db: Session = Depends(get_db),
@@ -93,7 +98,7 @@ def withdraw_from_leaderboard(
     return _view(db, auth)
 
 
-@router.delete("/data")
+@router.delete("/data", response_model=LeaderboardResponse)
 def erase_leaderboard_data(
     auth: AuthContext = Depends(require_owner_action),
     db: Session = Depends(get_db),

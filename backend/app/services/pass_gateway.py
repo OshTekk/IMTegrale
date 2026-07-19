@@ -46,7 +46,8 @@ from app.services.pass_sessions import (
     serialize_service_cookies,
     service_session_metrics,
     service_session_view,
-    store_service_session,
+    service_snapshot_is_reusable,
+    store_service_session_if_reusable,
 )
 
 _COORDINATOR_LOCK = threading.RLock()
@@ -569,10 +570,9 @@ def _close_client_session(client: object) -> None:
         close()
 
 
-def _has_secure_service_cookie(client: ImtPassClient, host: str) -> bool:
+def _has_service_cookie(client: ImtPassClient, host: str) -> bool:
     return any(
-        cookie.secure
-        and (cookie.domain or "").lstrip(".").casefold() == host
+        (cookie.domain or "").lstrip(".").casefold() == host
         for cookie in client.session.cookies
     )
 
@@ -605,7 +605,7 @@ def perform_login_operation(
     request_count = 0
     try:
         if get_settings().environment == "test":
-            client.include_profile_on_fetch = initial_import
+            client.include_profile_on_fetch = True
             client.include_competencies_on_fetch = initial_import
             try:
                 fetched = client.fetch_entries(username, password)
@@ -627,6 +627,16 @@ def perform_login_operation(
                 finally:
                     request_count += client.request_count
             else:
+                try:
+                    try:
+                        client.last_profile = client.fetch_profile_authenticated()
+                    except (ImtError, requests.RequestException) as exc:
+                        logger.warning(
+                            "PASS profile could not be refreshed after login: %s",
+                            type(exc).__name__,
+                        )
+                finally:
+                    request_count += client.request_count
                 try:
                     try:
                         client.prime_competency_session(username, password)
@@ -653,7 +663,7 @@ def perform_login_operation(
         hub_attempted = bool(getattr(client, "last_competency_attempted", False))
         hub_succeeded = bool(
             getattr(client, "last_competency_succeeded", False)
-            and _has_secure_service_cookie(client, "hub.imt-atlantique.fr")
+            and _has_service_cookie(client, "hub.imt-atlantique.fr")
         )
         record_auth_outcome(target_ref=target_ref, client_ref=client_ref, outcome="success")
         complete_pass_operation(
@@ -662,17 +672,17 @@ def perform_login_operation(
             request_count=request_count,
             session_reused=False,
             full_sso_performed=True,
-            profile_fetched=initial_import and client.last_profile is not None,
+            profile_fetched=client.last_profile is not None,
         )
         return GatewayResult(
             operation_id=lease.id,
             entries=entries,
-            profile=client.last_profile if initial_import else None,
+            profile=client.last_profile,
             competency_ues=client.last_competency_ues if initial_import else None,
             request_count=request_count,
             session_reused=False,
             full_sso_performed=True,
-            profile_fetched=initial_import and client.last_profile is not None,
+            profile_fetched=client.last_profile is not None,
             session_snapshot=session_snapshot,
             hub_attempted=hub_attempted,
             hub_succeeded=hub_succeeded,
@@ -776,17 +786,27 @@ def perform_sync_operation(
         hub_attempted = bool(getattr(client, "last_competency_attempted", False))
         hub_succeeded = bool(
             getattr(client, "last_competency_succeeded", False)
-            and _has_secure_service_cookie(client, "hub.imt-atlantique.fr")
+            and _has_service_cookie(client, "hub.imt-atlantique.fr")
         )
         if stored is not None and session_reused:
-            refresh_service_session(
-                stored.id,
-                session_snapshot,
-                hub_attempted=hub_attempted,
-                hub_succeeded=hub_succeeded,
-            )
+            if service_snapshot_is_reusable(session_snapshot):
+                refresh_service_session(
+                    stored.id,
+                    session_snapshot,
+                    hub_attempted=hub_attempted,
+                    hub_succeeded=hub_succeeded,
+                )
+            else:
+                invalidate_service_session(
+                    stored.id,
+                    state="expired",
+                    reason="upstream_cookie_missing",
+                )
+                if owner_password is None:
+                    account.auto_sync_paused_reason = "reauth_required"
+                    account.auto_sync_paused_at = utcnow()
         else:
-            store_service_session(
+            store_service_session_if_reusable(
                 db,
                 account,
                 session_snapshot,

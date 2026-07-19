@@ -2,10 +2,7 @@ const SESSION_CHANGE_KEY = "botnote:session-change";
 
 export function broadcastSessionChange(): void {
   try {
-    window.localStorage.setItem(
-      SESSION_CHANGE_KEY,
-      `${Date.now()}:${window.crypto.randomUUID()}`
-    );
+    window.localStorage.setItem(SESSION_CHANGE_KEY, `${Date.now()}:${window.crypto.randomUUID()}`);
   } catch {
     // The current tab still updates synchronously when storage is unavailable.
   }

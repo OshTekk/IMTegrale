@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from app.api_models import OkResponse, ShareTokenCreatedResponse, ShareTokenResponse
 from app.database import get_db, utcnow
 from app.limits import (
     MAX_ACTIVE_SHARE_TOKENS_PER_ACCOUNT,
@@ -13,7 +14,14 @@ from app.limits import (
 )
 from app.models import ShareToken, WebSession
 from app.schemas import ShareTokenCreate
-from app.security import AuthContext, generate_share_token, require_owner, require_owner_action, token_digest
+from app.security import (
+    AuthContext,
+    generate_share_token,
+    require_owner,
+    require_owner_action,
+    require_primary_owner,
+    token_digest,
+)
 from app.services.events import record_event
 
 router = APIRouter(prefix="/api/v1/tokens", tags=["tokens"])
@@ -50,7 +58,7 @@ def token_view(token: ShareToken) -> dict:
     }
 
 
-@router.get("")
+@router.get("", response_model=list[ShareTokenResponse])
 def list_tokens(
     auth: AuthContext = Depends(require_owner),
     db: Session = Depends(get_db),
@@ -66,12 +74,18 @@ def list_tokens(
     return [token_view(token) for token in tokens]
 
 
-@router.post("", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    status_code=status.HTTP_201_CREATED,
+    response_model=ShareTokenCreatedResponse,
+)
 def create_token(
     payload: ShareTokenCreate,
     auth: AuthContext = Depends(require_owner_action),
     db: Session = Depends(get_db),
 ) -> dict:
+    if payload.role == "owner":
+        require_primary_owner(auth)
     _cleanup_token_retention(db, auth.account.id)
     now = utcnow()
     active_count = len(
@@ -94,6 +108,7 @@ def create_token(
     expires_at = now + timedelta(days=payload.expires_in_days) if payload.expires_in_days else None
     token = ShareToken(
         account_id=auth.account.id,
+        access_generation=auth.session.access_generation,
         name=payload.name.strip(),
         prefix=prefix,
         digest=token_digest(raw_token),
@@ -114,7 +129,7 @@ def create_token(
     return {**token_view(token), "token": raw_token}
 
 
-@router.delete("/{token_id}")
+@router.delete("/{token_id}", response_model=OkResponse)
 def revoke_token(
     token_id: str,
     auth: AuthContext = Depends(require_owner_action),

@@ -22,7 +22,13 @@ settings = get_settings()
 connect_args = (
     {"check_same_thread": False, "timeout": 15} if settings.database_url.startswith("sqlite") else {}
 )
-engine_options = {"connect_args": connect_args, "pool_pre_ping": True}
+engine_options = {
+    "connect_args": connect_args,
+    # Bound values otherwise appear in StatementError.__str__. Account and
+    # learning identifiers are private metadata and must not reach service logs.
+    "hide_parameters": True,
+    "pool_pre_ping": True,
+}
 if settings.database_url in {"sqlite://", "sqlite:///:memory:", "sqlite+pysqlite:///:memory:"}:
     engine_options["poolclass"] = StaticPool
 elif not settings.database_url.startswith("sqlite"):
