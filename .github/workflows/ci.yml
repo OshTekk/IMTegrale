@@ -140,7 +140,9 @@ jobs:
           pnpm lint
           pnpm format:check
       - name: Tests
-        run: pnpm test
+        run: |
+          pnpm validate:learning-math
+          pnpm test
       - name: Build and typecheck
         run: pnpm build
       - name: Install E2E browser

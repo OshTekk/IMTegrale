@@ -14,7 +14,7 @@ from app.learning.bundle import (
     load_learning_bundle,
     reset_learning_bundle_cache,
 )
-from app.learning.schemas import LearningBundleManifest
+from app.learning.schemas import CatalogNode, LearningBundleManifest, MathBlock, MathInline
 
 from tests.learning_bundle_factory import (
     AUDIENCE_ID,
@@ -116,6 +116,132 @@ def _assert_public_unavailable(call, *private_values: str) -> None:
     assert captured.value.code == "LEARNING_CATALOG_UNAVAILABLE"
     for private_value in private_values:
         assert private_value not in str(captured.value)
+
+
+@pytest.mark.parametrize(
+    ("kind", "expected_section", "expected_visibility"),
+    [
+        ("chapter", "course", "primary"),
+        ("lesson", "course", "primary"),
+        ("exercise", "practice", "primary"),
+        ("pc_td", "practice", "primary"),
+        ("past_exam", "exam", "primary"),
+        ("concept", "glossary", "secondary"),
+        ("source", "sources", "secondary"),
+    ],
+)
+def test_v1_catalog_nodes_derive_reader_presentation(
+    kind: str,
+    expected_section: str,
+    expected_visibility: str,
+) -> None:
+    node = CatalogNode.model_validate(
+        {
+            "id": f"{kind}-fiction",
+            "kind": kind,
+            "title": "[FICTIF] Contenu de présentation",
+            "audience_ids": (AUDIENCE_ID,),
+            "review_status": "published",
+            "revision": "fictitious-r1",
+        }
+    )
+
+    assert node.section == expected_section
+    assert node.reader_visibility == expected_visibility
+
+
+def _upgrade_fictitious_manifest_to_v2(manifest) -> None:  # noqa: ANN001
+    sections = {
+        "chapter": "course",
+        "lesson": "course",
+        "exercise": "practice",
+        "pc_td": "practice",
+        "past_exam": "exam",
+        "concept": "glossary",
+        "source": "sources",
+    }
+    manifest["schema_version"] = 2
+    manifest["search_index"]["format"] = "json-v2"
+    for node in manifest["catalog"]:
+        section = sections.get(node["kind"])
+        if section is None:
+            continue
+        node["section"] = section
+        node["reader_visibility"] = (
+            "secondary" if node["kind"] in {"concept", "source"} else "primary"
+        )
+
+
+def _upgrade_fictitious_search_to_v2(search) -> None:  # noqa: ANN001
+    search["schema_version"] = 2
+
+
+def test_v2_bundle_accepts_explicit_reader_presentation(tmp_path: Path) -> None:
+    release = write_fictitious_learning_bundle(
+        tmp_path,
+        manifest_mutator=_upgrade_fictitious_manifest_to_v2,
+        search_mutator=_upgrade_fictitious_search_to_v2,
+    )
+
+    snapshot = load_learning_bundle(release)
+    lesson = snapshot.get_catalog_node("lesson-fiction", AUDIENCE_ID)
+    concept = snapshot.get_catalog_node("concept-fiction", AUDIENCE_ID)
+
+    assert snapshot.manifest.schema_version == 2
+    assert lesson is not None and (lesson.section, lesson.reader_visibility) == (
+        "course",
+        "primary",
+    )
+    assert concept is not None and (concept.section, concept.reader_visibility) == (
+        "glossary",
+        "secondary",
+    )
+
+
+def test_v2_bundle_rejects_implicit_reader_presentation(tmp_path: Path) -> None:
+    def remove_explicit_section(manifest) -> None:  # noqa: ANN001
+        _upgrade_fictitious_manifest_to_v2(manifest)
+        lesson = next(node for node in manifest["catalog"] if node["id"] == "lesson-fiction")
+        lesson.pop("section")
+
+    release = write_fictitious_learning_bundle(
+        tmp_path,
+        manifest_mutator=remove_explicit_section,
+        search_mutator=_upgrade_fictitious_search_to_v2,
+    )
+
+    _assert_public_unavailable(lambda: load_learning_bundle(release), str(release))
+
+
+def test_bundle_rejects_a_search_index_from_another_schema_version(tmp_path: Path) -> None:
+    release = write_fictitious_learning_bundle(
+        tmp_path,
+        search_mutator=_upgrade_fictitious_search_to_v2,
+    )
+
+    _assert_public_unavailable(lambda: load_learning_bundle(release), str(release))
+
+
+@pytest.mark.parametrize("model", [MathInline, MathBlock])
+def test_math_nodes_accept_structurally_safe_latex(model: type[MathInline] | type[MathBlock]) -> None:
+    parsed = model.model_validate({"type": "math", "latex": r"x^2 + \frac{a}{b}"})
+
+    assert parsed.latex == r"x^2 + \frac{a}{b}"
+
+
+@pytest.mark.parametrize(
+    "latex",
+    [
+        r"\href{https://example.invalid}{x}",
+        r"\url{javascript:alert(1)}",
+        r"\htmlClass{fixture}{x}",
+        r"\frac{a}{b",
+        r"x}",
+    ],
+)
+def test_math_nodes_reject_links_html_commands_and_unbalanced_groups(latex: str) -> None:
+    with pytest.raises(ValueError):
+        MathInline.model_validate({"type": "math", "latex": latex})
 
 
 def test_loads_fictitious_direct_release_and_resolves_only_by_id(tmp_path: Path) -> None:

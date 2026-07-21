@@ -2140,13 +2140,29 @@ export type LearningCatalogNodeEnvelopeResponse = {
  */
 export type LearningCatalogNodeResponse = {
     /**
+     * Code
+     */
+    code: string | null;
+    /**
      * Content Id
      */
     content_id: string | null;
     /**
+     * Description
+     */
+    description: string | null;
+    /**
      * Difficulty
      */
     difficulty: 'introductory' | 'standard' | 'advanced' | null;
+    /**
+     * Document Type
+     */
+    document_type?: 'pdf' | 'image' | 'download' | null;
+    /**
+     * Download Allowed
+     */
+    download_allowed?: boolean;
     /**
      * Estimated Minutes
      */
@@ -2160,6 +2176,10 @@ export type LearningCatalogNodeResponse = {
      */
     kind: 'audience' | 'curriculum' | 'promotion' | 'level' | 'semester' | 'ue' | 'module' | 'chapter' | 'concept' | 'lesson' | 'exercise' | 'pc_td' | 'past_exam' | 'source';
     /**
+     * Page Count
+     */
+    page_count?: number | null;
+    /**
      * Parent Id
      */
     parent_id: string | null;
@@ -2172,6 +2192,10 @@ export type LearningCatalogNodeResponse = {
      */
     prerequisite_ids: Array<string>;
     /**
+     * Reader Visibility
+     */
+    reader_visibility: 'primary' | 'secondary' | 'hidden';
+    /**
      * Review Status
      */
     review_status: 'draft' | 'in_review' | 'reviewed' | 'published' | 'private_preview' | 'retired';
@@ -2179,6 +2203,10 @@ export type LearningCatalogNodeResponse = {
      * Revision
      */
     revision: string;
+    /**
+     * Section
+     */
+    section: 'course' | 'practice' | 'exam' | 'summary' | 'glossary' | 'sources' | null;
     /**
      * Source Id
      */
@@ -2209,6 +2237,14 @@ export type LearningCatalogResponse = {
      * Release Id
      */
     release_id: string;
+    /**
+     * Release Mode
+     */
+    release_mode: 'published' | 'private_preview';
+    /**
+     * Schema Version
+     */
+    schema_version: 1 | 2;
 };
 
 /**
@@ -2880,7 +2916,7 @@ export type LearningSourceResponse = {
     /**
      * Kind
      */
-    kind: 'image' | 'pdf' | 'download' | null;
+    kind: 'pdf' | 'image' | 'download' | null;
     /**
      * Mime Type
      */
@@ -7897,6 +7933,10 @@ export type LearningLearningAssetErrors = {
      */
     413: ApiErrorEnvelope;
     /**
+     * Plage invalide ou multiple
+     */
+    416: unknown;
+    /**
      * Validation impossible
      */
     422: ApiErrorEnvelope;
@@ -7914,9 +7954,13 @@ export type LearningLearningAssetError = LearningLearningAssetErrors[keyof Learn
 
 export type LearningLearningAssetResponses = {
     /**
-     * Successful Response
+     * Document complet
      */
     200: Blob | File;
+    /**
+     * Plage unique du document
+     */
+    206: unknown;
 };
 
 export type LearningLearningAssetResponse = LearningLearningAssetResponses[keyof LearningLearningAssetResponses];
@@ -7959,6 +8003,10 @@ export type LearningDownloadLearningAssetErrors = {
      */
     413: ApiErrorEnvelope;
     /**
+     * Plage invalide ou multiple
+     */
+    416: unknown;
+    /**
      * Validation impossible
      */
     422: ApiErrorEnvelope;
@@ -7976,9 +8024,13 @@ export type LearningDownloadLearningAssetError = LearningDownloadLearningAssetEr
 
 export type LearningDownloadLearningAssetResponses = {
     /**
-     * Successful Response
+     * Téléchargement complet
      */
     200: Blob | File;
+    /**
+     * Plage unique du téléchargement
+     */
+    206: unknown;
 };
 
 export type LearningDownloadLearningAssetResponse = LearningDownloadLearningAssetResponses[keyof LearningDownloadLearningAssetResponses];

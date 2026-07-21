@@ -33,6 +33,9 @@ Toute contribution à cette frontière doit :
 - refuser l'accès par défaut et appliquer la même dépendance d'autorisation au catalogue, au contenu, à la recherche, à la progression, aux sources, assets et téléchargements ;
 - tester explicitement les contournements par compte anonyme, viewer, token `owner`, path traversal, symlink sortant et manifest invalide ;
 - rendre du texte structuré sans MDX, HTML brut, script, iframe, URL arbitraire ou `dangerouslySetInnerHTML` non justifié formellement ;
+- confiner le HTML produit par KaTeX au composant mathématique dédié, avec AST strict, `trust=false`, validation syntaxique et tests de non-injection ;
+- conserver les métadonnées de fabrication hors du mode lecteur et ne jamais utiliser `section` ou `reader_visibility` comme une autorisation ;
+- servir les documents uniquement par `asset_id` à travers l'API authentifiée ; une requête Range doit être autorisée avant toute lecture et ne doit jamais exposer de chemin privé ;
 - garder la recherche côté serveur et ne jamais envoyer l'index complet au navigateur ;
 - utiliser exclusivement des identités et contenus synthétiques, avec PASS, HUB, INPASS, Telegram et Drive entièrement doublés dans les tests ;
 - exécuter le garde anti-fuite et inspecter le diff ainsi que `frontend/dist` avant soumission.
@@ -41,6 +44,11 @@ La suite Playwright sous `frontend/e2e` intercepte toutes les routes API avec un
 catalogue synthétique marqué `DÉMO FICTIVE` et bloque toute requête HTTP vers une
 origine externe. N'y ajoutez jamais d'export, de capture ou d'identité provenant
 d'un environnement réel. Les rapports et traces locaux restent ignorés par Git.
+
+Toute évolution du bundle doit conserver la compatibilité documentée dans
+[`docs/presentation-schema-v2.md`](docs/presentation-schema-v2.md). Une release v2 exige
+un index `json-v2` et des champs de présentation explicites ; une release v1
+continue à utiliser les valeurs dérivées de `kind` jusqu'à son remplacement.
 
 ## Pull requests
 

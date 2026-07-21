@@ -2,6 +2,7 @@ import { Fragment, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { learningAssetUrl, learningContentHref, safeLearningId } from "../lib/learning";
 import type { LearningBlockNode, LearningInlineNode } from "../types";
+import { LearningMath } from "./LearningMath";
 
 const directiveLabels = {
   note: "Note",
@@ -26,11 +27,7 @@ function renderInline(node: LearningInlineNode, key: string, contentId?: string)
     case "text":
       return markedText(node, key);
     case "math":
-      return (
-        <code className="learning-math-inline" key={key} aria-label={`Formule mathématique : ${node.latex}`}>
-          {node.latex}
-        </code>
-      );
+      return <LearningMath latex={node.latex} displayMode={false} key={key} />;
     case "line_break":
       return <br key={key} />;
     case "source_ref": {
@@ -145,11 +142,7 @@ function renderBlock(node: LearningBlockNode, key: string, contentId?: string): 
         </pre>
       );
     case "math":
-      return (
-        <pre className="learning-math-block" key={key} aria-label={`Formule mathématique : ${node.latex}`}>
-          <code>{node.latex}</code>
-        </pre>
-      );
+      return <LearningMath latex={node.latex} displayMode key={key} />;
     case "image": {
       const src = learningAssetUrl(node.asset_id);
       if (!src)

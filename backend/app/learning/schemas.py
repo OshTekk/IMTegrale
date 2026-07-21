@@ -23,7 +23,7 @@ StableId = Annotated[
     ),
 ]
 Sha256Digest = Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
-SchemaVersion = Annotated[int, Field(strict=True, ge=1, le=1)]
+SchemaVersion = Annotated[int, Field(strict=True, ge=1, le=2)]
 
 CatalogNodeKind = Literal[
     "audience",
@@ -51,8 +51,20 @@ ReviewStatus = Literal[
     "retired",
 ]
 Difficulty = Literal["introductory", "standard", "advanced"]
+LearningSection = Literal["course", "practice", "exam", "summary", "glossary", "sources"]
+ReaderVisibility = Literal["primary", "secondary", "hidden"]
 AudienceIdTuple = Annotated[tuple[StableId, ...], Field(min_length=1, max_length=32)]
 CONTENT_NODE_KINDS = frozenset({"concept", "lesson", "exercise", "pc_td", "past_exam"})
+_DEFAULT_SECTION_BY_KIND: dict[str, LearningSection] = {
+    "chapter": "course",
+    "lesson": "course",
+    "exercise": "practice",
+    "pc_td": "practice",
+    "past_exam": "exam",
+    "concept": "glossary",
+    "source": "sources",
+}
+_SECONDARY_READER_KINDS = frozenset({"concept", "source"})
 
 _URI_SCHEME_RE = re.compile(r"(?i)(?<![a-z0-9+.-])[a-z][a-z0-9+.-]*:(?=\S)")
 _ACTIVE_URI_SCHEME_RE = re.compile(
@@ -64,6 +76,10 @@ _DISPLAY_NETWORK_REFERENCE_RE = re.compile(r"(?i)//|\bwww\.")
 _ROOT_RELATIVE_REFERENCE_RE = re.compile(r"""(?:^|[\s"'(=])/(?![/\s])""")
 _CODE_NETWORK_REFERENCE_RE = re.compile(r"(?i)(?<![a-z0-9_:])//(?=[a-z0-9][a-z0-9.-]*(?:[/:?#]|$))|\bwww\.")
 _RAW_HTML_RE = re.compile(r"<\s*(?:!doctype|/?[a-z][^>]*)>", re.IGNORECASE)
+_UNTRUSTED_MATH_COMMAND_RE = re.compile(
+    r"\\(?:href|url|includegraphics|htmlClass|htmlData|htmlId|htmlStyle)\b",
+    re.IGNORECASE,
+)
 
 
 def _safe_display_text(value: str) -> str:
@@ -91,6 +107,32 @@ def _reject_active_uri(value: str) -> str:
     return value
 
 
+def _validate_math_source(value: str) -> str:
+    value = _reject_active_uri(value)
+    if _UNTRUSTED_MATH_COMMAND_RE.search(value):
+        raise ValueError("untrusted math commands are not allowed")
+    depth = 0
+    for index, character in enumerate(value):
+        preceding_slashes = 0
+        cursor = index - 1
+        while cursor >= 0 and value[cursor] == "\\":
+            preceding_slashes += 1
+            cursor -= 1
+        if preceding_slashes % 2:
+            continue
+        if character == "{":
+            depth += 1
+            if depth > 64:
+                raise ValueError("math grouping is too deeply nested")
+        elif character == "}":
+            depth -= 1
+            if depth < 0:
+                raise ValueError("math grouping is unbalanced")
+    if depth:
+        raise ValueError("math grouping is unbalanced")
+    return value
+
+
 class StrictBundleModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
@@ -112,6 +154,8 @@ class CatalogNode(StrictBundleModel):
     id: StableId
     kind: CatalogNodeKind
     title: str = Field(min_length=1, max_length=240)
+    code: str | None = Field(default=None, min_length=1, max_length=48)
+    description: str | None = Field(default=None, min_length=1, max_length=1_000)
     audience_ids: AudienceIdTuple
     parent_id: StableId | None = None
     content_id: StableId | None = None
@@ -119,17 +163,27 @@ class CatalogNode(StrictBundleModel):
     prerequisite_ids: tuple[StableId, ...] = Field(default=(), max_length=64)
     difficulty: Difficulty | None = None
     estimated_minutes: int | None = Field(default=None, ge=1, le=10_000)
+    section: LearningSection | None = None
+    reader_visibility: ReaderVisibility | None = None
     review_status: ReviewStatus
     revision: str = Field(min_length=1, max_length=64)
     position: int = Field(default=0, ge=0, le=1_000_000)
 
-    @field_validator("title", "revision")
+    @field_validator("title", "code", "description", "revision")
     @classmethod
-    def safe_text(cls, value: str) -> str:
-        return _safe_display_text(value)
+    def safe_text(cls, value: str | None) -> str | None:
+        return _safe_display_text(value) if value is not None else None
 
     @model_validator(mode="after")
     def unique_references(self) -> CatalogNode:
+        if self.section is None:
+            object.__setattr__(self, "section", _DEFAULT_SECTION_BY_KIND.get(self.kind))
+        if self.reader_visibility is None:
+            object.__setattr__(
+                self,
+                "reader_visibility",
+                "secondary" if self.kind in _SECONDARY_READER_KINDS else "primary",
+            )
         if len(set(self.audience_ids)) != len(self.audience_ids):
             raise ValueError("audience IDs must be unique")
         if len(set(self.prerequisite_ids)) != len(self.prerequisite_ids):
@@ -169,7 +223,7 @@ class MathInline(StrictBundleModel):
     @field_validator("latex")
     @classmethod
     def no_external_url(cls, value: str) -> str:
-        return _reject_active_uri(value)
+        return _validate_math_source(value)
 
 
 class SourceReferenceInline(StrictBundleModel):
@@ -295,7 +349,7 @@ class MathBlock(StrictBundleModel):
     @field_validator("latex")
     @classmethod
     def no_external_url(cls, value: str) -> str:
-        return _reject_active_uri(value)
+        return _validate_math_source(value)
 
 
 class ImageBlock(StrictBundleModel):
@@ -511,7 +565,7 @@ class SourceMetadata(StrictBundleModel):
 
 class SearchIndexMetadata(StrictBundleModel):
     file_id: StableId
-    format: Literal["json-v1"]
+    format: Literal["json-v1", "json-v2"]
     language: Literal["fr"]
     revision: str = Field(min_length=1, max_length=64)
     document_count: int = Field(ge=0, le=20_000)
@@ -630,6 +684,16 @@ class LearningBundleManifest(StrictBundleModel):
         source_by_id = {item.id: item for item in self.sources}
         rights_by_id = {item.id: item for item in self.rights}
         checksum_by_id = {item.file_id: item for item in self.checksums}
+
+        if self.search_index.format != f"json-v{self.schema_version}":
+            raise ValueError("search index format must match the bundle schema version")
+        if self.schema_version == 2:
+            for node in self.catalog:
+                if node.kind in _DEFAULT_SECTION_BY_KIND and not {
+                    "section",
+                    "reader_visibility",
+                }.issubset(node.model_fields_set):
+                    raise ValueError("schema v2 presentation fields must be explicit")
 
         expected_review_status = "private_preview" if self.release_mode == "private_preview" else "published"
         if self.release_mode == "private_preview":

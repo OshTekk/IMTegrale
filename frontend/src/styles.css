@@ -7104,8 +7104,8 @@ html[data-theme="dark"] .rank-3 { background: #432c21; color: #e2ab84; }
 }
 
 @keyframes modal-in {
-  from { opacity: 0; transform: translateY(10px) scale(0.985); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
+  from { transform: translateY(10px) scale(0.985); }
+  to { transform: translateY(0) scale(1); }
 }
 
 .toast {

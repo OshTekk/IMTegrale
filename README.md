@@ -20,7 +20,7 @@ IMTégrale est un projet étudiant indépendant. Il n'est ni affilié, ni approu
 - calendrier d'alternance 2026-2027 pour les FIP 2027, 2028 et 2029, avec périodes école, entreprise et mobilité ;
 - relevé académique personnel en PDF, filtrable par semestre, avec provenance PASS/COMPETENCES, annexe facultative et lien vers le code source ;
 - leaderboard facultatif par promotion, avec deux classements : GPA par défaut et moyenne générale ;
-- moteur générique IMTégrale Parcours pour des catalogues pédagogiques privés, avec autorisation serveur, recherche et progression personnelles ; aucune ressource pédagogique réelle n'est publiée dans ce dépôt.
+- moteur générique IMTégrale Parcours avec accueil éditorial, progression, glossaire, rendu mathématique accessible et lecteur PDF local ; aucune ressource pédagogique réelle n'est publiée dans ce dépôt.
 
 Le leaderboard utilise la moyenne calculée depuis les notes brutes PASS, le grade COMPETENCES lorsqu'il existe et les ECTS officiels. Lorsqu'un étudiant le rejoint, son identité PASS et ses deux scores deviennent immédiatement visibles par les participants actifs, tandis qu'il attend 48 heures avant de voir le moindre classement, rang ou nombre de participants. Il peut retirer ou effacer sa participation immédiatement puis revenir à tout moment ; chaque nouvelle activation relance intégralement les 48 heures d'attente avant consultation.
 
@@ -34,7 +34,7 @@ PASS ne fournit pas ici de délégation OAuth. Le worker doit donc pouvoir déch
 
 ## Stack
 
-- React 19, TypeScript, Vite, TanStack Query, Recharts et FullCalendar ;
+- React 19, TypeScript, Vite, TanStack Query, Recharts, FullCalendar, KaTeX et PDF.js ;
 - FastAPI, SQLAlchemy 2, Alembic et PostgreSQL ;
 - Server-Sent Events pour pousser les changements vers l'interface ;
 - Nginx, mTLS entre le frontal et le LXC, Tailscale Serve/Funnel et systemd en production.
@@ -42,6 +42,10 @@ PASS ne fournit pas ici de délégation OAuth. Le worker doit donc pouvoir déch
 ## Frontière IMTégrale Parcours
 
 Le dépôt public fournit uniquement le moteur générique : modèle de bundle versionné, validation, API protégée, renderer sûr, interface et catalogue de démonstration explicitement fictif. Les documents sources, catalogues réels, corrections, illustrations, index et releases compilées appartiennent au dépôt privé `IMTegrale-Parcours-Private` et à son volume de production séparé. Ils ne doivent jamais être copiés dans ce dépôt, ses fixtures, ses logs ou ses artefacts frontend.
+
+Le mode lecteur masque les statuts, révisions, audiences techniques et identifiants de release. Un mode Revue facultatif regroupe ces métadonnées dans un panneau discret pour une session propriétaire primaire ; il reste une aide UX et jamais un contrôle d'accès. Les bundles v1 restent compatibles pendant la migration vers le schéma v2, qui sépare explicitement section éditoriale et visibilité lecteur. Le [guide de migration v1 vers v2](docs/presentation-schema-v2.md) décrit le contrat exact.
+
+Les formules sont rendues par KaTeX auto-hébergé en mode strict et accessible. Les PDF sont consultés avec PDF.js et un worker local, tous deux chargés à la demande ; leurs octets restent servis par l'API authentifiée avec support HTTP Range, sans chemin de fichier fourni par le navigateur.
 
 Parcours refuse l'accès par défaut et contrôle chaque requête côté backend ; masquer sa navigation dans React est uniquement une amélioration UX. Les tokens partagés, y compris avec le rôle `owner`, n'accèdent jamais à cette surface. Lorsque le répertoire privé est absent ou invalide, Parcours est indisponible sans empêcher le reste d'IMTégrale de fonctionner.
 
@@ -86,6 +90,7 @@ L'interface est alors disponible sur `http://127.0.0.1:5173`. Utilisez uniquemen
 cd frontend
 pnpm typecheck
 pnpm test
+pnpm validate:learning-math
 pnpm exec playwright install chromium  # première exécution locale uniquement
 pnpm test:e2e                           # API locale doublée, données DÉMO FICTIVE
 pnpm build
@@ -98,6 +103,7 @@ pnpm audit --prod
 - [simulations GPA et simulations de notes privées](docs/simulations.md) ;
 - [agenda INPASS et calendrier de formation FIP](docs/calendars.md) ;
 - [relevé académique personnel et transparence](docs/academic-report.md) ;
+- [format et migration des bundles Parcours v1/v2](docs/presentation-schema-v2.md) ;
 - [données, consentements et cadre d'utilisation](docs/data-and-usage.md) ;
 - [actualisation automatique](docs/automatic-sync.md) et [synchronisation manuelle](docs/manual-sync.md) ;
 - [exploitation et observabilité](docs/operations.md) et [politique d'arrondi académique](docs/academic-rounding.md) ;

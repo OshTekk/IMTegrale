@@ -1,5 +1,14 @@
 # Changements
 
+## 4.6.0 - 21 juillet 2026
+
+- nouvelle expérience éditoriale Parcours : accueil, reprise, modules structurés, glossaire et documents séparés ;
+- mode lecteur sans métadonnées de fabrication et mode Revue facultatif réservé au propriétaire primaire ;
+- schéma de bundle v2 avec compatibilité v1 et guide de migration public ;
+- rendu mathématique KaTeX strict, accessible et auto-hébergé ;
+- lecteur PDF.js local chargé à la demande et support HTTP Range authentifié ;
+- fixtures exclusivement synthétiques, tests responsive, clavier, reduced-motion et Axe, avec budgets distincts pour le graphe initial et PDF.js.
+
 ## 4.5.6 - 19 juillet 2026
 
 - retrait du bloc éditorial « Consentement et cadre d'usage » du README et de la page Confiance ;

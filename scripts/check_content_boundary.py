@@ -9,6 +9,7 @@ part of a diagnostic.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import io
 import json
 import lzma
@@ -64,6 +65,12 @@ STATIC_ASSET_ALLOWLIST = frozenset(
         "frontend/public/site.webmanifest",
     }
 )
+VITE_BUILD_MANIFEST = "frontend/dist/.vite/manifest.json"
+_KATEX_BUILD_FONT_RE = re.compile(r"^frontend/dist/assets/katex_[a-z0-9_-]+-[a-z0-9_-]{8}\.(?:ttf|woff2?)$")
+_PDFJS_WORKER_RE = re.compile(r"^frontend/dist/assets/pdf\.worker\.min-[a-z0-9_-]{8}\.mjs$")
+# pdfjs-dist 6.1.200. Pinning the emitted worker digest prevents the scanner
+# exception for PDF.js' own "%PDF-" parser literal from becoming a file-smuggling bypass.
+PINNED_PDFJS_WORKER_SHA256 = "2ab9e09667296dab1a618868b3ce6e6c23d5b8f48120ae7c5b34e7e335ed01fa"
 GENERIC_CODE_EXTENSIONS = frozenset(
     {"cjs", "css", "htm", "html", "js", "jsx", "mjs", "py", "pyi", "scss", "ts", "tsx"}
 )
@@ -293,6 +300,32 @@ def _is_allowlisted_static_asset(normalized_path: str) -> bool:
     return normalized_path in STATIC_ASSET_ALLOWLIST
 
 
+def _is_katex_build_font(normalized_path: str) -> bool:
+    return _KATEX_BUILD_FONT_RE.fullmatch(normalized_path) is not None
+
+
+def _is_pdfjs_worker(normalized_path: str) -> bool:
+    return _PDFJS_WORKER_RE.fullmatch(normalized_path) is not None
+
+
+def _is_pinned_pdfjs_worker(normalized_path: str, data: bytes) -> bool:
+    return (
+        _is_pdfjs_worker(normalized_path) and hashlib.sha256(data).hexdigest() == PINNED_PDFJS_WORKER_SHA256
+    )
+
+
+def _valid_katex_font(normalized_path: str, data: bytes) -> bool:
+    if not _is_katex_build_font(normalized_path) or not 1_024 <= len(data) <= 128 * 1_024:
+        return False
+    suffix = _last_suffix(normalized_path)
+    signatures = {
+        "ttf": (b"\x00\x01\x00\x00", b"OTTO"),
+        "woff": (b"wOFF",),
+        "woff2": (b"wOF2",),
+    }
+    return data.startswith(signatures[suffix])
+
+
 def _is_generic_code_path(normalized_path: str) -> bool:
     return _last_suffix(normalized_path) in GENERIC_CODE_EXTENSIONS
 
@@ -310,11 +343,15 @@ def _path_rules(normalized_path: str, *, force_sensitive: bool = False) -> tuple
     suffixes = _suffixes(normalized_path)
     sensitive = force_sensitive or _is_sensitive_path(normalized_path)
     allowlisted_static_asset = _is_allowlisted_static_asset(normalized_path)
+    generated_font = force_sensitive and _is_katex_build_font(normalized_path)
+    generated_vite_manifest = force_sensitive and normalized_path == VITE_BUILD_MANIFEST
     if suffixes.intersection(SNAPSHOT_EXTENSIONS):
         rules.add("SNAPSHOT_FILE_TRACKED")
     if (
         _is_static_surface(normalized_path)
         and not allowlisted_static_asset
+        and not generated_font
+        and not generated_vite_manifest
         and not _is_generic_code_path(normalized_path)
     ):
         rules.add("STATIC_ASSET_NOT_ALLOWLISTED")
@@ -322,8 +359,11 @@ def _path_rules(normalized_path: str, *, force_sensitive: bool = False) -> tuple
         rules.add("SENSITIVE_FILE_TYPE")
     if sensitive and not allowlisted_static_asset and suffixes.intersection(IMAGE_EXTENSIONS):
         rules.add("SENSITIVE_IMAGE_TYPE")
-    if normalized_path.startswith("frontend/dist/") and suffixes.intersection(
-        FRONTEND_BUILD_DATA_EXTENSIONS
+    if (
+        normalized_path.startswith("frontend/dist/")
+        and not allowlisted_static_asset
+        and not generated_vite_manifest
+        and suffixes.intersection(FRONTEND_BUILD_DATA_EXTENSIONS)
     ):
         rules.add("FRONTEND_BUILD_DATA_FILE")
 
@@ -548,6 +588,7 @@ def _content_rules(
     force_sensitive: bool = False,
 ) -> tuple[str, ...]:
     sensitive = force_sensitive or _is_sensitive_path(normalized_path)
+    pinned_pdfjs_worker = _is_pinned_pdfjs_worker(normalized_path, data)
     # Scan complete bounded blobs for padded/self-extracting payloads anywhere in
     # the repository. Generated/source code is the sole exception because byte
     # signatures legitimately occur in test literals and compiled JavaScript;
@@ -557,7 +598,13 @@ def _content_rules(
         or _is_static_surface(normalized_path)
         or not _is_generic_code_path(normalized_path)
     )
+    if pinned_pdfjs_worker:
+        allow_preamble = False
     rules = set(_magic_rules(data, allow_preamble=allow_preamble))
+    if _is_pdfjs_worker(normalized_path) and not pinned_pdfjs_worker:
+        rules.add("PDFJS_WORKER_INTEGRITY_INVALID")
+    if _is_katex_build_font(normalized_path) and not _valid_katex_font(normalized_path, data):
+        rules.add("KATEX_FONT_INVALID")
     if sensitive and not _is_allowlisted_static_asset(normalized_path):
         rules.update(_image_magic_rules(data))
     if data.startswith(_LFS_POINTER_PREFIXES):

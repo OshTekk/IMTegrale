@@ -11,6 +11,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { learningEntryVisible } from "../lib/learning";
+import { readerAudienceSubtitle } from "../lib/learningPresentation";
 import type { Session } from "../types";
 
 export interface AppNavItem {
@@ -78,11 +79,7 @@ export function visibleAppNavigation(session: Session, primaryOwner: boolean): A
 
 export function appPageHeading(pathname: string, session: Session): [string, string] {
   if (pathname.startsWith("/parcours")) {
-    return [
-      "Parcours",
-      [session.learning?.audience_label, session.learning?.level_label].filter(Boolean).join(" · ") ||
-        "Espace pédagogique privé",
-    ];
+    return ["Parcours", readerAudienceSubtitle(session.learning?.audience_label, session.learning?.level_label)];
   }
   return appPageTitles[pathname] ?? appPageTitles["/"]!;
 }

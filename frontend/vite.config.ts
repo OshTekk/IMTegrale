@@ -12,6 +12,7 @@ export default defineConfig({
     },
   },
   build: {
+    manifest: true,
     sourcemap: false,
     target: "es2022",
   },

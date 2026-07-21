@@ -6,7 +6,7 @@ from collections.abc import Iterator
 from typing import Literal
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import delete, func, select
@@ -49,6 +49,7 @@ learning_search_rate_limiter = LoginRateLimiter(limit=60, window_seconds=60, max
 
 _ID_PATTERN = r"^[a-z0-9][a-z0-9._:-]{0,127}$"
 _SAFE_FILENAME = re.compile(r"[^\w .()\[\]-]+", re.UNICODE)
+_SINGLE_BYTE_RANGE = re.compile(r"^bytes=(\d*)-(\d*)$")
 
 
 class StrictRequest(BaseModel):
@@ -154,6 +155,24 @@ def _object_without(value: object, *keys: str) -> dict:
     if not isinstance(dumped, dict):
         return {}
     return {key: item for key, item in dumped.items() if key not in keys}
+
+
+def _catalog_node_view(context: LearningAccessContext, node: object) -> dict:
+    view = _object_without(node, "audience_ids")
+    if view.get("kind") != "source" or not isinstance(view.get("source_id"), str):
+        return view
+    source = context.bundle.get_source(view["source_id"], context.audience)
+    if source is None:
+        return view
+    asset = context.bundle.get_source_asset(source.id, context.audience)
+    view.update(
+        {
+            "document_type": _object_value(asset, "kind"),
+            "page_count": source.page_count,
+            "download_allowed": asset is not None,
+        }
+    )
+    return view
 
 
 def _not_found() -> HTTPException:
@@ -346,10 +365,12 @@ def learning_catalog(
 ) -> dict:
     catalog = context.bundle.catalog_for_audience(context.audience)
     return {
+        "schema_version": context.bundle.manifest.schema_version,
+        "release_mode": context.bundle.manifest.release_mode,
         "release_id": context.bundle.release_id,
         "catalog_version": context.catalog_version,
         "audience": context.audience,
-        "nodes": [_object_without(node, "audience_ids") for node in catalog],
+        "nodes": [_catalog_node_view(context, node) for node in catalog],
     }
 
 
@@ -363,7 +384,7 @@ def learning_catalog_node(
         raise _not_found()
     return {
         "release_id": context.bundle.release_id,
-        "node": _object_without(node, "audience_ids"),
+        "node": _catalog_node_view(context, node),
     }
 
 
@@ -418,11 +439,67 @@ def _stream_file(stream: object) -> Iterator[bytes]:
         stream.close()  # type: ignore[attr-defined]
 
 
+def _stream_file_range(stream: object, start: int, length: int) -> Iterator[bytes]:
+    remaining = length
+    try:
+        stream.seek(start)  # type: ignore[attr-defined]
+        while remaining > 0:
+            chunk = stream.read(min(64 * 1024, remaining))  # type: ignore[attr-defined]
+            if not chunk:
+                break
+            remaining -= len(chunk)
+            yield chunk
+    finally:
+        stream.close()  # type: ignore[attr-defined]
+
+
+def _range_not_satisfiable(size_bytes: int) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_416_RANGE_NOT_SATISFIABLE,
+        detail="Plage demandée invalide",
+        headers={
+            "Accept-Ranges": "bytes",
+            "Content-Range": f"bytes */{size_bytes}",
+        },
+    )
+
+
+def _parse_single_byte_range(value: str | None, size_bytes: int) -> tuple[int, int] | None:
+    if value is None:
+        return None
+    if len(value) > 128:
+        raise _range_not_satisfiable(size_bytes)
+    match = _SINGLE_BYTE_RANGE.fullmatch(value.strip())
+    if match is None or "," in value:
+        raise _range_not_satisfiable(size_bytes)
+    first, last = match.groups()
+    if not first and not last:
+        raise _range_not_satisfiable(size_bytes)
+    try:
+        start = int(first) if first else None
+        parsed_last = int(last) if last else None
+    except ValueError as exc:
+        raise _range_not_satisfiable(size_bytes) from exc
+    if start is not None:
+        end = parsed_last if parsed_last is not None else size_bytes - 1
+        if start >= size_bytes or end < start:
+            raise _range_not_satisfiable(size_bytes)
+        return start, min(end, size_bytes - 1)
+    if parsed_last is None:
+        raise _range_not_satisfiable(size_bytes)
+    suffix_length = parsed_last
+    if suffix_length <= 0 or size_bytes <= 0:
+        raise _range_not_satisfiable(size_bytes)
+    length = min(suffix_length, size_bytes)
+    return size_bytes - length, size_bytes - 1
+
+
 def _asset_response(
     asset_id: str,
     context: LearningAccessContext,
     *,
     attachment: bool,
+    range_header: str | None,
 ) -> StreamingResponse:
     try:
         opened = context.bundle.open_asset(asset_id, context.audience)
@@ -430,6 +507,11 @@ def _asset_response(
         raise _not_found() from exc
     except LearningCatalogUnavailable as exc:
         raise _catalog_unavailable() from exc
+    try:
+        byte_range = _parse_single_byte_range(range_header, opened.size_bytes)
+    except HTTPException:
+        opened.stream.close()
+        raise
     metadata = opened.metadata
     media_type = str(_object_value(metadata, "media_type", "application/octet-stream"))
     filename = _safe_download_name(
@@ -438,36 +520,58 @@ def _asset_response(
     disposition = "attachment" if attachment else "inline"
     ascii_name = filename.encode("ascii", "ignore").decode("ascii") or "document"
     headers = {
-        "Content-Length": str(opened.size_bytes),
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(
+            opened.size_bytes if byte_range is None else byte_range[1] - byte_range[0] + 1
+        ),
         "Content-Disposition": (
             f"{disposition}; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"
         ),
     }
-    return StreamingResponse(_stream_file(opened.stream), media_type=media_type, headers=headers)
+    if byte_range is None:
+        return StreamingResponse(_stream_file(opened.stream), media_type=media_type, headers=headers)
+    start, end = byte_range
+    headers["Content-Range"] = f"bytes {start}-{end}/{opened.size_bytes}"
+    return StreamingResponse(
+        _stream_file_range(opened.stream, start, end - start + 1),
+        media_type=media_type,
+        headers=headers,
+        status_code=status.HTTP_206_PARTIAL_CONTENT,
+    )
 
 
 @router.get(
     "/assets/{asset_id}",
     response_class=StreamingResponse,
-    responses={200: {"content": {"application/octet-stream": {}}}},
+    responses={
+        200: {"description": "Document complet", "content": {"application/octet-stream": {}}},
+        206: {"description": "Plage unique du document"},
+        416: {"description": "Plage invalide ou multiple"},
+    },
 )
 def learning_asset(
     asset_id: str,
+    request: Request,
     context: LearningAccessContext = Depends(require_learning_stream_access),
 ) -> StreamingResponse:
-    return _asset_response(asset_id, context, attachment=False)
+    return _asset_response(asset_id, context, attachment=False, range_header=request.headers.get("range"))
 
 
 @router.get(
     "/assets/{asset_id}/download",
     response_class=StreamingResponse,
-    responses={200: {"content": {"application/octet-stream": {}}}},
+    responses={
+        200: {"description": "Téléchargement complet", "content": {"application/octet-stream": {}}},
+        206: {"description": "Plage unique du téléchargement"},
+        416: {"description": "Plage invalide ou multiple"},
+    },
 )
 def download_learning_asset(
     asset_id: str,
+    request: Request,
     context: LearningAccessContext = Depends(require_learning_stream_access),
 ) -> StreamingResponse:
-    return _asset_response(asset_id, context, attachment=True)
+    return _asset_response(asset_id, context, attachment=True, range_header=request.headers.get("range"))
 
 
 @router.get("/sources/{source_id}", response_model=LearningSourceResponse)

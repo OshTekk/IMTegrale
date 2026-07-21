@@ -5,7 +5,14 @@ from typing import Annotated, Any, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 
-from app.learning.schemas import CatalogNodeKind, Difficulty, ReviewStatus
+from app.learning.schemas import (
+    CatalogNodeKind,
+    Difficulty,
+    LearningSection,
+    ReaderVisibility,
+    ReleaseMode,
+    ReviewStatus,
+)
 
 Role = Literal["owner", "editor", "viewer"]
 AuthMethod = Literal["imt", "token", "passkey"]
@@ -832,18 +839,27 @@ class LearningCatalogNodeResponse(ApiModel):
     id: str
     kind: CatalogNodeKind
     title: str
+    code: str | None
+    description: str | None
     parent_id: str | None
     content_id: str | None
     source_id: str | None
     prerequisite_ids: list[str]
     difficulty: Difficulty | None
     estimated_minutes: int | None
+    section: LearningSection | None
+    reader_visibility: ReaderVisibility
+    document_type: Literal["pdf", "image", "download"] | None = None
+    page_count: int | None = None
+    download_allowed: bool = False
     review_status: ReviewStatus
     revision: str
     position: int
 
 
 class LearningCatalogResponse(ApiModel):
+    schema_version: Literal[1, 2]
+    release_mode: ReleaseMode
     release_id: str
     catalog_version: str
     audience: str

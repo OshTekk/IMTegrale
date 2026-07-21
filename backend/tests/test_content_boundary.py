@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import io
 import json
@@ -537,6 +538,72 @@ def test_safe_frontend_directory_passes(tmp_path: Path):
 
     assert result.ok, format_result(result)
     assert result.artifact_files == 4
+
+
+def test_built_frontend_accepts_exact_vite_manifest_and_valid_katex_font(tmp_path: Path):
+    dist = tmp_path / "dist"
+    (dist / ".vite").mkdir(parents=True)
+    (dist / "assets").mkdir()
+    (dist / ".vite" / "manifest.json").write_text(
+        '{"src/main.tsx":{"file":"assets/index-fictive.js","isEntry":true}}',
+        encoding="utf-8",
+    )
+    (dist / "assets" / "KaTeX_Main-Regular-fic12345.woff2").write_bytes(b"wOF2" + b"\x00" * 1_020)
+
+    result = scan_directory(dist)
+
+    assert result.ok, format_result(result)
+    assert result.artifact_files == 2
+
+
+def test_generated_frontend_exceptions_remain_forbidden_in_git(tmp_path: Path):
+    repo = _repository(tmp_path)
+    _stage(repo, "frontend/dist/.vite/manifest.json", b'{"synthetic":true}')
+    _stage(
+        repo,
+        "frontend/dist/assets/KaTeX_Main-Regular-fic12345.woff2",
+        b"wOF2" + b"\x00" * 1_020,
+    )
+
+    result = scan_repository(repo)
+
+    assert result.violations["STATIC_ASSET_NOT_ALLOWLISTED"] == 2
+    assert result.violations["FRONTEND_BUILD_DATA_FILE"] == 1
+
+
+def test_built_frontend_rejects_disguised_katex_font(tmp_path: Path):
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "assets" / "KaTeX_Main-Regular-fic12345.woff2").write_bytes(b"%PDF-1.7\nsynthetic")
+
+    result = scan_directory(dist)
+
+    assert result.violations["KATEX_FONT_INVALID"] == 1
+    assert result.violations["MAGIC_PDF"] == 1
+
+
+def test_built_frontend_accepts_only_the_pinned_pdfjs_worker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    payload = b"/** synthetic PDF.js worker */const header='%PDF-';"
+    monkeypatch.setattr(
+        content_boundary_checker,
+        "PINNED_PDFJS_WORKER_SHA256",
+        hashlib.sha256(payload).hexdigest(),
+    )
+    (dist / "assets" / "pdf.worker.min-fic12345.mjs").write_bytes(payload)
+
+    result = scan_directory(dist)
+
+    assert result.ok, format_result(result)
+
+    (dist / "assets" / "pdf.worker.min-fic12345.mjs").write_bytes(payload + b"tampered")
+    tampered = scan_directory(dist)
+    assert tampered.violations["PDFJS_WORKER_INTEGRITY_INVALID"] == 1
+    assert tampered.violations["MAGIC_PDF"] == 1
 
 
 def test_wheel_entries_are_scanned_without_extraction_or_path_disclosure(tmp_path: Path):

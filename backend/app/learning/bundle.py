@@ -498,6 +498,8 @@ def _load_snapshot(location: _ReleaseLocation) -> LearningBundleSnapshot:
 
 
 def _validate_search_index(manifest: LearningBundleManifest, search_index: SearchIndex) -> None:
+    if search_index.schema_version != manifest.schema_version:
+        raise LearningCatalogUnavailable()
     if search_index.release_id != manifest.release_id:
         raise LearningCatalogUnavailable()
     if search_index.revision != manifest.search_index.revision:

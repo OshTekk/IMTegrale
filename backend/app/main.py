@@ -235,11 +235,12 @@ async def security_headers(request: Request, call_next):  # noqa: ANN001
         # Protected images are also fetched first, then rendered from an
         # in-memory object URL. Arbitrary network image origins stay blocked.
         "img-src 'self' data: blob:; "
-        # The lazy source viewer uses only object URLs built from an already
-        # authorized response. Same-origin/network object embeds remain blocked.
-        "object-src blob:; "
+        "object-src 'none'; "
         "script-src 'self'; "
-        "style-src 'self' 'unsafe-inline'"
+        "style-src 'self' 'unsafe-inline'; "
+        # PDF.js is lazy-loaded and its module worker is emitted as a local,
+        # versioned build asset. Blob and network workers remain forbidden.
+        "worker-src 'self'"
     )
     if request.url.path.startswith("/api/"):
         response.headers["Cache-Control"] = "no-store"

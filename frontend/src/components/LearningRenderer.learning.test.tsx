@@ -114,7 +114,7 @@ describe("LearningRenderer DOM safety", () => {
     expect(container.querySelector("iframe")).toBeNull();
   });
 
-  it("renders math and allow-listed directives with accessible text", async () => {
+  it("renders math as accessible MathML and keeps allow-listed directives named", async () => {
     const { container } = renderLearning([
       {
         type: "heading",
@@ -146,8 +146,11 @@ describe("LearningRenderer DOM safety", () => {
       },
     ]);
 
-    expect(screen.getByLabelText("Formule mathématique : x^2 + y^2")).toBeTruthy();
-    expect(screen.getByLabelText("Formule mathématique : \\int_0^1 x \\, dx")).toBeTruthy();
+    expect(container.querySelectorAll('[data-math-rendered="true"]')).toHaveLength(2);
+    expect(container.querySelectorAll("math")).toHaveLength(2);
+    expect(container.querySelectorAll(".katex-html")).toHaveLength(2);
+    expect(container.querySelectorAll('annotation[encoding="application/x-tex"]')).toHaveLength(2);
+    expect(container.querySelector(".learning-math-error")).toBeNull();
     expect(screen.getByText("Note · [FICTIF] Note autorisée")).toBeTruthy();
     expect(screen.getByText("Indice · [FICTIF] Indice autorisé")).toBeTruthy();
     await expectNoSeriousLearningViolations(container);

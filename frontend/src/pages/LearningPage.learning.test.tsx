@@ -81,16 +81,34 @@ function catalogNode(overrides: Record<string, unknown>) {
     id: "node.fictif",
     kind: "lesson",
     title: "[FICTIF] Contenu",
+    code: null,
+    description: null,
     parent_id: null,
     content_id: null,
     source_id: null,
     prerequisite_ids: [],
     difficulty: null,
     estimated_minutes: null,
+    section: "course",
+    reader_visibility: "primary",
+    document_type: null,
+    page_count: null,
+    download_allowed: false,
     review_status: "published",
     revision: "fictive-r1",
     position: 0,
     ...overrides,
+  };
+}
+
+function catalogResponse(nodes: unknown[], releaseMode: "published" | "private_preview" = "published") {
+  return {
+    schema_version: 2,
+    release_mode: releaseMode,
+    release_id: eligibleLearning.release_id,
+    catalog_version: eligibleLearning.catalog_version,
+    audience: eligibleLearning.audience,
+    nodes,
   };
 }
 
@@ -230,13 +248,7 @@ describe("LearningPage eligible catalog and content", () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const { pathname: path } = inspectFetchRequest(input, init);
       if (path.endsWith("/access")) return jsonResponse(eligibleLearning);
-      if (path.endsWith("/catalog"))
-        return jsonResponse({
-          release_id: eligibleLearning.release_id,
-          catalog_version: eligibleLearning.catalog_version,
-          audience: eligibleLearning.audience,
-          nodes: [],
-        });
+      if (path.endsWith("/catalog")) return jsonResponse(catalogResponse([]));
       if (path.endsWith("/progress"))
         return jsonResponse({
           catalog_version: eligibleLearning.catalog_version,
@@ -249,8 +261,8 @@ describe("LearningPage eligible catalog and content", () => {
 
     renderDirectRoute(session({ learning: eligibleLearning }));
 
-    expect(await screen.findByRole("heading", { name: "Catalogue vide" })).toBeTruthy();
-    expect(screen.getByText("Aucune UE n'est publiée dans cette release courante.")).toBeTruthy();
+    expect(await screen.findByText("Catalogue vide")).toBeTruthy();
+    expect(screen.getByText("Aucune UE n'est disponible pour le moment.")).toBeTruthy();
     expect(screen.queryByText(/release fictive/i)).toBeNull();
   });
 
@@ -271,13 +283,7 @@ describe("LearningPage eligible catalog and content", () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const { pathname: path } = inspectFetchRequest(input, init);
       if (path.endsWith("/access")) return jsonResponse(eligibleLearning);
-      if (path.endsWith("/catalog"))
-        return jsonResponse({
-          release_id: eligibleLearning.release_id,
-          catalog_version: eligibleLearning.catalog_version,
-          audience: eligibleLearning.audience,
-          nodes,
-        });
+      if (path.endsWith("/catalog")) return jsonResponse(catalogResponse(nodes));
       if (path.endsWith("/progress"))
         return jsonResponse({
           catalog_version: eligibleLearning.catalog_version,
@@ -396,13 +402,7 @@ describe("LearningPage eligible catalog and content", () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const { pathname: path, method } = inspectFetchRequest(input, init);
       if (path.endsWith("/access")) return jsonResponse(eligibleLearning);
-      if (path.endsWith("/catalog"))
-        return jsonResponse({
-          release_id: eligibleLearning.release_id,
-          catalog_version: eligibleLearning.catalog_version,
-          audience: eligibleLearning.audience,
-          nodes: [node],
-        });
+      if (path.endsWith("/catalog")) return jsonResponse(catalogResponse([node], "private_preview"));
       if (path.includes(`/content/${exerciseId}`))
         return jsonResponse({
           release_id: eligibleLearning.release_id,
@@ -476,8 +476,16 @@ describe("LearningPage eligible catalog and content", () => {
     renderDirectRoute(value, `/parcours/lecons/${exerciseId}`);
 
     const openHint = await screen.findByRole("button", { name: "Ouvrir l'indice 1" });
-    expect(screen.getByText("Brouillon privé")).toBeTruthy();
+    expect(screen.queryByText("Brouillon privé")).toBeNull();
+    expect(screen.queryByText("Version de travail")).toBeNull();
+    expect(screen.queryByText("fictive-r1")).toBeNull();
+    expect(screen.queryByText(eligibleLearning.release_id)).toBeNull();
     expect(screen.queryByText("Publié")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Revue" }));
+    const reviewPanel = screen.getByRole("complementary", { name: "Métadonnées de revue" });
+    expect(reviewPanel.textContent).toContain("Version de travail");
+    expect(reviewPanel.textContent).toContain("fictive-r1");
+    expect(screen.getAllByText("Version de travail")).toHaveLength(1);
     const progressWrites = await Promise.all(
       fetchMock.mock.calls.map(async ([input, init]) => {
         const request = inspectFetchRequest(input, init);

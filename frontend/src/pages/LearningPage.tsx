@@ -1,6 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowRight,
   Bookmark,
   BookOpen,
   Check,
@@ -8,8 +7,6 @@ import {
   CircleAlert,
   Clock3,
   FileSearch,
-  FolderOpen,
-  GraduationCap,
   LibraryBig,
   ListChecks,
   RotateCcw,
@@ -17,9 +14,22 @@ import {
   ShieldCheck,
   Sparkles,
 } from "lucide-react";
-import { lazy, Suspense, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import { Link, Navigate, NavLink, Route, Routes, useLocation, useParams, useSearchParams } from "react-router-dom";
 import { LearningRenderer } from "../components/LearningRenderer";
+import { LearningHomeOverview } from "../components/LearningHomeOverview";
+import { LearningModuleOverview } from "../components/LearningModuleOverview";
+import { LearningReviewPanel, LearningReviewProvider, LearningReviewToggle } from "../components/LearningReviewMode";
 import { Modal } from "../components/Modal";
 import { PassReconnectModal } from "../components/PassReconnectModal";
 import {
@@ -31,6 +41,15 @@ import {
   learningRouteState,
   safeLearningId,
 } from "../lib/learning";
+import {
+  difficultyLabel,
+  learningKindLabel,
+  readerAudienceSubtitle,
+  readerCatalogTitle,
+  readerTitle,
+  readerVisible,
+  reviewStatusLabel,
+} from "../lib/learningPresentation";
 import {
   queryKeys,
   clearAccountState,
@@ -55,7 +74,6 @@ import type {
   LearningInlineNode,
   LearningProgress,
   LearningProgressItem,
-  LearningReviewStatus,
   LearningSearchResult,
   LearningSelfAssessment,
   Session,
@@ -201,8 +219,7 @@ function ReverificationScreen({ session }: { session: Session }) {
       </p>
       {(session.learning?.audience_label || session.learning?.level_label) && (
         <div className="learning-gate-labels">
-          {session.learning.audience_label && <span>{session.learning.audience_label}</span>}
-          {session.learning.level_label && <span>{session.learning.level_label}</span>}
+          <span>{readerAudienceSubtitle(session.learning.audience_label, session.learning.level_label)}</span>
         </div>
       )}
       <button className="primary-button" type="button" onClick={() => setOpen(true)}>
@@ -221,52 +238,61 @@ function ReverificationScreen({ session }: { session: Session }) {
   );
 }
 
-function LearningNavigation() {
+function LearningNavigation({ session }: { session: Session }) {
   return (
-    <nav className="learning-local-nav" aria-label="Navigation Parcours">
-      <NavLink to="/parcours" end>
-        <LibraryBig size={17} /> Accueil
-      </NavLink>
-      <NavLink to="/parcours/recherche">
-        <Search size={17} /> Rechercher
-      </NavLink>
-      <NavLink to="/parcours/progression">
-        <ListChecks size={17} /> Progression
-      </NavLink>
-    </nav>
+    <header className="learning-global-bar">
+      <div>
+        <strong>Parcours</strong>
+        <span>{readerAudienceSubtitle(session.learning?.audience_label, session.learning?.level_label)}</span>
+      </div>
+      <nav className="learning-local-nav" aria-label="Navigation Parcours">
+        <NavLink to="/parcours" end>
+          <LibraryBig size={17} /> Accueil
+        </NavLink>
+        <NavLink to="/parcours/recherche">
+          <Search size={17} /> Rechercher
+        </NavLink>
+        <NavLink to="/parcours/progression">
+          <ListChecks size={17} /> Progression
+        </NavLink>
+      </nav>
+      <LearningReviewToggle />
+    </header>
   );
 }
 
 function LearningWorkspace({ session }: { session: Session }) {
   return (
-    <div className="learning-workspace">
-      <LearningNavigation />
-      <Routes>
-        <Route index element={<LearningHome session={session} />} />
-        <Route path="ues/:ueId" element={<LearningUePage />} />
-        <Route path="modules/:moduleId" element={<LearningModulePage />} />
-        <Route path="lecons/:contentId" element={<LearningContentPage mode="lesson" />} />
-        <Route path="exercices/:contentId" element={<LearningContentPage mode="exercise" />} />
-        <Route path="references/:contentId/:referenceId" element={<LearningReferencePage />} />
-        <Route path="sources/:sourceId" element={<LearningSourcePage />} />
-        <Route path="recherche" element={<LearningSearchPage />} />
-        <Route path="progression" element={<LearningProgressPage />} />
-        <Route
-          path="*"
-          element={
-            <LearningEmpty
-              title="Page introuvable"
-              message="Cette page du parcours n'existe pas."
-              action={
-                <Link className="secondary-button" to="/parcours">
-                  Retour au parcours
-                </Link>
-              }
-            />
-          }
-        />
-      </Routes>
-    </div>
+    <LearningReviewProvider session={session}>
+      <div className="learning-workspace">
+        <LearningNavigation session={session} />
+        <Routes>
+          <Route index element={<LearningHome session={session} />} />
+          <Route path="ues/:ueId" element={<LearningUePage />} />
+          <Route path="modules/:moduleId" element={<LearningModulePage />} />
+          <Route path="lecons/:contentId" element={<LearningContentPage mode="lesson" />} />
+          <Route path="exercices/:contentId" element={<LearningContentPage mode="exercise" />} />
+          <Route path="references/:contentId/:referenceId" element={<LearningReferencePage />} />
+          <Route path="sources/:sourceId" element={<LearningSourcePage />} />
+          <Route path="recherche" element={<LearningSearchPage />} />
+          <Route path="progression" element={<LearningProgressPage />} />
+          <Route
+            path="*"
+            element={
+              <LearningEmpty
+                title="Page introuvable"
+                message="Cette page du parcours n'existe pas."
+                action={
+                  <Link className="secondary-button" to="/parcours">
+                    Retour au parcours
+                  </Link>
+                }
+              />
+            }
+          />
+        </Routes>
+      </div>
+    </LearningReviewProvider>
   );
 }
 
@@ -333,85 +359,29 @@ function LearningHome({ session }: { session: Session }) {
         }}
       />
     );
-  const items = progressItems(progress.data);
-  const ues = catalogNodesByKind(catalog.data, "ue");
-  const started = items.filter((item) => item.updated_at).length;
-  const completed = items.filter((item) => item.completed).length;
   return (
     <div className="learning-page learning-home">
-      <header className="learning-hero">
-        <div>
-          <p className="learning-eyebrow">IMTégrale Parcours · espace privé</p>
-          <h2>Comprendre, pratiquer, progresser</h2>
-          <p>
-            Des explications structurées, des exercices guidés et des références exactes vers les sources autorisées.
-          </p>
-          <div className="learning-hero-labels">
-            {session.learning?.audience_label && <span>{session.learning.audience_label}</span>}
-            {session.learning?.level_label && <span>{session.learning.level_label}</span>}
-          </div>
-        </div>
-        <GraduationCap aria-hidden="true" />
-      </header>
-
-      <section className="learning-summary-grid" aria-label="Résumé de progression">
-        <article>
-          <BookOpen aria-hidden="true" />
-          <strong>{ues.length}</strong>
-          <span>UE disponibles</span>
-        </article>
-        <article>
-          <Clock3 aria-hidden="true" />
-          <strong>{started}</strong>
-          <span>contenus commencés</span>
-        </article>
-        <article>
-          <Check aria-hidden="true" />
-          <strong>{completed}</strong>
-          <span>contenus terminés</span>
-        </article>
-      </section>
-
-      <section className="learning-section">
-        <header>
-          <div>
-            <p className="learning-eyebrow">Catalogue</p>
-            <h2>Unités d'enseignement</h2>
-          </div>
-          <Link to="/parcours/recherche">
-            Tout rechercher <ArrowRight size={16} />
-          </Link>
-        </header>
-        {ues.length ? (
-          <div className="learning-card-grid">
-            {ues.map((ue) => {
-              const moduleCount = catalogNodesByKind(catalog.data, "module").filter((module) =>
-                isDescendantOf(module, ue.id, catalog.data.nodes),
-              ).length;
-              return (
-                <Link className="learning-catalog-card" key={ue.id} to={`/parcours/ues/${encodeURIComponent(ue.id)}`}>
-                  <span>
-                    <FolderOpen aria-hidden="true" />
-                  </span>
-                  <div>
-                    <h3>{ue.title}</h3>
-                    <p>
-                      {moduleCount} module{moduleCount === 1 ? "" : "s"}
-                    </p>
-                  </div>
-                  <ChevronRight aria-hidden="true" />
-                </Link>
-              );
-            })}
-          </div>
-        ) : (
-          <LearningEmpty
-            icon={<FolderOpen aria-hidden="true" />}
-            title="Catalogue vide"
-            message="Aucune UE n'est publiée dans cette release courante."
-          />
-        )}
-      </section>
+      <LearningHomeOverview
+        catalog={catalog.data}
+        progress={
+          progress.data ?? {
+            catalog_version: catalog.data.catalog_version,
+            items: [],
+            summary: { started_count: 0, completed_lessons: 0, viewed_exercises: 0, favorite_count: 0 },
+          }
+        }
+        audienceLabel={session.learning?.audience_label}
+        levelLabel={session.learning?.level_label}
+      />
+      <LearningReviewPanel
+        title="Catalogue en revue"
+        rows={[
+          { label: "Schéma", value: `v${catalog.data.schema_version}` },
+          { label: "Release", value: catalog.data.release_id },
+          { label: "Audience", value: catalog.data.audience },
+          { label: "Mode", value: catalog.data.release_mode },
+        ]}
+      />
     </div>
   );
 }
@@ -427,12 +397,13 @@ function LearningUePage() {
   const ue = catalog.data.nodes.find((item) => item.id === ueId && item.kind === "ue");
   if (!ue)
     return <LearningEmpty title="UE introuvable" message="Cette UE n'est pas publiée dans le catalogue courant." />;
-  const modules = catalogNodesByKind(catalog.data, "module").filter((module) =>
-    isDescendantOf(module, ue.id, catalog.data.nodes),
+  const modules = catalogNodesByKind(catalog.data, "module").filter(
+    (module) => isDescendantOf(module, ue.id, catalog.data.nodes) && readerVisible(module),
   );
   const directContent = catalog.data.nodes
     .filter(
       (item) =>
+        readerVisible(item) &&
         Boolean(item.content_id || item.source_id) &&
         isDescendantOf(item, ue.id, catalog.data.nodes) &&
         !catalogAncestors(item, catalog.data.nodes).some((ancestor) => ancestor.kind === "module"),
@@ -440,11 +411,11 @@ function LearningUePage() {
     .sort((left, right) => left.position - right.position);
   return (
     <div className="learning-page">
-      <LearningBreadcrumbs items={[{ label: "Parcours", to: "/parcours" }, { label: ue.title }]} />
-      <header className="learning-page-header">
-        <p className="learning-eyebrow">Unité d'enseignement</p>
-        <h2>{ue.title}</h2>
-        <p>Choisis un module pour consulter ses notions, leçons et exercices.</p>
+      <LearningBreadcrumbs items={[{ label: "Parcours", to: "/parcours" }, { label: readerCatalogTitle(ue) }]} />
+      <header className="learning-page-header learning-ue-header">
+        <p className="learning-eyebrow">{ue.code || "Unité d'enseignement"}</p>
+        <h1>{readerCatalogTitle(ue)}</h1>
+        <p>{ue.description || "Choisis un module pour consulter ses chapitres, leçons et exercices."}</p>
       </header>
       {modules.length ? (
         <div className="learning-list">
@@ -454,7 +425,7 @@ function LearningUePage() {
                 <BookOpen aria-hidden="true" />
               </span>
               <div>
-                <h3>{module.title}</h3>
+                <h3>{readerCatalogTitle(module)}</h3>
                 <p>
                   {
                     catalog.data.nodes.filter(
@@ -484,6 +455,13 @@ function LearningUePage() {
       {!modules.length && !directContent.length ? (
         <LearningEmpty title="UE vide" message="Cette UE ne contient pas encore de contenu publié." />
       ) : null}
+      <LearningReviewPanel
+        rows={[
+          { label: "Identifiant", value: ue.id },
+          { label: "Statut", value: reviewStatusLabel(ue.review_status) },
+          { label: "Révision", value: ue.revision },
+        ]}
+      />
     </div>
   );
 }
@@ -492,56 +470,33 @@ function LearningModulePage() {
   const { moduleId: rawModuleId } = useParams();
   const moduleId = safeLearningId(rawModuleId);
   const catalog = useLearningCatalog(Boolean(moduleId));
+  const progress = useLearningProgress(Boolean(moduleId));
   if (!moduleId) return <LearningEmpty title="Module introuvable" message="La référence demandée est invalide." />;
-  if (catalog.isPending) return <LearningLoading label="Chargement du module" />;
-  if (catalog.isError || !catalog.data)
-    return <LearningError error={catalog.error} onRetry={() => void catalog.refetch()} />;
+  if (catalog.isPending || progress.isPending) return <LearningLoading label="Chargement du module" />;
+  if (catalog.isError || progress.isError || !catalog.data)
+    return (
+      <LearningError
+        error={catalog.error ?? progress.error}
+        onRetry={() => {
+          void catalog.refetch();
+          void progress.refetch();
+        }}
+      />
+    );
   const module = catalog.data.nodes.find((item) => item.id === moduleId && item.kind === "module");
   if (!module)
     return <LearningEmpty title="Module introuvable" message="Ce module n'est pas publié dans le catalogue courant." />;
   const ue = catalogAncestors(module, catalog.data.nodes).find((item) => item.kind === "ue");
-  const items = catalog.data.nodes
-    .filter((item) => (item.content_id || item.source_id) && isDescendantOf(item, module.id, catalog.data.nodes))
-    .sort((left, right) => left.position - right.position);
-  const chapters = catalogNodesByKind(catalog.data, "chapter").filter((chapter) =>
-    isDescendantOf(chapter, module.id, catalog.data.nodes),
-  );
-  const chapterFor = (item: LearningCatalogNode) =>
-    [...catalogAncestors(item, catalog.data.nodes)].reverse().find((ancestor) => ancestor.kind === "chapter");
-  const ungrouped = items.filter((item) => !chapterFor(item));
   return (
-    <div className="learning-page">
+    <div className="learning-page learning-module-page">
       <LearningBreadcrumbs
         items={[
           { label: "Parcours", to: "/parcours" },
-          ...(ue ? [{ label: ue.title, to: `/parcours/ues/${encodeURIComponent(ue.id)}` }] : []),
-          { label: module.title },
+          ...(ue ? [{ label: readerCatalogTitle(ue), to: `/parcours/ues/${encodeURIComponent(ue.id)}` }] : []),
+          { label: readerCatalogTitle(module) },
         ]}
       />
-      <header className="learning-page-header">
-        <p className="learning-eyebrow">Module</p>
-        <h2>{module.title}</h2>
-        <p>Parcours le contenu dans l'ordre conseillé ou reviens directement à une notion.</p>
-      </header>
-      {ungrouped.length ? <LearningContentList items={ungrouped} /> : null}
-      {chapters.map((chapter) => {
-        const chapterItems = items.filter((item) => chapterFor(item)?.id === chapter.id);
-        if (!chapterItems.length) return null;
-        return (
-          <section className="learning-section" key={chapter.id}>
-            <header>
-              <div>
-                <p className="learning-eyebrow">Chapitre</p>
-                <h2>{chapter.title}</h2>
-              </div>
-            </header>
-            <LearningContentList items={chapterItems} />
-          </section>
-        );
-      })}
-      {!items.length ? (
-        <LearningEmpty title="Module vide" message="Aucun contenu n'est encore publié dans ce module." />
-      ) : null}
+      <LearningModuleOverview catalog={catalog.data} module={module} ue={ue} progress={progress.data} />
     </div>
   );
 }
@@ -549,18 +504,16 @@ function LearningModulePage() {
 function LearningContentList({ items }: { items: LearningCatalogItem[] }) {
   return (
     <div className="learning-content-list">
-      {items.map((item, index) => {
+      {items.filter(readerVisible).map((item, index) => {
         const href = catalogNodeHref(item);
         if (!href) return null;
+        const numbered = item.kind !== "concept" && item.kind !== "source";
         return (
           <Link key={item.id} to={href}>
-            <span className="learning-order">{String(index + 1).padStart(2, "0")}</span>
+            <span className="learning-order">{numbered ? String(index + 1).padStart(2, "0") : <BookOpen />}</span>
             <div>
-              <small>
-                {contentKindLabel(item.kind)}
-                {item.review_status !== "published" ? ` · ${reviewStatusLabel(item.review_status)}` : ""}
-              </small>
-              <h3>{item.title}</h3>
+              <small>{contentKindLabel(item.kind)}</small>
+              <h3>{readerCatalogTitle(item)}</h3>
             </div>
             <div className="learning-item-meta">
               {item.estimated_minutes && (
@@ -578,35 +531,7 @@ function LearningContentList({ items }: { items: LearningCatalogItem[] }) {
 }
 
 function contentKindLabel(kind: LearningCatalogNodeKind): string {
-  const labels: Record<LearningCatalogNodeKind, string> = {
-    audience: "Audience",
-    curriculum: "Cursus",
-    promotion: "Promotion",
-    level: "Niveau",
-    semester: "Semestre",
-    ue: "UE",
-    module: "Module",
-    chapter: "Chapitre",
-    concept: "Concept",
-    lesson: "Leçon",
-    exercise: "Exercice",
-    pc_td: "PC / TD",
-    past_exam: "Annale",
-    source: "Source",
-  };
-  return labels[kind];
-}
-
-function reviewStatusLabel(status: LearningReviewStatus): string {
-  const labels: Record<LearningReviewStatus, string> = {
-    draft: "Brouillon",
-    in_review: "En revue",
-    reviewed: "Relu",
-    private_preview: "Brouillon privé",
-    published: "Publié",
-    retired: "Retiré",
-  };
-  return labels[status];
+  return learningKindLabel(kind);
 }
 
 function LearningContentPage({ mode }: { mode: "lesson" | "exercise" }) {
@@ -1014,26 +939,36 @@ function ContentHeader({
 }) {
   const crumbs = ancestors
     .filter((ancestor) => ancestor.kind === "ue" || ancestor.kind === "module")
-    .map((ancestor) => ({ label: ancestor.title, to: learningContentHref(ancestor.kind, ancestor.id) ?? undefined }));
+    .map((ancestor) => ({
+      label: readerCatalogTitle(ancestor),
+      to: learningContentHref(ancestor.kind, ancestor.id) ?? undefined,
+    }));
+  const title = readerTitle(content.frontmatter.title, node?.kind ?? content.kind, node?.code);
+  const difficulty = difficultyLabel(content.frontmatter.difficulty);
   return (
     <>
-      <LearningBreadcrumbs
-        items={[{ label: "Parcours", to: "/parcours" }, ...crumbs, { label: content.frontmatter.title }]}
-      />
+      <LearningBreadcrumbs items={[{ label: "Parcours", to: "/parcours" }, ...crumbs, { label: title }]} />
       <header className="learning-page-header">
         <p className="learning-eyebrow">{node ? contentKindLabel(node.kind) : "Contenu"}</p>
-        <h1>{content.frontmatter.title}</h1>
+        <h1>{title}</h1>
         <div className="learning-metadata">
           {content.frontmatter.estimated_minutes && (
             <span>
               <Clock3 size={15} /> {content.frontmatter.estimated_minutes} min
             </span>
           )}
-          {content.frontmatter.difficulty && <span>Difficulté : {content.frontmatter.difficulty}</span>}
-          <span>{reviewStatusLabel(content.frontmatter.review_status)}</span>
-          <span>Révision {content.frontmatter.revision}</span>
+          {difficulty && <span>{difficulty}</span>}
         </div>
       </header>
+      <LearningReviewPanel
+        rows={[
+          { label: "Release", value: content.release_id },
+          { label: "Identifiant", value: content.id },
+          { label: "Nœud", value: content.frontmatter.catalog_node_id },
+          { label: "Statut", value: reviewStatusLabel(content.frontmatter.review_status) },
+          { label: "Révision", value: content.frontmatter.revision },
+        ]}
+      />
     </>
   );
 }
@@ -1116,12 +1051,25 @@ function LearningSourceCitation({ title, page }: { title: string; page: number |
 function LearningSourcePage() {
   const { sourceId: rawSourceId } = useParams();
   const sourceId = safeLearningId(rawSourceId);
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   const pageValue = Number(params.get("page"));
   const page = Number.isInteger(pageValue) && pageValue > 0 ? pageValue : null;
   const source = useLearningSource(sourceId);
   const updateProgress = useUpdateLearningProgress();
   const recordedPageRef = useRef<string | null>(null);
+  const setCurrentPage = useCallback(
+    (nextPage: number) => {
+      setParams(
+        (current) => {
+          const next = new URLSearchParams(current);
+          next.set("page", String(nextPage));
+          return next;
+        },
+        { replace: true },
+      );
+    },
+    [setParams],
+  );
   useEffect(() => {
     if (!source.data || !page || page > source.data.page_count) return;
     const key = `${source.data.id}:${page}`;
@@ -1134,24 +1082,32 @@ function LearningSourcePage() {
   if (source.isError || !source.data)
     return <LearningError error={source.error} onRetry={() => void source.refetch()} />;
   const data = source.data;
+  const sourceTitle = readerTitle(data.title, "source");
   const normalizedPage = page && page <= data.page_count ? page : null;
   const sourceServingAllowed = data.source_serving_allowed !== false && Boolean(data.asset_id && data.asset_url);
   return (
     <div className="learning-page learning-source-page">
       <LearningBreadcrumbs
-        items={[{ label: "Parcours", to: "/parcours" }, { label: "Source" }, { label: data.title }]}
+        items={[{ label: "Parcours", to: "/parcours" }, { label: "Documents" }, { label: sourceTitle }]}
       />
       <header className="learning-page-header">
         <p className="learning-eyebrow">Document source</p>
-        <h1>{data.title}</h1>
+        <h1>{sourceTitle}</h1>
         <div className="learning-metadata">
           <span>{data.rights_label}</span>
           <span>
             {data.page_count} page{data.page_count === 1 ? "" : "s"}
           </span>
-          <span>Révision {data.revision}</span>
         </div>
       </header>
+      <LearningReviewPanel
+        rows={[
+          { label: "Release", value: data.release_id },
+          { label: "Identifiant", value: data.id },
+          { label: "Asset", value: data.asset_id },
+          { label: "Révision", value: data.revision },
+        ]}
+      />
       {updateProgress.isError && (
         <p className="form-error" role="alert">
           La dernière page visitée n'a pas pu être enregistrée.
@@ -1162,25 +1118,31 @@ function LearningSourcePage() {
           <LearningSourceViewer
             assetId={data.asset_id}
             mimeType={data.mime_type}
-            title={data.title}
+            title={sourceTitle}
             page={normalizedPage}
+            onPageChange={setCurrentPage}
           />
         </Suspense>
       ) : (
-        <LearningSourceCitation title={data.title} page={normalizedPage} />
+        <LearningSourceCitation title={sourceTitle} page={normalizedPage} />
       )}
     </div>
   );
 }
 
 function LearningSearchPage() {
-  const [input, setInput] = useState("");
-  const [submitted, setSubmitted] = useState("");
+  const [params, setParams] = useSearchParams();
+  const initialQuery = (params.get("q") ?? "").trim().slice(0, 120);
+  const [input, setInput] = useState(initialQuery);
+  const [submitted, setSubmitted] = useState(initialQuery.length >= 2 ? initialQuery : "");
   const search = useLearningSearch(submitted, Boolean(submitted));
   const submit = (event: FormEvent) => {
     event.preventDefault();
     const value = input.trim();
-    if (value.length >= 2) setSubmitted(value);
+    if (value.length >= 2) {
+      setSubmitted(value);
+      setParams({ q: value }, { replace: true });
+    }
   };
   const results = search.data?.items ?? [];
   return (
@@ -1188,7 +1150,7 @@ function LearningSearchPage() {
       <header className="learning-page-header">
         <p className="learning-eyebrow">Recherche transversale</p>
         <h2>Retrouver une notion</h2>
-        <p>La recherche reste sur le serveur ; l'index complet n'est jamais envoyé au navigateur.</p>
+        <p>Recherche une leçon, un exercice, un concept ou un document dans tout ton parcours.</p>
       </header>
       <form className="learning-search-form" role="search" onSubmit={submit}>
         <label htmlFor="learning-search">Cours, concept, exercice ou source</label>
@@ -1253,7 +1215,7 @@ function SearchResult({ result }: { result: LearningSearchResult }) {
     <Link to={href}>
       <span>
         <small>{contentKindLabel(result.entity_type)}</small>
-        <strong>{result.title}</strong>
+        <strong>{readerTitle(result.title, result.entity_type)}</strong>
         {result.excerpt && <p>{result.excerpt}</p>}
         <i>{result.estimated_minutes ? `${result.estimated_minutes} min` : ""}</i>
       </span>
@@ -1327,7 +1289,7 @@ function LearningProgressPage() {
                 </span>
                 <div>
                   <small>{contentKindLabel(content!.kind)}</small>
-                  <h3>{content!.title}</h3>
+                  <h3>{readerCatalogTitle(content!)}</h3>
                   <p>
                     {item.self_assessment
                       ? `Auto-évaluation : ${item.self_assessment}/5`

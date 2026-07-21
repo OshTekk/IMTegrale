@@ -61,6 +61,7 @@ _PERSONAL_AUDIENCE_ID = "personal:fictive-owner"
 def assert_api_error(response, message: str) -> None:  # noqa: ANN001
     stable_codes = {
         "Authentification requise": "AUTHENTICATION_REQUIRED",
+        "Accès révoqué": "ACCESS_REVOKED",
         "Compte désactivé": "ACCOUNT_DISABLED",
         "Jeton CSRF invalide": "CSRF_INVALID",
         "Origine refusée": "ORIGIN_FORBIDDEN",
@@ -203,8 +204,9 @@ def _assert_private_headers(response) -> None:  # noqa: ANN001
     for name, expected in _PRIVATE_HEADERS.items():
         assert response.headers.get(name) == expected
     content_security_policy = response.headers.get("content-security-policy", "")
-    assert "object-src blob:" in content_security_policy
-    assert "object-src 'self'" not in content_security_policy
+    assert "object-src 'none'" in content_security_policy
+    assert "worker-src 'self'" in content_security_policy
+    assert "object-src blob:" not in content_security_policy
     assert "img-src 'self' data: blob:" in content_security_policy
 
 
@@ -986,6 +988,20 @@ def test_eligible_owner_can_use_the_complete_learning_api_surface(
         _assert_private_headers(response)
 
     assert catalog_node.json()["node"]["id"] == "lesson-fiction"
+    catalog_payload = catalog.json()
+    assert catalog_payload["schema_version"] == 1
+    assert catalog_payload["release_mode"] == "published"
+    catalog_by_id = {node["id"]: node for node in catalog_payload["nodes"]}
+    assert catalog_by_id["lesson-fiction"]["section"] == "course"
+    assert catalog_by_id["lesson-fiction"]["reader_visibility"] == "primary"
+    assert catalog_by_id["concept-fiction"]["section"] == "glossary"
+    assert catalog_by_id["concept-fiction"]["reader_visibility"] == "secondary"
+    source_node = catalog_by_id["source-node-fiction"]
+    assert {
+        "document_type": source_node["document_type"],
+        "page_count": source_node["page_count"],
+        "download_allowed": source_node["download_allowed"],
+    } == {"document_type": "pdf", "page_count": 1, "download_allowed": True}
     assert content.json()["id"] == "content-fiction"
     assert source.json()["asset_url"] == ("/api/v1/learning/assets/asset-source-fiction")
     assert reference.json() == {
@@ -1003,6 +1019,10 @@ def test_eligible_owner_can_use_the_complete_learning_api_surface(
     }
     assert inline_asset.content == SOURCE_BYTES
     assert downloaded_asset.content == SOURCE_BYTES
+    for asset_response in (inline_asset, downloaded_asset):
+        assert asset_response.headers["accept-ranges"] == "bytes"
+        assert asset_response.headers["content-length"] == str(len(SOURCE_BYTES))
+        assert "content-range" not in asset_response.headers
     assert search.json()["items"][0]["entity_id"] == "content-fiction"
     assert initial_progress.json()["items"] == []
     assert progress_item.json()["favorite"] is True
@@ -1164,6 +1184,129 @@ def test_assets_use_only_the_manifest_filename_for_inline_and_download(
         assert response.content == SOURCE_BYTES
         _assert_private_headers(response)
     reset_learning_bundle_cache()
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/v1/learning/assets/asset-source-fiction",
+        "/api/v1/learning/assets/asset-source-fiction/download",
+    ],
+)
+@pytest.mark.parametrize(
+    ("range_header", "expected_start", "expected_end"),
+    [
+        ("bytes=0-0", 0, 0),
+        ("bytes=2-8", 2, 8),
+        ("bytes=10-", 10, len(SOURCE_BYTES) - 1),
+        ("bytes=-7", len(SOURCE_BYTES) - 7, len(SOURCE_BYTES) - 1),
+        ("bytes=-9999", 0, len(SOURCE_BYTES) - 1),
+    ],
+)
+def test_learning_assets_support_one_authenticated_byte_range(
+    client: TestClient,
+    fictitious_content_root: Path,
+    path: str,
+    range_header: str,
+    expected_start: int,
+    expected_end: int,
+) -> None:
+    _install_identity(client)
+
+    response = client.get(path, headers={"Range": range_header})
+
+    assert response.status_code == 206
+    assert response.content == SOURCE_BYTES[expected_start : expected_end + 1]
+    assert response.headers["accept-ranges"] == "bytes"
+    assert response.headers["content-range"] == (
+        f"bytes {expected_start}-{expected_end}/{len(SOURCE_BYTES)}"
+    )
+    assert response.headers["content-length"] == str(expected_end - expected_start + 1)
+    _assert_private_headers(response)
+
+
+@pytest.mark.parametrize(
+    "range_header",
+    [
+        "bytes=0-1,3-4",
+        "bytes=-0",
+        "bytes=-",
+        "bytes=9-2",
+        f"bytes={len(SOURCE_BYTES)}-",
+        f"bytes={'9' * 5_000}-",
+        "items=0-1",
+    ],
+)
+def test_learning_assets_reject_invalid_or_multiple_ranges(
+    client: TestClient,
+    fictitious_content_root: Path,
+    range_header: str,
+) -> None:
+    _install_identity(client)
+
+    response = client.get(
+        "/api/v1/learning/assets/asset-source-fiction",
+        headers={"Range": range_header},
+    )
+
+    assert response.status_code == 416
+    assert_api_error(response, "Plage demandée invalide")
+    assert response.headers["accept-ranges"] == "bytes"
+    assert response.headers["content-range"] == f"bytes */{len(SOURCE_BYTES)}"
+    assert _CANARY_PATH not in response.text
+    _assert_private_headers(response)
+
+
+def test_range_authentication_happens_before_asset_open(
+    client: TestClient,
+    fictitious_content_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def forbidden_open(*_args, **_kwargs):  # noqa: ANN002, ANN003, ANN202
+        raise AssertionError("an unauthenticated request must never open an asset")
+
+    monkeypatch.setattr(LearningBundleSnapshot, "open_asset", forbidden_open)
+
+    response = client.get(
+        "/api/v1/learning/assets/asset-source-fiction",
+        headers={"Range": "bytes=0-3"},
+    )
+
+    assert response.status_code == 401
+    assert_api_error(response, "Authentification requise")
+    _assert_private_headers(response)
+
+
+def test_revoked_session_is_refused_before_the_next_range_read(
+    client: TestClient,
+    fictitious_content_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identity = _install_identity(client)
+    first = client.get(
+        "/api/v1/learning/assets/asset-source-fiction",
+        headers={"Range": "bytes=0-3"},
+    )
+    assert first.status_code == 206
+
+    with SessionLocal() as db:
+        account = db.get(Account, identity.account_id)
+        assert account is not None
+        account.access_generation += 1
+        db.commit()
+
+    def forbidden_open(*_args, **_kwargs):  # noqa: ANN002, ANN003, ANN202
+        raise AssertionError("a revoked session must never reopen an asset")
+
+    monkeypatch.setattr(LearningBundleSnapshot, "open_asset", forbidden_open)
+    revoked = client.get(
+        "/api/v1/learning/assets/asset-source-fiction",
+        headers={"Range": "bytes=4-7"},
+    )
+
+    assert revoked.status_code == 401
+    assert_api_error(revoked, "Accès révoqué")
+    _assert_private_headers(revoked)
 
 
 @pytest.mark.parametrize(

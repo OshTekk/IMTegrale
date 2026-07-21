@@ -1,6 +1,6 @@
 # Données et choix utilisateur
 
-Ce document décrit le comportement du logiciel IMTégrale `4.5.6`. Il aide un étudiant à comprendre les données utilisées par le service et les choix qui restent sous son contrôle.
+Ce document décrit le comportement du logiciel IMTégrale `4.6.0`. Il aide un étudiant à comprendre les données utilisées par le service et les choix qui restent sous son contrôle.
 
 ## Principes
 

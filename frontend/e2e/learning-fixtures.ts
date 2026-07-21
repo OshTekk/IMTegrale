@@ -8,6 +8,8 @@ export type FakeSessionMode = "eligible" | "token" | "noneligible" | "reverify" 
 
 export interface FakeLearningState {
   accessDelayMs: number;
+  assetRanges: string[];
+  assetRequests: number;
   attempts: Array<Record<string, unknown>>;
   externalRequests: string[];
   learningRequests: string[];
@@ -17,9 +19,11 @@ export interface FakeLearningState {
 }
 
 const baseUrl = "http://127.0.0.1:4173";
-const releaseId = "demo-fictive-release-001";
-const catalogVersion = "demo-fictive-catalog-v1";
-const csrfToken = "csrf-e2e-fictif";
+const releaseId = "synthetic-release-private-preview-001";
+const catalogVersion = "synthetic-catalog-v2";
+const csrfToken = "csrf-e2e-synthetic";
+const inlineMathFixture = "q = \\alpha + 1";
+const blockMathFixture = "\\sum_{k=1}^{n} k = \\frac{n(n+1)}{2}";
 
 const sessionByMode: Record<FakeSessionMode, Record<string, unknown>> = {
   eligible: {
@@ -28,11 +32,11 @@ const sessionByMode: Record<FakeSessionMode, Record<string, unknown>> = {
     auth_method: "imt",
     needs_security_setup: false,
     needs_sync_setup: false,
-    account: { id: "account-e2e-fictif", display_name: "Étudiante fictive", imt_username: "demo.fictif" },
+    account: { id: "account-e2e-synthetic", display_name: "Étudiante fictive", imt_username: "synthetic.user" },
     learning: {
       available: true,
-      audience_label: "FIP 2028 · DÉMO FICTIVE",
-      level_label: "2A fictive",
+      audience_label: "Cursus fictif 2099",
+      level_label: "Niveau 2A fictif",
       reverify_required: false,
       catalog_version: catalogVersion,
     },
@@ -43,7 +47,7 @@ const sessionByMode: Record<FakeSessionMode, Record<string, unknown>> = {
     auth_method: "token",
     needs_security_setup: false,
     needs_sync_setup: false,
-    account: { id: "account-token-fictif", display_name: "Token fictif", imt_username: null },
+    account: { id: "account-token-synthetic", display_name: "Token fictif", imt_username: null },
     learning: {
       available: false,
       audience_label: null,
@@ -58,7 +62,7 @@ const sessionByMode: Record<FakeSessionMode, Record<string, unknown>> = {
     auth_method: "imt",
     needs_security_setup: false,
     needs_sync_setup: false,
-    account: { id: "account-noneligible-fictif", display_name: "Compte fictif", imt_username: "demo.fictif" },
+    account: { id: "account-noneligible-synthetic", display_name: "Compte fictif", imt_username: "synthetic.user" },
     learning: {
       available: false,
       audience_label: null,
@@ -73,11 +77,11 @@ const sessionByMode: Record<FakeSessionMode, Record<string, unknown>> = {
     auth_method: "passkey",
     needs_security_setup: false,
     needs_sync_setup: false,
-    account: { id: "account-reverify-fictif", display_name: "Étudiante fictive", imt_username: "demo.fictif" },
+    account: { id: "account-reverify-synthetic", display_name: "Étudiante fictive", imt_username: "synthetic.user" },
     learning: {
       available: false,
-      audience_label: "FIP 2028 · DÉMO FICTIVE",
-      level_label: "2A fictive",
+      audience_label: "private-preview-internal-audience",
+      level_label: "Niveau 2A fictif",
       reverify_required: true,
       catalog_version: null,
     },
@@ -88,11 +92,11 @@ const sessionByMode: Record<FakeSessionMode, Record<string, unknown>> = {
     auth_method: "imt",
     needs_security_setup: false,
     needs_sync_setup: false,
-    account: { id: "account-unavailable-fictif", display_name: "Étudiante fictive", imt_username: "demo.fictif" },
+    account: { id: "account-unavailable-synthetic", display_name: "Étudiante fictive", imt_username: "synthetic.user" },
     learning: {
       available: false,
-      audience_label: "FIP 2028 · DÉMO FICTIVE",
-      level_label: "2A fictive",
+      audience_label: "Cursus fictif 2099",
+      level_label: "Niveau 2A fictif",
       reverify_required: false,
       catalog_version: null,
     },
@@ -103,11 +107,11 @@ const sessionByMode: Record<FakeSessionMode, Record<string, unknown>> = {
     auth_method: "imt",
     needs_security_setup: false,
     needs_sync_setup: false,
-    account: { id: "account-error-fictif", display_name: "Étudiante fictive", imt_username: "demo.fictif" },
+    account: { id: "account-error-synthetic", display_name: "Étudiante fictive", imt_username: "synthetic.user" },
     learning: {
       available: false,
-      audience_label: "FIP 2028 · DÉMO FICTIVE",
-      level_label: "2A fictive",
+      audience_label: "Cursus fictif 2099",
+      level_label: "Niveau 2A fictif",
       reverify_required: false,
       catalog_version: null,
     },
@@ -115,12 +119,12 @@ const sessionByMode: Record<FakeSessionMode, Record<string, unknown>> = {
 };
 
 const dashboard = {
-  generated_at: "2026-01-01T00:00:00Z",
+  generated_at: "2099-01-01T00:00:00Z",
   latest_event_id: 0,
   account: {
-    id: "account-e2e-fictif",
+    id: "account-e2e-synthetic",
     display_name: "Étudiante fictive",
-    imt_username: "demo.fictif",
+    imt_username: "synthetic.user",
     last_sync_at: null,
     last_sync_status: "never",
     last_sync_error: null,
@@ -146,81 +150,198 @@ const dashboard = {
   events: [],
 };
 
+type FixtureSection = "course" | "practice" | "exam" | "summary" | "glossary" | "sources";
+type FixtureVisibility = "primary" | "secondary" | "hidden";
+
+interface NodeOptions {
+  code?: string;
+  contentId?: string;
+  description?: string;
+  difficulty?: "introductory" | "standard" | "advanced";
+  documentType?: "pdf" | "image" | "download";
+  downloadAllowed?: boolean;
+  minutes?: number;
+  pageCount?: number;
+  prerequisites?: string[];
+  section?: FixtureSection;
+  sourceId?: string;
+  visibility?: FixtureVisibility;
+}
+
 const node = (
   id: string,
   kind: string,
   title: string,
   parentId: string | null,
   position: number,
-  options: { contentId?: string; sourceId?: string; minutes?: number } = {},
+  options: NodeOptions = {},
 ) => ({
   id,
   kind,
   title,
+  code: options.code ?? null,
+  description: options.description ?? null,
   parent_id: parentId,
   content_id: options.contentId ?? null,
   source_id: options.sourceId ?? null,
-  prerequisite_ids: [],
-  difficulty: options.contentId ? "introductory" : null,
+  prerequisite_ids: options.prerequisites ?? [],
+  difficulty: options.difficulty ?? (options.contentId ? "standard" : null),
   estimated_minutes: options.minutes ?? null,
-  review_status: "published",
-  revision: "demo-fictive-r1",
+  section: options.section ?? null,
+  reader_visibility: options.visibility ?? "primary",
+  document_type: options.documentType ?? null,
+  page_count: options.pageCount ?? null,
+  download_allowed: options.downloadAllowed ?? false,
+  review_status: "private_preview",
+  revision: "synthetic-review-r1",
   position,
 });
 
 const catalog = {
+  schema_version: 2,
+  release_mode: "private_preview",
   release_id: releaseId,
   catalog_version: catalogVersion,
-  audience: "fip:2028",
+  audience: "synthetic:audience:private-preview",
   nodes: [
-    node("audience-fictive", "audience", "DÉMO FICTIVE — audience", null, 1),
-    node("curriculum-fictif", "curriculum", "DÉMO FICTIVE — cursus", "audience-fictive", 1),
-    node("promotion-fictive", "promotion", "DÉMO FICTIVE — promotion 2028", "curriculum-fictif", 1),
-    node("level-fictif", "level", "DÉMO FICTIVE — niveau 2A", "promotion-fictive", 1),
-    node("semester-fictif", "semester", "DÉMO FICTIVE — semestre", "level-fictif", 1),
-    node("ue-fictive", "ue", "DÉMO FICTIVE — UE Zorbion", "semester-fictif", 1),
-    node("module-fictif", "module", "DÉMO FICTIVE — module Alpha", "ue-fictive", 1),
-    node("chapter-fictif", "chapter", "DÉMO FICTIVE — chapitre Un", "module-fictif", 1),
-    node("lesson-node-fictif", "lesson", "DÉMO FICTIVE — leçon Alpha", "chapter-fictif", 1, {
+    node("audience-synthetic", "audience", "private-preview — Espace interne fictif", null, 1),
+    node("curriculum-synthetic", "curriculum", "Cursus fictif 2099", "audience-synthetic", 1),
+    node("promotion-synthetic", "promotion", "Promotion fictive", "curriculum-synthetic", 1),
+    node("level-synthetic", "level", "Niveau 2A fictif", "promotion-synthetic", 1),
+    node("semester-synthetic", "semester", "Semestre fictif", "level-synthetic", 1, { code: "S-DEMO" }),
+    node("ue-fictive", "ue", "Brouillon privé — Sciences imaginaires", "semester-synthetic", 1, {
+      code: "UE-FIC100",
+      description: "Une unité entièrement synthétique conçue pour vérifier l'expérience de lecture publique.",
+    }),
+    node("module-fictif", "module", "Brouillon privé — Raisonnement symbolique", "ue-fictive", 1, {
+      code: "MOD-FIC",
+      description: "Un parcours fictif pour explorer des symboles, pratiquer puis réviser dans un ordre clair.",
+    }),
+    node("chapter-fictif", "chapter", "En revue — Construire ses repères", "module-fictif", 1, {
+      section: "course",
+    }),
+    node("lesson-node-fictif", "lesson", "Brouillon privé — Lire une relation", "chapter-fictif", 1, {
       contentId: "lesson-fictive",
+      difficulty: "introductory",
       minutes: 8,
+      section: "course",
     }),
-    node("exercise-node-fictif", "exercise", "DÉMO FICTIVE — exercice Zorbion", "chapter-fictif", 2, {
+    node("lesson-node-beta", "lesson", "Relier les symboles", "chapter-fictif", 2, {
+      contentId: "lesson-beta",
+      difficulty: "standard",
+      minutes: 11,
+      section: "course",
+    }),
+    node("chapter-beta", "chapter", "Comparer des modèles fictifs", "module-fictif", 2, {
+      section: "course",
+    }),
+    node("lesson-node-gamma", "lesson", "Choisir une représentation", "chapter-beta", 1, {
+      contentId: "lesson-gamma",
+      difficulty: "advanced",
+      minutes: 14,
+      section: "course",
+    }),
+    node("concept-node-alpha", "concept", "Symbole alpha", "module-fictif", 1, {
+      contentId: "concept-alpha",
+      section: "glossary",
+      visibility: "secondary",
+    }),
+    node("concept-node-zorbion", "concept", "Zorbion", "module-fictif", 2, {
+      contentId: "concept-zorbion",
+      section: "glossary",
+      visibility: "secondary",
+    }),
+    node("exercise-node-fictif", "exercise", "Brouillon privé — Manipuler un zorbion", "chapter-fictif", 1, {
       contentId: "exercise-fictif",
+      difficulty: "introductory",
       minutes: 12,
+      prerequisites: ["concept-node-alpha", "concept-node-zorbion"],
+      section: "practice",
     }),
-    node("source-node-fictif", "source", "DÉMO FICTIVE — source blanche", "chapter-fictif", 3, {
+    node("pc-node-fictif", "pc_td", "Atelier de relations fictives", "chapter-beta", 2, {
+      contentId: "pc-fictif",
+      difficulty: "standard",
+      minutes: 25,
+      prerequisites: ["concept-node-zorbion"],
+      section: "practice",
+    }),
+    node("exam-node-fictif", "past_exam", "Sujet blanc synthétique", "module-fictif", 1, {
+      contentId: "exam-fictif",
+      difficulty: "advanced",
+      minutes: 45,
+      section: "exam",
+    }),
+    node("summary-node-fictif", "lesson", "Fiche de synthèse fictive", "module-fictif", 1, {
+      contentId: "summary-fictif",
+      minutes: 6,
+      section: "summary",
+    }),
+    node("source-node-fictif", "source", "Brouillon privé — Carnet synthétique", "module-fictif", 1, {
+      documentType: "pdf",
+      downloadAllowed: true,
+      pageCount: 2,
+      section: "sources",
       sourceId: "source-fictive",
+      visibility: "secondary",
+    }),
+    node("source-node-memo", "source", "titre non renseigné", "module-fictif", 2, {
+      documentType: "download",
+      downloadAllowed: false,
+      pageCount: 1,
+      section: "sources",
+      sourceId: "source-memo-fictif",
+      visibility: "secondary",
     }),
   ],
 };
 
 const text = (value: string) => ({ type: "text", text: value, marks: [] });
 
-const contents: Record<string, Record<string, unknown>> = {
-  "lesson-fictive": {
+function content(
+  id: string,
+  catalogNodeId: string,
+  kind: "concept" | "lesson" | "exercise" | "pc_td" | "past_exam",
+  title: string,
+  blocks: Array<Record<string, unknown>>,
+  minutes = 10,
+) {
+  return {
     release_id: releaseId,
-    id: "lesson-fictive",
-    kind: "lesson",
+    id,
+    kind,
     frontmatter: {
-      catalog_node_id: "lesson-node-fictif",
-      title: "DÉMO FICTIVE — leçon Alpha",
-      review_status: "published",
-      revision: "demo-fictive-r1",
+      catalog_node_id: catalogNodeId,
+      title,
+      review_status: "private_preview",
+      revision: "synthetic-review-r1",
       prerequisite_ids: [],
-      difficulty: "introductory",
-      estimated_minutes: 8,
+      difficulty: "standard",
+      estimated_minutes: minutes,
     },
-    blocks: [
-      { type: "heading", id: "notion-alpha", level: 2, inlines: [text("Notion Alpha fictive")] },
+    blocks,
+  };
+}
+
+const contents: Record<string, Record<string, unknown>> = {
+  "lesson-fictive": content(
+    "lesson-fictive",
+    "lesson-node-fictif",
+    "lesson",
+    "Brouillon privé — Lire une relation",
+    [
+      { type: "heading", id: "notion-alpha", level: 2, inlines: [text("Une idée entièrement fictive")] },
       {
         type: "paragraph",
-        inlines: [text("Ce texte synthétique vérifie le renderer sans reproduire de contenu pédagogique réel.")],
+        inlines: [
+          text("Le symbole "),
+          { type: "math", latex: inlineMathFixture },
+          text(" sert uniquement à vérifier un rendu mathématique accessible."),
+        ],
       },
-      { type: "math", latex: "z = alpha + 1" },
+      { type: "math", latex: blockMathFixture },
       {
         type: "paragraph",
-        inlines: [{ type: "exercise_ref", exercise_id: "exercise-fictif", label: "Essayer l’exercice fictif" }],
+        inlines: [{ type: "exercise_ref", exercise_id: "exercise-fictif", label: "Essayer l'exercice fictif" }],
       },
       {
         type: "paragraph",
@@ -236,23 +357,33 @@ const contents: Record<string, Record<string, unknown>> = {
         ],
       },
     ],
-  },
-  "exercise-fictif": {
-    release_id: releaseId,
-    id: "exercise-fictif",
-    kind: "exercise",
-    frontmatter: {
-      catalog_node_id: "exercise-node-fictif",
-      title: "DÉMO FICTIVE — exercice Zorbion",
-      review_status: "published",
-      revision: "demo-fictive-r1",
-      prerequisite_ids: [],
-      difficulty: "introductory",
-      estimated_minutes: 12,
-    },
-    blocks: [
+    8,
+  ),
+  "lesson-beta": content("lesson-beta", "lesson-node-beta", "lesson", "Relier les symboles", [
+    { type: "heading", id: "relations-fictives", level: 2, inlines: [text("Relations fictives")] },
+    { type: "paragraph", inlines: [text("Cette leçon de démonstration ne reprend aucun support réel.")] },
+  ]),
+  "lesson-gamma": content("lesson-gamma", "lesson-node-gamma", "lesson", "Choisir une représentation", [
+    { type: "heading", id: "representation-fictive", level: 2, inlines: [text("Représentation fictive")] },
+    { type: "paragraph", inlines: [text("Le contenu reste volontairement générique et synthétique.")] },
+  ]),
+  "concept-alpha": content("concept-alpha", "concept-node-alpha", "concept", "Symbole alpha", [
+    { type: "paragraph", inlines: [text("Définition fictive utilisée uniquement par les tests publics.")] },
+  ]),
+  "concept-zorbion": content("concept-zorbion", "concept-node-zorbion", "concept", "Zorbion", [
+    { type: "paragraph", inlines: [text("Terme inventé sans équivalent dans un enseignement réel.")] },
+  ]),
+  "exercise-fictif": content(
+    "exercise-fictif",
+    "exercise-node-fictif",
+    "exercise",
+    "Brouillon privé — Manipuler un zorbion",
+    [
       { type: "heading", id: "enonce-fictif", level: 2, inlines: [text("Énoncé entièrement fictif")] },
-      { type: "paragraph", inlines: [text("Trouver la valeur symbolique du zorbion alpha.")] },
+      {
+        type: "paragraph",
+        inlines: [text("Trouver une valeur symbolique sans utiliser de donnée pédagogique réelle.")],
+      },
       {
         type: "directive",
         id: "hint-fictif-1",
@@ -265,11 +396,52 @@ const contents: Record<string, Record<string, unknown>> = {
         id: "solution-fictive",
         name: "solution",
         title: "Correction fictive",
-        inlines: [text("La réponse de démonstration est alpha.")],
+        inlines: [text("La réponse de démonstration est le symbole alpha.")],
       },
     ],
-  },
+    12,
+  ),
+  "pc-fictif": content("pc-fictif", "pc-node-fictif", "pc_td", "Atelier de relations fictives", [
+    { type: "paragraph", inlines: [text("Activité pratique entièrement synthétique.")] },
+  ]),
+  "exam-fictif": content("exam-fictif", "exam-node-fictif", "past_exam", "Sujet blanc synthétique", [
+    { type: "paragraph", inlines: [text("Sujet inventé pour démontrer la section Annales.")] },
+  ]),
+  "summary-fictif": content("summary-fictif", "summary-node-fictif", "lesson", "Fiche de synthèse fictive", [
+    { type: "paragraph", inlines: [text("Résumé fictif, formulaire fictif et erreurs fréquentes fictives.")] },
+  ]),
 };
+
+function createSyntheticPdf(): string {
+  const pageOne = "BT\n/F1 20 Tf\n72 720 Td\n(DEMO FICTIVE PAGE 1) Tj\n0 -32 Td\n(SYMBOLIC ALPHA) Tj\nET";
+  const pageTwo = "BT\n/F1 20 Tf\n72 720 Td\n(DEMO FICTIVE PAGE 2) Tj\n0 -32 Td\n(ZORBION REFERENCE) Tj\nET";
+  const padding = "SYNTHETIC-ONLY\n".repeat(9_000);
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> >> /Contents 4 0 R >>",
+    `<< /Length ${pageOne.length} >>\nstream\n${pageOne}\nendstream`,
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> >> /Contents 6 0 R >>",
+    `<< /Length ${pageTwo.length} >>\nstream\n${pageTwo}\nendstream`,
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    `<< /Length ${padding.length} >>\nstream\n${padding}endstream`,
+  ];
+  let pdf = "%PDF-1.7\n% SYNTHETIC FIXTURE ONLY\n";
+  const offsets = [0];
+  objects.forEach((body, index) => {
+    offsets.push(pdf.length);
+    pdf += `${index + 1} 0 obj\n${body}\nendobj\n`;
+  });
+  const xrefOffset = pdf.length;
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  offsets.slice(1).forEach((offset) => {
+    pdf += `${String(offset).padStart(10, "0")} 00000 n \n`;
+  });
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+  return pdf;
+}
+
+const syntheticPdf = createSyntheticPdf();
 
 function progressItem(contentId: string, update: Record<string, unknown> = {}) {
   return {
@@ -281,8 +453,8 @@ function progressItem(contentId: string, update: Record<string, unknown> = {}) {
     opened_hint_ids: [],
     self_assessment: null,
     favorite: false,
-    created_at: "2026-01-01T00:00:00Z",
-    updated_at: "2026-01-01T00:00:00Z",
+    created_at: "2099-01-01T00:00:00Z",
+    updated_at: "2099-01-01T00:00:00Z",
     ...update,
   };
 }
@@ -319,17 +491,81 @@ function progressResponse(state: FakeLearningState) {
   };
 }
 
+async function serveSyntheticPdf(route: Route, state: FakeLearningState, download: boolean) {
+  state.assetRequests += 1;
+  const range = route.request().headers()["range"];
+  const commonHeaders = {
+    ...privateHeaders(),
+    "Accept-Ranges": "bytes",
+    "Content-Type": "application/pdf",
+    "Content-Disposition": `${download ? "attachment" : "inline"}; filename="synthetic-reader-fixture.pdf"`,
+  };
+  if (!range) {
+    await route.fulfill({
+      status: 200,
+      headers: { ...commonHeaders, "Content-Length": String(syntheticPdf.length) },
+      body: syntheticPdf,
+    });
+    return;
+  }
+  state.assetRanges.push(range);
+  const match = /^bytes=(\d+)-(\d*)$/.exec(range);
+  if (!match) {
+    await route.fulfill({
+      status: 416,
+      headers: { ...commonHeaders, "Content-Range": `bytes */${syntheticPdf.length}` },
+    });
+    return;
+  }
+  const start = Number(match[1]);
+  const requestedEnd = match[2] ? Number(match[2]) : syntheticPdf.length - 1;
+  if (
+    !Number.isSafeInteger(start) ||
+    !Number.isSafeInteger(requestedEnd) ||
+    start >= syntheticPdf.length ||
+    requestedEnd < start
+  ) {
+    await route.fulfill({
+      status: 416,
+      headers: { ...commonHeaders, "Content-Range": `bytes */${syntheticPdf.length}` },
+    });
+    return;
+  }
+  const end = Math.min(requestedEnd, syntheticPdf.length - 1);
+  const body = syntheticPdf.slice(start, end + 1);
+  await route.fulfill({
+    status: 206,
+    headers: {
+      ...commonHeaders,
+      "Content-Length": String(body.length),
+      "Content-Range": `bytes ${start}-${end}/${syntheticPdf.length}`,
+    },
+    body,
+  });
+}
+
 export async function installFakeLearningApi(
   page: Page,
   mode: FakeSessionMode = "eligible",
 ): Promise<FakeLearningState> {
   const state: FakeLearningState = {
     accessDelayMs: 0,
+    assetRanges: [],
+    assetRequests: 0,
     attempts: [],
     externalRequests: [],
     learningRequests: [],
     progress: new Map([
-      ["lesson-fictive", progressItem("lesson-fictive", { favorite: true, last_section_id: "notion-alpha" })],
+      [
+        "lesson-fictive",
+        progressItem("lesson-fictive", {
+          favorite: true,
+          last_section_id: "notion-alpha",
+          self_assessment: 2,
+          updated_at: "2099-01-03T12:00:00Z",
+        }),
+      ],
+      ["lesson-beta", progressItem("lesson-beta", { completed: true, updated_at: "2099-01-02T12:00:00Z" })],
     ]),
     searchQueries: [],
     synthetic: SYNTHETIC_FIXTURE_ONLY,
@@ -374,9 +610,9 @@ export async function installFakeLearningApi(
       } else {
         await json(route, {
           available: true,
-          audience: "fip:2028",
-          audience_label: "FIP 2028 · DÉMO FICTIVE",
-          level_label: "2A fictive",
+          audience: "synthetic:audience:private-preview",
+          audience_label: "Cursus fictif 2099",
+          level_label: "Niveau 2A fictif",
           reverify_required: false,
           catalog_version: catalogVersion,
           release_id: releaseId,
@@ -390,8 +626,8 @@ export async function installFakeLearningApi(
     }
     if (url.pathname.startsWith("/api/v1/learning/content/")) {
       const contentId = decodeURIComponent(url.pathname.slice("/api/v1/learning/content/".length));
-      const content = contents[contentId];
-      await json(route, content ?? { detail: { message: "Introuvable." } }, content ? 200 : 404);
+      const item = contents[contentId];
+      await json(route, item ?? { detail: { message: "Introuvable." } }, item ? 200 : 404);
       return;
     }
     if (url.pathname === "/api/v1/learning/references/lesson-fictive/source-ref-fictif") {
@@ -400,12 +636,13 @@ export async function installFakeLearningApi(
         id: "source-ref-fictif",
         content_id: "lesson-fictive",
         source_id: "source-fictive",
-        source_title: "DÉMO FICTIVE — source blanche",
+        source_title: "Brouillon privé — Carnet synthétique",
         page: 2,
         end_page: null,
         label: "Consulter la page fictive 2",
         source_url: "/api/v1/learning/sources/source-fictive",
         asset_url: "/api/v1/learning/assets/asset-pdf-fictif",
+        source_serving_allowed: true,
       });
       return;
     }
@@ -413,32 +650,47 @@ export async function installFakeLearningApi(
       await json(route, {
         release_id: releaseId,
         id: "source-fictive",
-        title: "DÉMO FICTIVE — source blanche",
+        title: "Brouillon privé — Carnet synthétique",
         asset_id: "asset-pdf-fictif",
         kind: "pdf",
         mime_type: "application/pdf",
-        filename: "demo-fictive-source.pdf",
-        revision: "demo-fictive-r1",
+        filename: "synthetic-reader-fixture.pdf",
+        revision: "synthetic-review-r1",
         pages: [
-          { page: 1, label: null },
+          { page: 1, label: "Page fictive 1" },
           { page: 2, label: "Page fictive 2" },
         ],
         page_count: 2,
-        rights_label: "Droits fictifs — démonstration technique",
+        rights_label: "Document fictif réservé aux tests publics",
         asset_url: "/api/v1/learning/assets/asset-pdf-fictif",
+        source_serving_allowed: true,
+      });
+      return;
+    }
+    if (url.pathname === "/api/v1/learning/sources/source-memo-fictif") {
+      await json(route, {
+        release_id: releaseId,
+        id: "source-memo-fictif",
+        title: "titre non renseigné",
+        asset_id: null,
+        kind: "download",
+        mime_type: null,
+        filename: null,
+        revision: "synthetic-review-r1",
+        pages: [{ page: 1, label: null }],
+        page_count: 1,
+        rights_label: "Métadonnée fictive sans fichier",
+        asset_url: null,
+        source_serving_allowed: false,
       });
       return;
     }
     if (url.pathname === "/api/v1/learning/assets/asset-pdf-fictif") {
-      await route.fulfill({
-        status: 200,
-        headers: {
-          ...privateHeaders(),
-          "Content-Type": "application/pdf",
-          "Content-Disposition": 'inline; filename="demo-fictive-source.pdf"',
-        },
-        body: "%PDF-1.4\n%DÉMO FICTIVE\n%%EOF\n",
-      });
+      await serveSyntheticPdf(route, state, false);
+      return;
+    }
+    if (url.pathname === "/api/v1/learning/assets/asset-pdf-fictif/download") {
+      await serveSyntheticPdf(route, state, true);
       return;
     }
     if (url.pathname === "/api/v1/learning/progress" && request.method() === "GET") {
@@ -452,7 +704,7 @@ export async function installFakeLearningApi(
       }
       const contentId = decodeURIComponent(url.pathname.slice("/api/v1/learning/progress/".length));
       const current = state.progress.get(contentId) ?? progressItem(contentId);
-      const updated = { ...current, ...request.postDataJSON(), updated_at: "2026-01-01T00:01:00Z" };
+      const updated = { ...current, ...request.postDataJSON(), updated_at: "2099-01-03T12:01:00Z" };
       state.progress.set(contentId, updated);
       await json(route, updated);
       return;
@@ -481,18 +733,18 @@ export async function installFakeLearningApi(
       const input = request.postDataJSON() as Record<string, unknown>;
       const exerciseId = String(input.exercise_id);
       const current = state.progress.get(exerciseId) ?? progressItem(exerciseId);
-      const update: Record<string, unknown> = { exercise_viewed: true, updated_at: "2026-01-01T00:02:00Z" };
+      const update: Record<string, unknown> = { exercise_viewed: true, updated_at: "2099-01-03T12:02:00Z" };
       if (input.attempt_kind === "hint_opened") update.opened_hint_ids = [String(input.hint_id)];
       if (input.attempt_kind === "self_assessed") update.self_assessment = input.self_assessment;
       if (input.attempt_kind === "completed") update.completed = true;
       state.progress.set(exerciseId, { ...current, ...update });
       const attempt = {
-        id: `attempt-fictif-${state.attempts.length + 1}`,
+        id: `attempt-synthetic-${state.attempts.length + 1}`,
         exercise_id: exerciseId,
         attempt_kind: input.attempt_kind,
         hint_id: input.hint_id ?? null,
         self_assessment: input.self_assessment ?? null,
-        attempted_at: "2026-01-01T00:02:00Z",
+        attempted_at: "2099-01-03T12:02:00Z",
       };
       state.attempts.push(attempt);
       await json(route, attempt, 201);
@@ -513,11 +765,11 @@ export async function installFakeLearningApi(
                 entity_id: "exercise-fictif",
                 catalog_node_id: "exercise-node-fictif",
                 entity_type: "exercise",
-                title: "DÉMO FICTIVE — exercice Zorbion",
-                excerpt: "Résultat synthétique, sans extrait de document réel.",
+                title: "Brouillon privé — Manipuler un zorbion",
+                excerpt: "Résultat synthétique sans extrait de document réel.",
                 ue_id: "ue-fictive",
                 module_id: "module-fictif",
-                semester: "S6",
+                semester: "S-DEMO",
                 difficulty: "introductory",
                 estimated_minutes: 12,
               },

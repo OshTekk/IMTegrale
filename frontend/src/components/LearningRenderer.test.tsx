@@ -74,15 +74,30 @@ describe("LearningRenderer", () => {
     expect(html).not.toContain("active");
   });
 
-  it("keeps math visible and gives it an accessible text alternative", () => {
+  it("renders selectable KaTeX with MathML instead of raw source as the primary view", () => {
     const html = render([
       { type: "paragraph", inlines: [{ type: "math", latex: "x^2 + y^2" }] },
       { type: "math", latex: "\\int_0^1 x dx" },
     ]);
 
-    expect(html).toContain("Formule mathématique");
-    expect(html).toContain("x^2 + y^2");
-    expect(html).toContain("\\int_0^1 x dx");
+    expect(html.match(/data-math-rendered="true"/g)).toHaveLength(2);
+    expect(html.match(/class="katex/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(html.match(/<math/g)).toHaveLength(2);
+    expect(html).toContain('encoding="application/x-tex"');
+    expect(html).not.toContain("<code>x^2 + y^2</code>");
+    expect(html).not.toContain("<code>\\int_0^1 x dx</code>");
+  });
+
+  it("never creates active content from untrusted math commands", () => {
+    const html = render([
+      { type: "math", latex: "\\href{https://example.invalid}{x}" },
+      { type: "math", latex: "\\htmlClass{fixture}{y}" },
+    ]);
+
+    expect(html).not.toContain("href=");
+    expect(html).not.toContain('example.invalid"');
+    expect(html).not.toContain('class="fixture"');
+    expect(html).toContain("Formule invalide");
   });
 
   it("loads illustrations only through a protected asset ID", () => {

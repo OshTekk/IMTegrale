@@ -28,17 +28,26 @@ export type LearningContentKind = Extract<
 >;
 export type LearningDifficulty = "introductory" | "standard" | "advanced";
 export type LearningReviewStatus = "draft" | "in_review" | "reviewed" | "private_preview" | "published" | "retired";
+export type LearningSection = "course" | "practice" | "exam" | "summary" | "glossary" | "sources";
+export type LearningReaderVisibility = "primary" | "secondary" | "hidden";
 
 export interface LearningCatalogNode {
   id: string;
   kind: LearningCatalogNodeKind;
   title: string;
+  code: string | null;
+  description: string | null;
   parent_id: string | null;
   content_id: string | null;
   source_id: string | null;
   prerequisite_ids: string[];
   difficulty: LearningDifficulty | null;
   estimated_minutes: number | null;
+  section: LearningSection | null;
+  reader_visibility: LearningReaderVisibility;
+  document_type?: "pdf" | "image" | "download" | null;
+  page_count?: number | null;
+  download_allowed?: boolean;
   review_status: LearningReviewStatus;
   revision: string;
   position: number;
@@ -47,6 +56,8 @@ export interface LearningCatalogNode {
 export type LearningCatalogItem = LearningCatalogNode;
 
 export interface LearningCatalog {
+  schema_version: 1 | 2;
+  release_mode: "published" | "private_preview";
   release_id: string;
   catalog_version: string;
   audience: string;

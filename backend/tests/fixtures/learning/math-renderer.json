@@ -1,0 +1,28 @@
+{
+  "id": "fictive-math-renderer",
+  "synthetic": true,
+  "rights": {
+    "publication_allowed": true
+  },
+  "notice": "Catalogue fictif de démonstration technique",
+  "blocks": [
+    {
+      "type": "paragraph",
+      "inlines": [
+        {
+          "type": "text",
+          "text": "Relation symbolique fictive : ",
+          "marks": []
+        },
+        {
+          "type": "math",
+          "latex": "q = \\alpha + 1"
+        }
+      ]
+    },
+    {
+      "type": "math",
+      "latex": "\\sum_{k=1}^{n} k = \\frac{n(n+1)}{2}"
+    }
+  ]
+}
