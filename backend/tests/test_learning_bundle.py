@@ -19,9 +19,11 @@ from app.learning.schemas import CatalogNode, LearningBundleManifest, MathBlock,
 from tests.learning_bundle_factory import (
     AUDIENCE_ID,
     CATALOG_KINDS,
+    SECOND_SOURCE_BYTES,
     SOURCE_BYTES,
     write_fictitious_learning_bundle,
     write_fictitious_metadata_only_preview_bundle,
+    write_fictitious_personal_library_bundle,
 )
 
 SECOND_AUDIENCE_ID = "fip:2029"
@@ -167,9 +169,7 @@ def _upgrade_fictitious_manifest_to_v2(manifest) -> None:  # noqa: ANN001
         if section is None:
             continue
         node["section"] = section
-        node["reader_visibility"] = (
-            "secondary" if node["kind"] in {"concept", "source"} else "primary"
-        )
+        node["reader_visibility"] = "secondary" if node["kind"] in {"concept", "source"} else "primary"
 
 
 def _upgrade_fictitious_search_to_v2(search) -> None:  # noqa: ANN001
@@ -196,6 +196,9 @@ def test_v2_bundle_accepts_explicit_reader_presentation(tmp_path: Path) -> None:
         "glossary",
         "secondary",
     )
+    assert snapshot.search(AUDIENCE_ID, "équation")[0].excerpt == (
+        "Une équation fictive pour la démonstration technique."
+    )
 
 
 def test_v2_bundle_rejects_implicit_reader_presentation(tmp_path: Path) -> None:
@@ -217,6 +220,192 @@ def test_bundle_rejects_a_search_index_from_another_schema_version(tmp_path: Pat
     release = write_fictitious_learning_bundle(
         tmp_path,
         search_mutator=_upgrade_fictitious_search_to_v2,
+    )
+
+    _assert_public_unavailable(lambda: load_learning_bundle(release), str(release))
+
+
+def test_v3_personal_library_is_explicit_and_resolves_assets_by_action(
+    tmp_path: Path,
+) -> None:
+    audience = "personal:fictive-owner"
+    release = write_fictitious_personal_library_bundle(tmp_path)
+
+    snapshot = load_learning_bundle(release)
+    rights = snapshot.get_rights("rights-fiction", audience)
+    inline_only_rights = snapshot.get_rights("rights-inline-fiction", audience)
+
+    assert snapshot.manifest.schema_version == 3
+    assert snapshot.manifest.release_mode == "personal_library"
+    assert rights is not None
+    assert rights.publication_allowed is False
+    assert rights.private_preview_allowed is False
+    assert rights.personal_use_allowed is True
+    assert rights.source_serving_allowed is True
+    assert rights.download_allowed is True
+    assert rights.rights_holder is None
+    assert rights.basis == "requester_private_processing"
+    assert inline_only_rights is not None
+    assert inline_only_rights.download_allowed is False
+    assert snapshot.get_source_asset("source-inline-fiction", audience, action="inline") is not None
+    assert snapshot.get_source_asset("source-inline-fiction", audience, action="download") is None
+    with snapshot.open_asset(
+        "asset-inline-fiction",
+        audience,
+        action="inline",
+    ).stream as stream:
+        assert stream.read() == SECOND_SOURCE_BYTES
+    with pytest.raises(KeyError):
+        snapshot.open_asset("asset-inline-fiction", audience, action="download")
+
+    search_result = snapshot.search(audience, "nébuleuse")[0]
+    assert search_result.entity_id == "source-inline-fiction"
+    assert search_result.title == "[FICTIF] Mémo consultable"
+    assert search_result.excerpt == ("Un mémo entièrement fictif complète la bibliothèque personnelle.")
+    assert "nébuleuse" not in search_result.excerpt.casefold()
+    assert "body" not in search_result.model_dump()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("publication_allowed", True),
+        ("private_preview_allowed", True),
+        ("personal_use_allowed", False),
+        ("basis", "fictitious"),
+    ],
+)
+def test_personal_library_rights_fail_closed(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    def mutate(manifest) -> None:  # noqa: ANN001
+        manifest["rights"][0][field] = value
+
+    release = write_fictitious_personal_library_bundle(
+        tmp_path,
+        manifest_mutator=mutate,
+    )
+
+    _assert_public_unavailable(lambda: load_learning_bundle(release), str(release))
+
+
+def test_personal_library_requires_one_personal_audience(tmp_path: Path) -> None:
+    def add_incompatible_audience(manifest) -> None:  # noqa: ANN001
+        manifest["audiences"].append(
+            {
+                "id": "personal:fictive-other",
+                "label": "[FICTIF] Autre bibliothèque",
+                "curriculum": "Cursus entièrement fictif",
+                "promotion": "2099 fictive",
+                "level_label": "Niveau fictif",
+            }
+        )
+
+    wrong_prefix = write_fictitious_personal_library_bundle(
+        tmp_path,
+        release_id="fictitious-personal-wrong-prefix",
+        audience_id=AUDIENCE_ID,
+    )
+    mixed = write_fictitious_personal_library_bundle(
+        tmp_path,
+        release_id="fictitious-personal-mixed",
+        manifest_mutator=add_incompatible_audience,
+    )
+
+    _assert_public_unavailable(lambda: load_learning_bundle(wrong_prefix), str(wrong_prefix))
+    _assert_public_unavailable(lambda: load_learning_bundle(mixed), str(mixed))
+
+
+def test_personal_library_requires_schema_v3_and_explicit_rights(tmp_path: Path) -> None:
+    def downgrade_schema(manifest) -> None:  # noqa: ANN001
+        manifest["schema_version"] = 2
+
+    def omit_policy(manifest) -> None:  # noqa: ANN001
+        manifest["rights"][0].pop("download_allowed")
+
+    downgraded = write_fictitious_personal_library_bundle(
+        tmp_path,
+        release_id="fictitious-personal-schema-v2",
+        manifest_mutator=downgrade_schema,
+    )
+    implicit = write_fictitious_personal_library_bundle(
+        tmp_path,
+        release_id="fictitious-personal-implicit-rights",
+        manifest_mutator=omit_policy,
+    )
+
+    _assert_public_unavailable(lambda: load_learning_bundle(downgraded), str(downgraded))
+    _assert_public_unavailable(lambda: load_learning_bundle(implicit), str(implicit))
+
+
+@pytest.mark.parametrize(
+    "excerpt",
+    [
+        None,
+        "Le statut private_preview reste interne.",
+        r"La formule brute est \\frac{a}{b}.",
+        "Consulter assets/document-fictif.pdf pour continuer.",
+        "L'identifiant source-inline-fiction ne doit pas apparaître.",
+        "Le statut reviewed ne doit pas être affiché.",
+        "La révision fictitious-r1 reste une métadonnée interne.",
+        "Le fichier memo-fictif.pdf reste interne.",
+        "Consulter https://example.invalid serait une URL active.",
+    ],
+)
+def test_v3_search_requires_a_clean_reader_excerpt(
+    tmp_path: Path,
+    excerpt: str | None,
+) -> None:
+    def mutate(search) -> None:  # noqa: ANN001
+        document = search["documents"][-1]
+        if excerpt is None:
+            document.pop("reader_excerpt")
+        else:
+            document["reader_excerpt"] = excerpt
+
+    release = write_fictitious_personal_library_bundle(
+        tmp_path,
+        search_mutator=mutate,
+    )
+
+    _assert_public_unavailable(lambda: load_learning_bundle(release), str(release))
+
+
+def test_v3_search_title_must_match_the_reader_catalog_node(tmp_path: Path) -> None:
+    def mutate(search) -> None:  # noqa: ANN001
+        search["documents"][0]["title"] = "[FICTIF] Métadonnée d'auteur"
+
+    release = write_fictitious_personal_library_bundle(
+        tmp_path,
+        search_mutator=mutate,
+    )
+
+    _assert_public_unavailable(lambda: load_learning_bundle(release), str(release))
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Brouillon privé — Leçon fictive",
+        "private_preview - Leçon fictive",
+        "titre non renseigné",
+    ],
+)
+def test_v3_catalog_requires_clean_reader_titles(tmp_path: Path, title: str) -> None:
+    def mutate_manifest(manifest) -> None:  # noqa: ANN001
+        node = next(item for item in manifest["catalog"] if item["id"] == "lesson-fiction")
+        node["title"] = title
+
+    def mutate_search(search) -> None:  # noqa: ANN001
+        document = next(item for item in search["documents"] if item["catalog_node_id"] == "lesson-fiction")
+        document["title"] = title
+
+    release = write_fictitious_personal_library_bundle(
+        tmp_path,
+        manifest_mutator=mutate_manifest,
+        search_mutator=mutate_search,
     )
 
     _assert_public_unavailable(lambda: load_learning_bundle(release), str(release))
@@ -268,6 +457,7 @@ def test_loads_fictitious_direct_release_and_resolves_only_by_id(tmp_path: Path)
     assert search_result.entity_id == "content-fiction"
     assert search_result.entity_type == "lesson"
     assert search_result.module_id == "module-fiction"
+    assert search_result.excerpt == "Une équation fictive pour la démonstration technique."
     assert "body" not in search_result.model_dump()
     exercise_result = snapshot.search(
         AUDIENCE_ID,
@@ -278,10 +468,10 @@ def test_loads_fictitious_direct_release_and_resolves_only_by_id(tmp_path: Path)
     source_result = snapshot.search(AUDIENCE_ID, "source page", entity_types=("source",))
     assert [result.entity_id for result in source_result] == ["source-fiction"]
     assert source_result[0].catalog_node_id == "source-node-fiction"
-    with snapshot.open_source("source-fiction", AUDIENCE_ID).stream as stream:
+    with snapshot.open_source("source-fiction", AUDIENCE_ID, action="inline").stream as stream:
         assert stream.read() == SOURCE_BYTES
     with pytest.raises(KeyError):
-        snapshot.open_asset("../assets/source-fiction.bin", AUDIENCE_ID)
+        snapshot.open_asset("../assets/source-fiction.bin", AUDIENCE_ID, action="inline")
 
 
 @pytest.mark.parametrize("omit_source_asset_id", [False, True])
@@ -308,7 +498,14 @@ def test_metadata_only_source_loads_only_with_explicit_fail_closed_preview_right
     assert rights.source_serving_allowed is False
     assert rights.rights_holder is None
     assert rights.basis == "requester_private_processing"
-    assert snapshot.get_source_asset("source-fiction", "personal:fictive-owner") is None
+    assert (
+        snapshot.get_source_asset(
+            "source-fiction",
+            "personal:fictive-owner",
+            action="inline",
+        )
+        is None
+    )
     assert snapshot.get_asset("asset-source-fiction", "personal:fictive-owner") is None
     assert [
         result.entity_id
@@ -319,7 +516,7 @@ def test_metadata_only_source_loads_only_with_explicit_fail_closed_preview_right
         )
     ] == ["source-fiction"]
     with pytest.raises(KeyError):
-        snapshot.open_source("source-fiction", "personal:fictive-owner")
+        snapshot.open_source("source-fiction", "personal:fictive-owner", action="inline")
 
 
 def test_published_bundle_can_keep_citation_metadata_without_serving_source(
@@ -346,9 +543,16 @@ def test_published_bundle_can_keep_citation_metadata_without_serving_source(
 
     assert snapshot.manifest.release_mode == "published"
     assert snapshot.get_source("source-fiction", "personal:fictive-owner") is not None
-    assert snapshot.get_source_asset("source-fiction", "personal:fictive-owner") is None
+    assert (
+        snapshot.get_source_asset(
+            "source-fiction",
+            "personal:fictive-owner",
+            action="inline",
+        )
+        is None
+    )
     with pytest.raises(KeyError):
-        snapshot.open_source("source-fiction", "personal:fictive-owner")
+        snapshot.open_source("source-fiction", "personal:fictive-owner", action="inline")
 
 
 @pytest.mark.parametrize("policy_state", ["omitted", "allowed"])
@@ -621,7 +825,11 @@ def test_current_switch_keeps_old_snapshot_coherent_and_loads_new_release(tmp_pa
     assert snapshot_b.get_content("content-fiction", AUDIENCE_ID).frontmatter.title.endswith(
         "fictitious-release-b"
     )
-    with snapshot_a.open_asset("asset-source-fiction", AUDIENCE_ID).stream as stream:
+    with snapshot_a.open_asset(
+        "asset-source-fiction",
+        AUDIENCE_ID,
+        action="inline",
+    ).stream as stream:
         assert stream.read() == SOURCE_BYTES
 
 
@@ -1014,7 +1222,7 @@ def test_open_asset_detects_release_mutation_after_validation(tmp_path: Path) ->
     asset_path.write_bytes(SOURCE_BYTES + b"tampered")
 
     _assert_public_unavailable(
-        lambda: snapshot.open_asset("asset-source-fiction", AUDIENCE_ID),
+        lambda: snapshot.open_asset("asset-source-fiction", AUDIENCE_ID, action="inline"),
         str(asset_path),
     )
 
@@ -1038,7 +1246,9 @@ def test_open_asset_closes_descriptor_when_revalidation_fails(
     monkeypatch.setattr(learning_bundle_module, "_identity_from_stat", lambda _value: object())
     monkeypatch.setattr(learning_bundle_module.os, "close", record_close)
 
-    _assert_public_unavailable(lambda: snapshot.open_asset("asset-source-fiction", AUDIENCE_ID))
+    _assert_public_unavailable(
+        lambda: snapshot.open_asset("asset-source-fiction", AUDIENCE_ID, action="inline")
+    )
     assert descriptor in closed
 
 
@@ -1050,7 +1260,7 @@ def test_open_asset_refuses_fifo_without_blocking(tmp_path: Path) -> None:
     os.mkfifo(asset_path)
 
     _assert_public_unavailable(
-        lambda: snapshot.open_asset("asset-source-fiction", AUDIENCE_ID),
+        lambda: snapshot.open_asset("asset-source-fiction", AUDIENCE_ID, action="inline"),
         str(asset_path),
     )
 
@@ -1067,7 +1277,7 @@ def test_open_asset_rechecks_ctime_when_size_and_mtime_are_restored(tmp_path: Pa
     )
 
     _assert_public_unavailable(
-        lambda: snapshot.open_asset("asset-source-fiction", AUDIENCE_ID),
+        lambda: snapshot.open_asset("asset-source-fiction", AUDIENCE_ID, action="inline"),
         str(asset_path),
     )
 
@@ -1085,7 +1295,7 @@ def test_snapshot_open_is_anchored_when_releases_component_is_replaced(tmp_path:
     (root / "releases").symlink_to(outside_releases)
 
     _assert_public_unavailable(
-        lambda: snapshot.open_asset("asset-source-fiction", AUDIENCE_ID),
+        lambda: snapshot.open_asset("asset-source-fiction", AUDIENCE_ID, action="inline"),
         str(outside_releases),
     )
 
@@ -1277,7 +1487,7 @@ def test_open_asset_does_not_preread_payload_after_activation(
 
     monkeypatch.setattr(learning_bundle_module.os, "read", tracked_read)
 
-    opened = snapshot.open_asset("asset-source-fiction", AUDIENCE_ID)
+    opened = snapshot.open_asset("asset-source-fiction", AUDIENCE_ID, action="inline")
 
     assert reads == []
     assert opened.stream.tell() == 0
@@ -1295,7 +1505,7 @@ def test_open_asset_refuses_same_payload_replacement_after_activation(tmp_path: 
     os.replace(replacement, asset_path)
 
     _assert_public_unavailable(
-        lambda: snapshot.open_asset("asset-source-fiction", AUDIENCE_ID),
+        lambda: snapshot.open_asset("asset-source-fiction", AUDIENCE_ID, action="inline"),
         str(asset_path),
     )
 

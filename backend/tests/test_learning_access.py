@@ -32,9 +32,16 @@ class FakeAudience:
 
 
 @dataclass(frozen=True)
+class FakeManifest:
+    release_id: str = "fictional-release-001"
+    release_mode: str = "published"
+
+
+@dataclass(frozen=True)
 class FakeBundle:
     catalog_version: str = "fictional-release-001"
     audiences: tuple[FakeAudience, ...] = (FakeAudience(),)
+    manifest: FakeManifest = FakeManifest()
 
 
 def _auth_context(
@@ -80,6 +87,13 @@ def _auth_context(
 
 def _fake_bundle_loader(settings: Settings) -> FakeBundle:
     return FakeBundle(audiences=(FakeAudience(id=settings.learning_audience_id),))
+
+
+def _fake_personal_bundle_loader(settings: Settings) -> FakeBundle:
+    return FakeBundle(
+        audiences=(FakeAudience(id=settings.learning_audience_id),),
+        manifest=FakeManifest(release_mode="personal_library"),
+    )
 
 
 def _personal_settings(**overrides: object) -> Settings:
@@ -237,9 +251,7 @@ def test_personal_mode_reads_and_normalizes_private_environment_lists(monkeypatc
     settings = Settings(_env_file=None)
 
     assert settings.learning_audience_id == "personal:owner"
-    assert settings.learning_allowed_imt_usernames == [
-        "fictitious-owner@example.invalid"
-    ]
+    assert settings.learning_allowed_imt_usernames == ["fictitious-owner@example.invalid"]
     assert settings.learning_allowed_identities == [
         "lan:192.0.2.10",
         "tailnet:fictitious-owner@example.invalid",
@@ -281,20 +293,116 @@ def test_personal_mode_uses_exact_account_allowlist_and_configured_audience() ->
         assert hidden.value.detail == "Ressource introuvable"
 
 
+@pytest.mark.parametrize("auth_method", ["imt", "passkey"])
+def test_personal_library_accepts_exact_primary_owner_with_fresh_academic_evidence(
+    auth_method: str,
+) -> None:
+    settings = _personal_settings()
+    with SessionLocal() as db:
+        auth = _auth_context(
+            db,
+            auth_method=auth_method,
+            imt_username="fictitious-owner@example.invalid",
+        )
+
+        access = learning_access_for(
+            db,
+            auth,
+            settings,
+            bundle_loader=_fake_personal_bundle_loader,
+        )
+
+        assert access.audience == "personal:fictive-owner"
+        assert access.via_manual_grant is False
+
+
+def test_personal_library_does_not_relax_existing_academic_evidence() -> None:
+    settings = _personal_settings()
+    with SessionLocal() as db:
+        auth = _auth_context(
+            db,
+            imt_username="fictitious-owner@example.invalid",
+            program="unknown",
+            promotion_year=None,
+            academic_source="unknown",
+            academic_verified=False,
+            student_verified_delta=None,
+        )
+
+        with pytest.raises(HTTPException) as denied:
+            learning_access_for(
+                db,
+                auth,
+                settings,
+                bundle_loader=lambda _settings: pytest.fail(
+                    "academic denial must happen before loading the personal bundle"
+                ),
+            )
+
+        assert denied.value.status_code == 404
+        assert denied.value.detail == "Ressource introuvable"
+
+
+def test_personal_library_is_rejected_by_cohort_or_mismatched_runtime() -> None:
+    cohort_settings = Settings(environment="test")
+    personal_settings = _personal_settings()
+    with SessionLocal() as db:
+        cohort_auth = _auth_context(db)
+        with pytest.raises(HTTPException) as cohort_denied:
+            learning_access_for(
+                db,
+                cohort_auth,
+                cohort_settings,
+                bundle_loader=_fake_personal_bundle_loader,
+            )
+        assert cohort_denied.value.status_code == 503
+        assert cohort_denied.value.detail["code"] == LEARNING_CATALOG_UNAVAILABLE
+
+        personal_auth = _auth_context(
+            db,
+            imt_username="fictitious-owner@example.invalid",
+        )
+
+        def mismatched_bundle(_settings: Settings) -> FakeBundle:
+            return FakeBundle(
+                audiences=(
+                    FakeAudience(id="personal:fictive-owner"),
+                    FakeAudience(id="personal:fictive-other"),
+                ),
+                manifest=FakeManifest(release_mode="personal_library"),
+            )
+
+        with pytest.raises(HTTPException) as mismatch:
+            learning_access_for(
+                db,
+                personal_auth,
+                personal_settings,
+                bundle_loader=mismatched_bundle,
+            )
+        assert mismatch.value.status_code == 503
+        assert mismatch.value.detail["code"] == LEARNING_CATALOG_UNAVAILABLE
+
+
 def test_personal_ingress_accepts_exact_lan_and_tailnet_and_ignores_spoofing() -> None:
     settings = _personal_settings()
 
-    assert require_learning_ingress(
-        _request_from("trusted-proxy", asserted_identity="lan:192.0.2.10"),
-        settings,
-    ) == "lan:192.0.2.10"
-    assert require_learning_ingress(
-        _request_from(
-            "trusted-proxy",
-            asserted_identity="tailnet:fictitious-owner@example.invalid",
-        ),
-        settings,
-    ) == "tailnet:fictitious-owner@example.invalid"
+    assert (
+        require_learning_ingress(
+            _request_from("trusted-proxy", asserted_identity="lan:192.0.2.10"),
+            settings,
+        )
+        == "lan:192.0.2.10"
+    )
+    assert (
+        require_learning_ingress(
+            _request_from(
+                "trusted-proxy",
+                asserted_identity="tailnet:fictitious-owner@example.invalid",
+            ),
+            settings,
+        )
+        == "tailnet:fictitious-owner@example.invalid"
+    )
 
     for request in (
         _request_from("trusted-proxy", asserted_identity="internet:198.51.100.5"),

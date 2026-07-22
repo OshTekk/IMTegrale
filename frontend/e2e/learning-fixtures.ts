@@ -9,6 +9,7 @@ export type FakeSessionMode = "eligible" | "token" | "noneligible" | "reverify" 
 export interface FakeLearningState {
   accessDelayMs: number;
   assetRanges: string[];
+  assetRequestIds: string[];
   assetRequests: number;
   attempts: Array<Record<string, unknown>>;
   externalRequests: string[];
@@ -19,8 +20,8 @@ export interface FakeLearningState {
 }
 
 const baseUrl = "http://127.0.0.1:4173";
-const releaseId = "synthetic-release-private-preview-001";
-const catalogVersion = "synthetic-catalog-v2";
+const releaseId = "synthetic-personal-library-001";
+const catalogVersion = "synthetic-catalog-v3";
 const csrfToken = "csrf-e2e-synthetic";
 const inlineMathFixture = "q = \\alpha + 1";
 const blockMathFixture = "\\sum_{k=1}^{n} k = \\frac{n(n+1)}{2}";
@@ -80,7 +81,7 @@ const sessionByMode: Record<FakeSessionMode, Record<string, unknown>> = {
     account: { id: "account-reverify-synthetic", display_name: "Étudiante fictive", imt_username: "synthetic.user" },
     learning: {
       available: false,
-      audience_label: "private-preview-internal-audience",
+      audience_label: "Bibliothèque fictive",
       level_label: "Niveau 2A fictif",
       reverify_required: true,
       catalog_version: null,
@@ -192,35 +193,35 @@ const node = (
   document_type: options.documentType ?? null,
   page_count: options.pageCount ?? null,
   download_allowed: options.downloadAllowed ?? false,
-  review_status: "private_preview",
+  review_status: "reviewed",
   revision: "synthetic-review-r1",
   position,
 });
 
 const catalog = {
-  schema_version: 2,
-  release_mode: "private_preview",
+  schema_version: 3,
+  release_mode: "personal_library",
   release_id: releaseId,
   catalog_version: catalogVersion,
-  audience: "synthetic:audience:private-preview",
+  audience: "personal:synthetic-owner",
   nodes: [
-    node("audience-synthetic", "audience", "private-preview — Espace interne fictif", null, 1),
+    node("audience-synthetic", "audience", "Espace pédagogique fictif", null, 1),
     node("curriculum-synthetic", "curriculum", "Cursus fictif 2099", "audience-synthetic", 1),
     node("promotion-synthetic", "promotion", "Promotion fictive", "curriculum-synthetic", 1),
     node("level-synthetic", "level", "Niveau 2A fictif", "promotion-synthetic", 1),
     node("semester-synthetic", "semester", "Semestre fictif", "level-synthetic", 1, { code: "S-DEMO" }),
-    node("ue-fictive", "ue", "Brouillon privé — Sciences imaginaires", "semester-synthetic", 1, {
+    node("ue-fictive", "ue", "Sciences imaginaires", "semester-synthetic", 1, {
       code: "UE-FIC100",
       description: "Une unité entièrement synthétique conçue pour vérifier l'expérience de lecture publique.",
     }),
-    node("module-fictif", "module", "Brouillon privé — Raisonnement symbolique", "ue-fictive", 1, {
+    node("module-fictif", "module", "Raisonnement symbolique", "ue-fictive", 1, {
       code: "MOD-FIC",
       description: "Un parcours fictif pour explorer des symboles, pratiquer puis réviser dans un ordre clair.",
     }),
-    node("chapter-fictif", "chapter", "En revue — Construire ses repères", "module-fictif", 1, {
+    node("chapter-fictif", "chapter", "Construire ses repères", "module-fictif", 1, {
       section: "course",
     }),
-    node("lesson-node-fictif", "lesson", "Brouillon privé — Lire une relation", "chapter-fictif", 1, {
+    node("lesson-node-fictif", "lesson", "Lire une relation", "chapter-fictif", 1, {
       contentId: "lesson-fictive",
       difficulty: "introductory",
       minutes: 8,
@@ -251,7 +252,7 @@ const catalog = {
       section: "glossary",
       visibility: "secondary",
     }),
-    node("exercise-node-fictif", "exercise", "Brouillon privé — Manipuler un zorbion", "chapter-fictif", 1, {
+    node("exercise-node-fictif", "exercise", "Manipuler un zorbion", "chapter-fictif", 1, {
       contentId: "exercise-fictif",
       difficulty: "introductory",
       minutes: 12,
@@ -276,7 +277,7 @@ const catalog = {
       minutes: 6,
       section: "summary",
     }),
-    node("source-node-fictif", "source", "Brouillon privé — Carnet synthétique", "module-fictif", 1, {
+    node("source-node-fictif", "source", "Carnet synthétique", "module-fictif", 1, {
       documentType: "pdf",
       downloadAllowed: true,
       pageCount: 2,
@@ -284,8 +285,8 @@ const catalog = {
       sourceId: "source-fictive",
       visibility: "secondary",
     }),
-    node("source-node-memo", "source", "titre non renseigné", "module-fictif", 2, {
-      documentType: "download",
+    node("source-node-memo", "source", "Mémo visuel fictif", "module-fictif", 2, {
+      documentType: "pdf",
       downloadAllowed: false,
       pageCount: 1,
       section: "sources",
@@ -312,7 +313,7 @@ function content(
     frontmatter: {
       catalog_node_id: catalogNodeId,
       title,
-      review_status: "private_preview",
+      review_status: "reviewed",
       revision: "synthetic-review-r1",
       prerequisite_ids: [],
       difficulty: "standard",
@@ -327,7 +328,7 @@ const contents: Record<string, Record<string, unknown>> = {
     "lesson-fictive",
     "lesson-node-fictif",
     "lesson",
-    "Brouillon privé — Lire une relation",
+    "Lire une relation",
     [
       { type: "heading", id: "notion-alpha", level: 2, inlines: [text("Une idée entièrement fictive")] },
       {
@@ -377,7 +378,7 @@ const contents: Record<string, Record<string, unknown>> = {
     "exercise-fictif",
     "exercise-node-fictif",
     "exercise",
-    "Brouillon privé — Manipuler un zorbion",
+    "Manipuler un zorbion",
     [
       { type: "heading", id: "enonce-fictif", level: 2, inlines: [text("Énoncé entièrement fictif")] },
       {
@@ -491,8 +492,9 @@ function progressResponse(state: FakeLearningState) {
   };
 }
 
-async function serveSyntheticPdf(route: Route, state: FakeLearningState, download: boolean) {
+async function serveSyntheticPdf(route: Route, state: FakeLearningState, download: boolean, assetId: string) {
   state.assetRequests += 1;
+  state.assetRequestIds.push(assetId);
   const range = route.request().headers()["range"];
   const commonHeaders = {
     ...privateHeaders(),
@@ -551,6 +553,7 @@ export async function installFakeLearningApi(
   const state: FakeLearningState = {
     accessDelayMs: 0,
     assetRanges: [],
+    assetRequestIds: [],
     assetRequests: 0,
     attempts: [],
     externalRequests: [],
@@ -610,7 +613,7 @@ export async function installFakeLearningApi(
       } else {
         await json(route, {
           available: true,
-          audience: "synthetic:audience:private-preview",
+          audience: "personal:synthetic-owner",
           audience_label: "Cursus fictif 2099",
           level_label: "Niveau 2A fictif",
           reverify_required: false,
@@ -636,13 +639,15 @@ export async function installFakeLearningApi(
         id: "source-ref-fictif",
         content_id: "lesson-fictive",
         source_id: "source-fictive",
-        source_title: "Brouillon privé — Carnet synthétique",
+        source_title: "Carnet synthétique",
         page: 2,
         end_page: null,
         label: "Consulter la page fictive 2",
         source_url: "/api/v1/learning/sources/source-fictive",
         asset_url: "/api/v1/learning/assets/asset-pdf-fictif",
         source_serving_allowed: true,
+        download_allowed: true,
+        download_url: "/api/v1/learning/assets/asset-pdf-fictif/download",
       });
       return;
     }
@@ -650,7 +655,7 @@ export async function installFakeLearningApi(
       await json(route, {
         release_id: releaseId,
         id: "source-fictive",
-        title: "Brouillon privé — Carnet synthétique",
+        title: "Carnet synthétique",
         asset_id: "asset-pdf-fictif",
         kind: "pdf",
         mime_type: "application/pdf",
@@ -664,6 +669,8 @@ export async function installFakeLearningApi(
         rights_label: "Document fictif réservé aux tests publics",
         asset_url: "/api/v1/learning/assets/asset-pdf-fictif",
         source_serving_allowed: true,
+        download_allowed: true,
+        download_url: "/api/v1/learning/assets/asset-pdf-fictif/download",
       });
       return;
     }
@@ -671,26 +678,32 @@ export async function installFakeLearningApi(
       await json(route, {
         release_id: releaseId,
         id: "source-memo-fictif",
-        title: "titre non renseigné",
-        asset_id: null,
-        kind: "download",
-        mime_type: null,
-        filename: null,
+        title: "Mémo visuel fictif",
+        asset_id: "asset-pdf-inline-fictif",
+        kind: "pdf",
+        mime_type: "application/pdf",
+        filename: "synthetic-inline-fixture.pdf",
         revision: "synthetic-review-r1",
         pages: [{ page: 1, label: null }],
         page_count: 1,
-        rights_label: "Métadonnée fictive sans fichier",
-        asset_url: null,
-        source_serving_allowed: false,
+        rights_label: "Usage personnel fictif",
+        asset_url: "/api/v1/learning/assets/asset-pdf-inline-fictif",
+        source_serving_allowed: true,
+        download_allowed: false,
+        download_url: null,
       });
       return;
     }
     if (url.pathname === "/api/v1/learning/assets/asset-pdf-fictif") {
-      await serveSyntheticPdf(route, state, false);
+      await serveSyntheticPdf(route, state, false, "asset-pdf-fictif");
       return;
     }
     if (url.pathname === "/api/v1/learning/assets/asset-pdf-fictif/download") {
-      await serveSyntheticPdf(route, state, true);
+      await serveSyntheticPdf(route, state, true, "asset-pdf-fictif");
+      return;
+    }
+    if (url.pathname === "/api/v1/learning/assets/asset-pdf-inline-fictif") {
+      await serveSyntheticPdf(route, state, false, "asset-pdf-inline-fictif");
       return;
     }
     if (url.pathname === "/api/v1/learning/progress" && request.method() === "GET") {
@@ -765,7 +778,7 @@ export async function installFakeLearningApi(
                 entity_id: "exercise-fictif",
                 catalog_node_id: "exercise-node-fictif",
                 entity_type: "exercise",
-                title: "Brouillon privé — Manipuler un zorbion",
+                title: "Manipuler un zorbion",
                 excerpt: "Résultat synthétique sans extrait de document réel.",
                 ue_id: "ue-fictive",
                 module_id: "module-fictif",

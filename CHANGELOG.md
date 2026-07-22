@@ -1,5 +1,14 @@
 # Changements
 
+## 4.7.0 - 22 juillet 2026
+
+- schéma Parcours v3 rétrocompatible et nouveau mode fermé `personal_library` ;
+- droits explicites séparant usage personnel, consultation inline et téléchargement ;
+- autorisation des assets par action avant ouverture, y compris pour les accès directs par ID ;
+- extraits de recherche lecteur explicites, indépendants du corpus d'indexation ;
+- menu secondaire de vérification et interface PDF respectant les capacités de téléchargement ;
+- fixtures intégralement fictives et tests de séparation compte, ingress, session, droits, Range et recherche.
+
 ## 4.6.0 - 21 juillet 2026
 
 - nouvelle expérience éditoriale Parcours : accueil, reprise, modules structurés, glossaire et documents séparés ;

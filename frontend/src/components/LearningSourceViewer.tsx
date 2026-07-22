@@ -16,6 +16,8 @@ import { learningAssetUrl, learningErrorCopy, learningErrorState, safeLearningId
 
 interface LearningSourceViewerProps {
   assetId: string;
+  assetUrl: string;
+  downloadUrl: string | null;
   mimeType: string | null | undefined;
   title: string;
   page: number | null;
@@ -32,10 +34,20 @@ function isTextItem(value: unknown): value is { str: string } {
   return typeof value === "object" && value !== null && "str" in value && typeof value.str === "string";
 }
 
-export function LearningSourceViewer({ assetId, mimeType, title, page, onPageChange }: LearningSourceViewerProps) {
+export function LearningSourceViewer({
+  assetId,
+  assetUrl: providedAssetUrl,
+  downloadUrl: providedDownloadUrl,
+  mimeType,
+  title,
+  page,
+  onPageChange,
+}: LearningSourceViewerProps) {
   const safeAssetId = safeLearningId(assetId);
-  const assetUrl = safeAssetId ? learningAssetUrl(safeAssetId) : null;
-  const downloadUrl = assetUrl ? `${assetUrl}/download` : null;
+  const expectedAssetUrl = safeAssetId ? learningAssetUrl(safeAssetId) : null;
+  const assetUrl = providedAssetUrl === expectedAssetUrl ? expectedAssetUrl : null;
+  const expectedDownloadUrl = expectedAssetUrl ? `${expectedAssetUrl}/download` : null;
+  const downloadUrl = providedDownloadUrl === expectedDownloadUrl ? expectedDownloadUrl : null;
   const isPdf = mimeType === "application/pdf";
   const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null);
   const [currentPage, setCurrentPage] = useState(page ?? 1);
@@ -247,7 +259,7 @@ export function LearningSourceViewer({ assetId, mimeType, title, page, onPageCha
     }
   };
 
-  if (!safeAssetId || !assetUrl || !downloadUrl) {
+  if (!safeAssetId || !assetUrl) {
     return (
       <div className="learning-state learning-state-error">
         <FileWarning aria-hidden="true" />
@@ -262,9 +274,11 @@ export function LearningSourceViewer({ assetId, mimeType, title, page, onPageCha
       <div className="learning-source-viewer">
         <div className="learning-source-actions">
           <span>Illustration</span>
-          <a className="secondary-button" href={downloadUrl}>
-            <Download size={16} /> Télécharger
-          </a>
+          {downloadUrl && (
+            <a className="secondary-button" href={downloadUrl}>
+              <Download size={16} /> Télécharger
+            </a>
+          )}
         </div>
         <img className="learning-source-image" src={assetUrl} alt={title} />
       </div>
@@ -274,10 +288,12 @@ export function LearningSourceViewer({ assetId, mimeType, title, page, onPageCha
   if (!isPdf) {
     return (
       <div className="learning-state learning-state-empty">
-        <p>Ce format doit être téléchargé pour être consulté.</p>
-        <a className="secondary-button" href={downloadUrl}>
-          <Download size={16} /> Télécharger
-        </a>
+        <p>Ce format ne dispose pas encore d'un lecteur intégré.</p>
+        {downloadUrl && (
+          <a className="secondary-button" href={downloadUrl}>
+            <Download size={16} /> Télécharger
+          </a>
+        )}
       </div>
     );
   }
@@ -289,9 +305,11 @@ export function LearningSourceViewer({ assetId, mimeType, title, page, onPageCha
         <FileWarning aria-hidden="true" />
         <h2>{copy.title}</h2>
         <p>{copy.message}</p>
-        <a className="secondary-button" href={downloadUrl}>
-          <Download size={16} /> Télécharger le document
-        </a>
+        {downloadUrl && (
+          <a className="secondary-button" href={downloadUrl}>
+            <Download size={16} /> Télécharger le document
+          </a>
+        )}
       </div>
     );
   }
@@ -375,9 +393,11 @@ export function LearningSourceViewer({ assetId, mimeType, title, page, onPageCha
           <button type="button" onClick={() => void copyExactLink()} aria-label="Copier le lien de cette page">
             <Link2 aria-hidden="true" />
           </button>
-          <a href={downloadUrl} aria-label="Télécharger le document" title="Télécharger">
-            <Download aria-hidden="true" />
-          </a>
+          {downloadUrl && (
+            <a href={downloadUrl} aria-label="Télécharger le document" title="Télécharger">
+              <Download aria-hidden="true" />
+            </a>
+          )}
         </div>
       </div>
       <form className="learning-pdf-search" role="search" onSubmit={(event) => void searchDocument(event)}>

@@ -47,7 +47,10 @@ export interface LearningCatalogNode {
   reader_visibility: LearningReaderVisibility;
   document_type?: "pdf" | "image" | "download" | null;
   page_count?: number | null;
+  source_serving_allowed?: boolean;
   download_allowed?: boolean;
+  asset_url?: string | null;
+  download_url?: string | null;
   review_status: LearningReviewStatus;
   revision: string;
   position: number;
@@ -56,8 +59,8 @@ export interface LearningCatalogNode {
 export type LearningCatalogItem = LearningCatalogNode;
 
 export interface LearningCatalog {
-  schema_version: 1 | 2;
-  release_mode: "published" | "private_preview";
+  schema_version: 1 | 2 | 3;
+  release_mode: "published" | "private_preview" | "personal_library";
   release_id: string;
   catalog_version: string;
   audience: string;
@@ -131,6 +134,8 @@ export interface LearningSource {
   rights_label: string;
   asset_url: string | null;
   source_serving_allowed?: boolean;
+  download_allowed: boolean;
+  download_url: string | null;
 }
 
 export interface LearningSourceReference {
@@ -145,6 +150,8 @@ export interface LearningSourceReference {
   source_url: string;
   asset_url: string | null;
   source_serving_allowed?: boolean;
+  download_allowed: boolean;
+  download_url: string | null;
 }
 
 export interface LearningSearchResult {

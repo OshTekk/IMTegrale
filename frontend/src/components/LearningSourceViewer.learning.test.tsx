@@ -19,6 +19,8 @@ describe("LearningSourceViewer protected images", () => {
       <main aria-label="[FICTIF] Source de démonstration">
         <LearningSourceViewer
           assetId="asset.fictif-image"
+          assetUrl="/api/v1/learning/assets/asset.fictif-image"
+          downloadUrl="/api/v1/learning/assets/asset.fictif-image/download"
           mimeType="image/png"
           title="[FICTIF] Illustration technique"
           page={null}
@@ -35,6 +37,25 @@ describe("LearningSourceViewer protected images", () => {
     await expectNoSeriousLearningViolations(container);
   });
 
+  it("keeps an inline document visible without presenting a forbidden download", async () => {
+    const { container } = render(
+      <main aria-label="[FICTIF] Source consultable">
+        <LearningSourceViewer
+          assetId="asset.fictif-inline"
+          assetUrl="/api/v1/learning/assets/asset.fictif-inline"
+          downloadUrl={null}
+          mimeType="image/png"
+          title="[FICTIF] Illustration consultable"
+          page={null}
+        />
+      </main>,
+    );
+
+    expect(await screen.findByRole("img", { name: "[FICTIF] Illustration consultable" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: /Télécharger/ })).toBeNull();
+    await expectNoSeriousLearningViolations(container);
+  });
+
   it("rejects a traversal asset ID before any request", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
@@ -42,6 +63,8 @@ describe("LearningSourceViewer protected images", () => {
       <main aria-label="[FICTIF] Source invalide">
         <LearningSourceViewer
           assetId="../FICTIF-outside"
+          assetUrl="/api/v1/learning/assets/../FICTIF-outside"
+          downloadUrl={null}
           mimeType="image/png"
           title="[FICTIF] Illustration refusée"
           page={null}

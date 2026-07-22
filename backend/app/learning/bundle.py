@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from heapq import nsmallest
 from pathlib import Path
 from types import MappingProxyType
-from typing import BinaryIO
+from typing import BinaryIO, Literal
 
 from app.config import Settings, get_settings
 from app.learning.schemas import (
@@ -41,6 +41,7 @@ _READ_CHUNK_BYTES = 1024 * 1024
 _NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 _DIRECTORY = getattr(os, "O_DIRECTORY", 0)
 _NONBLOCK = getattr(os, "O_NONBLOCK", 0)
+AssetAction = Literal["inline", "download"]
 
 
 class LearningCatalogUnavailable(RuntimeError):
@@ -171,22 +172,46 @@ class LearningBundleSnapshot:
         self,
         source_id: str,
         audience_id: str,
+        *,
+        action: AssetAction,
     ) -> AssetMetadata | None:
-        """Resolve a servable source asset without weakening metadata-only sources."""
+        """Resolve a source asset only when its rights allow the requested action."""
 
         source = self.get_source(source_id, audience_id)
         if source is None or source.asset_id is None:
             return None
-        rights = self.get_rights(source.rights_id, audience_id)
-        if rights is None or not rights.source_serving_allowed:
-            return None
-        asset = self.get_asset(source.asset_id, audience_id)
+        asset = self.get_asset_for_action(source.asset_id, audience_id, action=action)
         if asset is None or asset.kind != "pdf":
             return None
         return asset
 
-    def open_asset(self, asset_id: str, audience_id: str) -> OpenedLearningAsset:
+    def get_asset_for_action(
+        self,
+        asset_id: str,
+        audience_id: str,
+        *,
+        action: AssetAction,
+    ) -> AssetMetadata | None:
+        if action not in {"inline", "download"}:
+            return None
         asset = self.get_asset(asset_id, audience_id)
+        if asset is None:
+            return None
+        rights = self.get_rights(asset.rights_id, audience_id)
+        if rights is None or not rights.source_serving_allowed:
+            return None
+        if action == "download" and not rights.download_allowed:
+            return None
+        return asset
+
+    def open_asset(
+        self,
+        asset_id: str,
+        audience_id: str,
+        *,
+        action: AssetAction,
+    ) -> OpenedLearningAsset:
+        asset = self.get_asset_for_action(asset_id, audience_id, action=action)
         if asset is None:
             raise KeyError
         checksum = self._checksum_by_file_id[asset.file_id]
@@ -215,11 +240,17 @@ class LearningBundleSnapshot:
             if descriptor is not None:
                 os.close(descriptor)
 
-    def open_source(self, source_id: str, audience_id: str) -> OpenedLearningAsset:
-        asset = self.get_source_asset(source_id, audience_id)
+    def open_source(
+        self,
+        source_id: str,
+        audience_id: str,
+        *,
+        action: AssetAction,
+    ) -> OpenedLearningAsset:
+        asset = self.get_source_asset(source_id, audience_id, action=action)
         if asset is None:
             raise KeyError
-        return self.open_asset(asset.id, audience_id)
+        return self.open_asset(asset.id, audience_id, action=action)
 
     def search(
         self,
@@ -510,6 +541,25 @@ def _validate_search_index(manifest: LearningBundleManifest, search_index: Searc
         raise LearningCatalogUnavailable()
     node_by_id = {node.id: node for node in manifest.catalog}
     content_by_id = {content.id: content for content in manifest.content}
+    technical_identifiers = {
+        manifest.release_id,
+        manifest.search_index.file_id,
+        manifest.search_index.revision,
+        *(audience.id for audience in manifest.audiences),
+        *(document.id for document in search_index.documents),
+        *(node.id for node in manifest.catalog),
+        *(node.revision for node in manifest.catalog),
+        *(content.id for content in manifest.content),
+        *(content.frontmatter.revision for content in manifest.content),
+        *(asset.id for asset in manifest.assets),
+        *(asset.file_id for asset in manifest.assets),
+        *(asset.filename for asset in manifest.assets if asset.filename is not None),
+        *(source.id for source in manifest.sources),
+        *(source.revision for source in manifest.sources),
+        *(rights.id for rights in manifest.rights),
+        *(checksum.file_id for checksum in manifest.checksums),
+        *(checksum.path for checksum in manifest.checksums),
+    }
     for document in search_index.documents:
         node = node_by_id.get(document.catalog_node_id)
         if node is None:
@@ -520,6 +570,13 @@ def _validate_search_index(manifest: LearningBundleManifest, search_index: Searc
         expected_target_id = node.content_id or node.source_id or node.id
         if document.target_id != expected_target_id:
             raise LearningCatalogUnavailable()
+        if search_index.schema_version == 3:
+            excerpt = document.reader_excerpt
+            if excerpt is None or document.title != node.title:
+                raise LearningCatalogUnavailable()
+            normalized_excerpt = excerpt.casefold()
+            if any(identifier.casefold() in normalized_excerpt for identifier in technical_identifiers):
+                raise LearningCatalogUnavailable()
         if node.content_id is not None:
             content = content_by_id.get(node.content_id)
             if content is None or audiences != set(content.frontmatter.audience_ids):
@@ -541,7 +598,11 @@ def _prepare_search_documents(
                 document=document,
                 normalized_title=normalized_title,
                 normalized_haystack=(f"{normalized_title} {_normalize_search_text(document.body)}"),
-                excerpt=_search_excerpt(document.body),
+                excerpt=(
+                    document.reader_excerpt
+                    if search_index.schema_version == 3 and document.reader_excerpt is not None
+                    else _legacy_search_excerpt(document.body)
+                ),
                 entity_type=node.kind,
                 ue_id=ancestry.ue_id,
                 module_id=ancestry.module_id,
@@ -799,7 +860,9 @@ def _normalize_search_text(value: str) -> str:
     return " ".join("".join(character if character.isalnum() else " " for character in folded).split())
 
 
-def _search_excerpt(value: str) -> str:
+def _legacy_search_excerpt(value: str) -> str:
+    """Temporary v1/v2 fallback; schema v3 must provide reader_excerpt."""
+
     compact = " ".join(value.split())
     return f"{compact[:496]}…" if len(compact) > 497 else compact
 

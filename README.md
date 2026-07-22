@@ -43,7 +43,7 @@ PASS ne fournit pas ici de délégation OAuth. Le worker doit donc pouvoir déch
 
 Le dépôt public fournit uniquement le moteur générique : modèle de bundle versionné, validation, API protégée, renderer sûr, interface et catalogue de démonstration explicitement fictif. Les documents sources, catalogues réels, corrections, illustrations, index et releases compilées appartiennent au dépôt privé `IMTegrale-Parcours-Private` et à son volume de production séparé. Ils ne doivent jamais être copiés dans ce dépôt, ses fixtures, ses logs ou ses artefacts frontend.
 
-Le mode lecteur masque les statuts, révisions, audiences techniques et identifiants de release. Un mode Revue facultatif regroupe ces métadonnées dans un panneau discret pour une session propriétaire primaire ; il reste une aide UX et jamais un contrôle d'accès. Les bundles v1 restent compatibles pendant la migration vers le schéma v2, qui sépare explicitement section éditoriale et visibilité lecteur. Le [guide de migration v1 vers v2](docs/presentation-schema-v2.md) décrit le contrat exact.
+Le mode lecteur masque les statuts, révisions, audiences techniques et identifiants de release. Une action secondaire « Informations de vérification » regroupe ces métadonnées pour une session propriétaire primaire ; elle reste une aide UX et jamais un contrôle d'accès. Les bundles v1 et v2 restent compatibles. Le schéma v3 ajoute une bibliothèque strictement personnelle, des droits distincts pour consultation et téléchargement, ainsi qu'un extrait lecteur indépendant du corpus de recherche. Les guides [v1 vers v2](docs/presentation-schema-v2.md) et [v2 vers v3](docs/presentation-schema-v3.md) décrivent ces contrats.
 
 Les formules sont rendues par KaTeX auto-hébergé en mode strict et accessible. Les PDF sont consultés avec PDF.js et un worker local, tous deux chargés à la demande ; leurs octets restent servis par l'API authentifiée avec support HTTP Range, sans chemin de fichier fourni par le navigateur.
 
@@ -103,7 +103,7 @@ pnpm audit --prod
 - [simulations GPA et simulations de notes privées](docs/simulations.md) ;
 - [agenda INPASS et calendrier de formation FIP](docs/calendars.md) ;
 - [relevé académique personnel et transparence](docs/academic-report.md) ;
-- [format et migration des bundles Parcours v1/v2](docs/presentation-schema-v2.md) ;
+- [présentation des bundles Parcours v1/v2](docs/presentation-schema-v2.md) et [bibliothèque personnelle v3](docs/presentation-schema-v3.md) ;
 - [données, consentements et cadre d'utilisation](docs/data-and-usage.md) ;
 - [actualisation automatique](docs/automatic-sync.md) et [synchronisation manuelle](docs/manual-sync.md) ;
 - [exploitation et observabilité](docs/operations.md) et [politique d'arrondi académique](docs/academic-rounding.md) ;

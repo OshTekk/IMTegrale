@@ -24,6 +24,7 @@ CATALOG_KINDS = {
     "source",
 }
 SOURCE_BYTES = b"FICTITIOUS-NON-DOCUMENT-SOURCE-BYTES\n"
+SECOND_SOURCE_BYTES = b"FICTITIOUS-SECOND-NON-DOCUMENT-SOURCE-BYTES\n"
 IMAGE_BYTES = b"FICTITIOUS-NON-IMAGE-ASSET-BYTES\n"
 
 BundleDict = dict[str, Any]
@@ -143,6 +144,166 @@ def write_fictitious_metadata_only_preview_bundle(
     for asset_path in assets_dir.iterdir():
         asset_path.unlink()
     assets_dir.rmdir()
+    return release
+
+
+def write_fictitious_personal_library_bundle(
+    parent: Path,
+    release_id: str = "fictitious-personal-library-a",
+    *,
+    audience_id: str = "personal:fictive-owner",
+    manifest_mutator: BundleMutator | None = None,
+    search_mutator: BundleMutator | None = None,
+) -> Path:
+    """Create a schema-v3 personal library containing only synthetic material."""
+
+    release = write_fictitious_learning_bundle(
+        parent,
+        release_id,
+        audience_id=audience_id,
+    )
+    manifest = json.loads((release / "manifest.json").read_bytes())
+    search_payload = json.loads((release / "search" / "index.json").read_bytes())
+
+    manifest["schema_version"] = 3
+    manifest["release_mode"] = "personal_library"
+    manifest["search_index"]["format"] = "json-v3"
+    manifest["audiences"][0].update(
+        {
+            "label": "[FICTIF] Bibliothèque personnelle",
+            "curriculum": "Cursus entièrement fictif",
+            "promotion": "2099 fictive",
+            "level_label": "Niveau fictif",
+        }
+    )
+    sections = {
+        "chapter": "course",
+        "lesson": "course",
+        "exercise": "practice",
+        "pc_td": "practice",
+        "past_exam": "exam",
+        "concept": "glossary",
+        "source": "sources",
+    }
+    for node in manifest["catalog"]:
+        node["review_status"] = "reviewed"
+        if node["kind"] in sections:
+            node["section"] = sections[node["kind"]]
+            node["reader_visibility"] = "secondary" if node["kind"] in {"concept", "source"} else "primary"
+    for document in manifest["content"]:
+        document["frontmatter"]["review_status"] = "reviewed"
+
+    manifest["rights"][0].update(
+        {
+            "publication_allowed": False,
+            "private_preview_allowed": False,
+            "personal_use_allowed": True,
+            "source_serving_allowed": True,
+            "download_allowed": True,
+            "rights_holder": None,
+            "basis": "requester_private_processing",
+        }
+    )
+    manifest["catalog"].append(
+        {
+            "id": "source-node-inline-fiction",
+            "kind": "source",
+            "title": "[FICTIF] Mémo consultable",
+            "audience_ids": [audience_id],
+            "parent_id": "module-fiction",
+            "content_id": None,
+            "source_id": "source-inline-fiction",
+            "prerequisite_ids": [],
+            "difficulty": None,
+            "estimated_minutes": None,
+            "section": "sources",
+            "reader_visibility": "secondary",
+            "review_status": "reviewed",
+            "revision": "fictitious-r1",
+            "position": len(manifest["catalog"]),
+        }
+    )
+    manifest["rights"].append(
+        {
+            "id": "rights-inline-fiction",
+            "publication_allowed": False,
+            "private_preview_allowed": False,
+            "personal_use_allowed": True,
+            "source_serving_allowed": True,
+            "download_allowed": False,
+            "audience_ids": [audience_id],
+            "rights_holder": None,
+            "basis": "requester_private_processing",
+            "reviewed_at": "2026-07-19T08:00:00Z",
+            "note": "Politique exclusivement fictive pour les tests publics.",
+        }
+    )
+    manifest["assets"].append(
+        {
+            "id": "asset-inline-fiction",
+            "file_id": "file-inline-fiction",
+            "rights_id": "rights-inline-fiction",
+            "kind": "pdf",
+            "audience_ids": [audience_id],
+            "media_type": "application/pdf",
+            "filename": "memo-fictif.pdf",
+            "alt_text": "[FICTIF] Mémo consultable",
+        }
+    )
+    manifest["sources"].append(
+        {
+            "id": "source-inline-fiction",
+            "title": "[FICTIF] Mémo consultable",
+            "audience_ids": [audience_id],
+            "asset_id": "asset-inline-fiction",
+            "rights_id": "rights-inline-fiction",
+            "revision": "fictitious-r1",
+            "pages": [{"page": 1, "label": "[FICTIF] Page unique"}],
+        }
+    )
+
+    node_title_by_id = {node["id"]: node["title"] for node in manifest["catalog"]}
+    excerpts = {
+        "search-document-fiction": "Une relation fictive illustre une méthode de lecture accessible.",
+        "search-exercise-fiction": "Un exercice inventé propose une progression guidée.",
+        "search-source-fiction": "Un carnet synthétique accompagne la démonstration.",
+    }
+    search_payload["schema_version"] = 3
+    for document in search_payload["documents"]:
+        document["title"] = node_title_by_id[document["catalog_node_id"]]
+        document["reader_excerpt"] = excerpts[document["id"]]
+    search_payload["documents"].append(
+        {
+            "id": "search-source-inline-fiction",
+            "catalog_node_id": "source-node-inline-fiction",
+            "target_id": "source-inline-fiction",
+            "audience_ids": [audience_id],
+            "title": "[FICTIF] Mémo consultable",
+            "body": "Une nébuleuse indexable reste réservée au corpus de recherche fictif.",
+            "reader_excerpt": "Un mémo entièrement fictif complète la bibliothèque personnelle.",
+        }
+    )
+    if search_mutator is not None:
+        search_mutator(search_payload)
+    search_bytes = json_bytes(search_payload)
+    manifest["search_index"]["document_count"] = len(search_payload["documents"])
+    manifest["checksums"] = [
+        checksum
+        for checksum in manifest["checksums"]
+        if checksum["file_id"] != manifest["search_index"]["file_id"]
+    ]
+    manifest["checksums"].extend(
+        [
+            _checksum("file-inline-fiction", "assets/source-inline-fiction.bin", SECOND_SOURCE_BYTES),
+            _checksum("file-search-fiction", "search/index.json", search_bytes),
+        ]
+    )
+    if manifest_mutator is not None:
+        manifest_mutator(manifest)
+
+    (release / "assets" / "source-inline-fiction.bin").write_bytes(SECOND_SOURCE_BYTES)
+    (release / "search" / "index.json").write_bytes(search_bytes)
+    (release / "manifest.json").write_bytes(json_bytes(manifest))
     return release
 
 

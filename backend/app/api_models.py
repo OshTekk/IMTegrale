@@ -851,14 +851,17 @@ class LearningCatalogNodeResponse(ApiModel):
     reader_visibility: ReaderVisibility
     document_type: Literal["pdf", "image", "download"] | None = None
     page_count: int | None = None
+    source_serving_allowed: bool = False
     download_allowed: bool = False
+    asset_url: str | None = None
+    download_url: str | None = None
     review_status: ReviewStatus
     revision: str
     position: int
 
 
 class LearningCatalogResponse(ApiModel):
-    schema_version: Literal[1, 2]
+    schema_version: Literal[1, 2, 3]
     release_mode: ReleaseMode
     release_id: str
     catalog_version: str
@@ -1025,8 +1028,10 @@ class LearningSourceResponse(ApiModel):
     filename: str | None
     page_count: int
     source_serving_allowed: bool
+    download_allowed: bool
     rights_label: str
     asset_url: str | None
+    download_url: str | None
 
 
 class LearningSourceReferenceResponse(ApiModel):
@@ -1040,7 +1045,9 @@ class LearningSourceReferenceResponse(ApiModel):
     label: str | None
     source_url: str
     source_serving_allowed: bool
+    download_allowed: bool
     asset_url: str | None
+    download_url: str | None
 
 
 class LearningSearchResultResponse(ApiModel):

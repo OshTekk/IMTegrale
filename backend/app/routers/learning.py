@@ -164,12 +164,33 @@ def _catalog_node_view(context: LearningAccessContext, node: object) -> dict:
     source = context.bundle.get_source(view["source_id"], context.audience)
     if source is None:
         return view
-    asset = context.bundle.get_source_asset(source.id, context.audience)
+    inline_asset = context.bundle.get_source_asset(
+        source.id,
+        context.audience,
+        action="inline",
+    )
+    download_asset = context.bundle.get_source_asset(
+        source.id,
+        context.audience,
+        action="download",
+    )
+    asset_id = _object_value(source, "asset_id")
     view.update(
         {
-            "document_type": _object_value(asset, "kind"),
+            "document_type": _object_value(inline_asset, "kind"),
             "page_count": source.page_count,
-            "download_allowed": asset is not None,
+            "source_serving_allowed": inline_asset is not None,
+            "download_allowed": download_asset is not None,
+            "asset_url": (
+                f"/api/v1/learning/assets/{asset_id}"
+                if inline_asset is not None and isinstance(asset_id, str)
+                else None
+            ),
+            "download_url": (
+                f"/api/v1/learning/assets/{asset_id}/download"
+                if download_asset is not None and isinstance(asset_id, str)
+                else None
+            ),
         }
     )
     return view
@@ -502,7 +523,11 @@ def _asset_response(
     range_header: str | None,
 ) -> StreamingResponse:
     try:
-        opened = context.bundle.open_asset(asset_id, context.audience)
+        opened = context.bundle.open_asset(
+            asset_id,
+            context.audience,
+            action="download" if attachment else "inline",
+        )
     except KeyError as exc:
         raise _not_found() from exc
     except LearningCatalogUnavailable as exc:
@@ -521,9 +546,7 @@ def _asset_response(
     ascii_name = filename.encode("ascii", "ignore").decode("ascii") or "document"
     headers = {
         "Accept-Ranges": "bytes",
-        "Content-Length": str(
-            opened.size_bytes if byte_range is None else byte_range[1] - byte_range[0] + 1
-        ),
+        "Content-Length": str(opened.size_bytes if byte_range is None else byte_range[1] - byte_range[0] + 1),
         "Content-Disposition": (
             f"{disposition}; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"
         ),
@@ -586,12 +609,24 @@ def learning_source(
     if not isinstance(dumped, dict):
         raise _not_found()
     asset_id = dumped.get("asset_id")
-    asset = context.bundle.get_source_asset(source_id, context.audience)
+    inline_asset = context.bundle.get_source_asset(
+        source_id,
+        context.audience,
+        action="inline",
+    )
+    download_asset = context.bundle.get_source_asset(
+        source_id,
+        context.audience,
+        action="download",
+    )
     rights_id = dumped.get("rights_id")
     rights = context.bundle.get_rights(rights_id, context.audience) if isinstance(rights_id, str) else None
     rights_holder = _object_value(rights, "rights_holder")
+    rights_basis = _object_value(rights, "basis")
     rights_label = (
-        f"{_object_value(rights, 'basis')} · {rights_holder}"
+        "Usage personnel"
+        if rights_basis == "requester_private_processing" and inline_asset is not None
+        else f"{rights_basis} · {rights_holder}"
         if rights is not None and isinstance(rights_holder, str)
         else "Document source non diffusé"
         if rights is not None
@@ -600,14 +635,22 @@ def learning_source(
     return {
         "release_id": context.bundle.release_id,
         **{key: value for key, value in dumped.items() if key not in {"audience_ids", "rights_id"}},
-        "kind": _object_value(asset, "kind"),
-        "mime_type": _object_value(asset, "media_type"),
-        "filename": _object_value(asset, "filename"),
+        "kind": _object_value(inline_asset, "kind"),
+        "mime_type": _object_value(inline_asset, "media_type"),
+        "filename": _object_value(inline_asset, "filename"),
         "page_count": len(dumped.get("pages", [])),
-        "source_serving_allowed": asset is not None,
+        "source_serving_allowed": inline_asset is not None,
+        "download_allowed": download_asset is not None,
         "rights_label": rights_label,
         "asset_url": (
-            f"/api/v1/learning/assets/{asset_id}" if asset is not None and isinstance(asset_id, str) else None
+            f"/api/v1/learning/assets/{asset_id}"
+            if inline_asset is not None and isinstance(asset_id, str)
+            else None
+        ),
+        "download_url": (
+            f"/api/v1/learning/assets/{asset_id}/download"
+            if download_asset is not None and isinstance(asset_id, str)
+            else None
         ),
     }
 
@@ -644,7 +687,16 @@ def learning_source_reference(
     if not isinstance(source_dump, dict):
         raise _not_found()
     asset_id = source_dump.get("asset_id")
-    asset = context.bundle.get_source_asset(source_id, context.audience)
+    inline_asset = context.bundle.get_source_asset(
+        source_id,
+        context.audience,
+        action="inline",
+    )
+    download_asset = context.bundle.get_source_asset(
+        source_id,
+        context.audience,
+        action="download",
+    )
     return {
         "release_id": context.bundle.release_id,
         "id": reference_id,
@@ -655,9 +707,17 @@ def learning_source_reference(
         "end_page": reference.get("end_page"),
         "label": reference.get("label"),
         "source_url": f"/api/v1/learning/sources/{source_id}",
-        "source_serving_allowed": asset is not None,
+        "source_serving_allowed": inline_asset is not None,
+        "download_allowed": download_asset is not None,
         "asset_url": (
-            f"/api/v1/learning/assets/{asset_id}" if asset is not None and isinstance(asset_id, str) else None
+            f"/api/v1/learning/assets/{asset_id}"
+            if inline_asset is not None and isinstance(asset_id, str)
+            else None
+        ),
+        "download_url": (
+            f"/api/v1/learning/assets/{asset_id}/download"
+            if download_asset is not None and isinstance(asset_id, str)
+            else None
         ),
     }
 

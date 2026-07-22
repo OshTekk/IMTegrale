@@ -1,4 +1,4 @@
-import { Eye, EyeOff } from "lucide-react";
+import { EllipsisVertical, Eye, EyeOff } from "lucide-react";
 import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
 import { isPrimaryOwnerSession } from "../lib/auth";
 import type { Session } from "../types";
@@ -29,20 +29,21 @@ export function useLearningReviewMode() {
   return useContext(LearningReviewContext);
 }
 
-export function LearningReviewToggle() {
+export function LearningReviewMenu() {
   const { canReview, enabled, setEnabled } = useLearningReviewMode();
   if (!canReview) return null;
   return (
-    <button
-      className="learning-review-toggle"
-      type="button"
-      aria-pressed={enabled}
-      title="Afficher les métadonnées de fabrication"
-      onClick={() => setEnabled(!enabled)}
-    >
-      {enabled ? <EyeOff size={17} aria-hidden="true" /> : <Eye size={17} aria-hidden="true" />}
-      Revue
-    </button>
+    <details className="learning-review-menu">
+      <summary aria-label="Options Parcours" title="Options Parcours">
+        <EllipsisVertical size={18} aria-hidden="true" />
+      </summary>
+      <div>
+        <button type="button" aria-pressed={enabled} onClick={() => setEnabled(!enabled)}>
+          {enabled ? <EyeOff size={17} aria-hidden="true" /> : <Eye size={17} aria-hidden="true" />}
+          {enabled ? "Masquer les informations de vérification" : "Informations de vérification"}
+        </button>
+      </div>
+    </details>
   );
 }
 

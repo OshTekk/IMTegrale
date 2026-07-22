@@ -481,7 +481,8 @@ describe("LearningPage eligible catalog and content", () => {
     expect(screen.queryByText("fictive-r1")).toBeNull();
     expect(screen.queryByText(eligibleLearning.release_id)).toBeNull();
     expect(screen.queryByText("Publié")).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Revue" }));
+    await user.click(screen.getByLabelText("Options Parcours"));
+    await user.click(screen.getByRole("button", { name: "Informations de vérification" }));
     const reviewPanel = screen.getByRole("complementary", { name: "Métadonnées de revue" });
     expect(reviewPanel.textContent).toContain("Version de travail");
     expect(reviewPanel.textContent).toContain("fictive-r1");

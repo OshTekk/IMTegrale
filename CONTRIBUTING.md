@@ -45,10 +45,12 @@ catalogue synthétique marqué `DÉMO FICTIVE` et bloque toute requête HTTP ver
 origine externe. N'y ajoutez jamais d'export, de capture ou d'identité provenant
 d'un environnement réel. Les rapports et traces locaux restent ignorés par Git.
 
-Toute évolution du bundle doit conserver la compatibilité documentée dans
-[`docs/presentation-schema-v2.md`](docs/presentation-schema-v2.md). Une release v2 exige
-un index `json-v2` et des champs de présentation explicites ; une release v1
-continue à utiliser les valeurs dérivées de `kind` jusqu'à son remplacement.
+Toute évolution du bundle doit conserver la compatibilité documentée dans les
+guides [v1 vers v2](docs/presentation-schema-v2.md) et [v2 vers
+v3](docs/presentation-schema-v3.md). Une release v3 exige un index `json-v3`,
+une politique de droits entièrement explicite et un `reader_excerpt` propre.
+Les releases v1/v2 continuent à charger leur extrait legacy jusqu'à leur
+remplacement.
 
 ## Pull requests
 

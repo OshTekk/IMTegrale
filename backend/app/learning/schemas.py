@@ -23,7 +23,7 @@ StableId = Annotated[
     ),
 ]
 Sha256Digest = Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
-SchemaVersion = Annotated[int, Field(strict=True, ge=1, le=2)]
+SchemaVersion = Annotated[int, Field(strict=True, ge=1, le=3)]
 
 CatalogNodeKind = Literal[
     "audience",
@@ -41,7 +41,7 @@ CatalogNodeKind = Literal[
     "past_exam",
     "source",
 ]
-ReleaseMode = Literal["published", "private_preview"]
+ReleaseMode = Literal["published", "private_preview", "personal_library"]
 ReviewStatus = Literal[
     "draft",
     "in_review",
@@ -79,6 +79,34 @@ _RAW_HTML_RE = re.compile(r"<\s*(?:!doctype|/?[a-z][^>]*)>", re.IGNORECASE)
 _UNTRUSTED_MATH_COMMAND_RE = re.compile(
     r"\\(?:href|url|includegraphics|htmlClass|htmlData|htmlId|htmlStyle)\b",
     re.IGNORECASE,
+)
+_READER_MANUFACTURING_RE = re.compile(
+    r"(?i)\b(?:brouillon\s+priv[eé]|private[ _-]?preview|version\s+de\s+travail|"
+    r"review_status|release_id|schema_version|catalog_node_id|asset_id|file_id|"
+    r"rights_id|audience_id|revision\s+technique|[eé]tat\s+du\s+validateur|"
+    r"draft|in[ _-]?review|reviewed|published|retired)\b"
+)
+_READER_TITLE_PREFIX_RE = re.compile(
+    r"(?i)^\s*(?:brouillon(?:\s+priv[eé])?|private[ _-]?preview|version\s+de\s+travail|"
+    r"en\s+revue|relu|reviewed|publi[eé]|published|retir[eé]|retired|draft|in[ _-]?review)"
+    r"\s*[—–:|\-]\s*"
+)
+_MISSING_READER_TITLE_RE = re.compile(
+    r"(?i)^(?:titre|title)\s+(?:non\s+renseign[eé]e?|manquant|indisponible)$"
+)
+_READER_PATH_RE = re.compile(
+    r"(?i)(?<![a-z0-9_.-])(?:\.{1,2}/|[a-z]:\\|(?:[a-z0-9_.-]+/)+[a-z0-9_.-]+)"
+    r"(?![a-z0-9_./\\-])"
+)
+_RAW_LATEX_RE = re.compile(r"\\|\${1,2}|(?:^|\s)\S*[_^]\{?[a-z0-9]", re.IGNORECASE)
+_V3_RIGHTS_FIELDS = frozenset(
+    {
+        "publication_allowed",
+        "private_preview_allowed",
+        "personal_use_allowed",
+        "source_serving_allowed",
+        "download_allowed",
+    }
 )
 
 
@@ -131,6 +159,23 @@ def _validate_math_source(value: str) -> str:
     if depth:
         raise ValueError("math grouping is unbalanced")
     return value
+
+
+def _safe_reader_excerpt(value: str) -> str:
+    compact = " ".join(value.split())
+    compact = _safe_display_text(compact)
+    if _READER_MANUFACTURING_RE.search(compact):
+        raise ValueError("reader excerpt contains manufacturing metadata")
+    if _READER_PATH_RE.search(compact):
+        raise ValueError("reader excerpt contains a file path")
+    if _RAW_LATEX_RE.search(compact):
+        raise ValueError("reader excerpt contains raw LaTeX")
+    return compact
+
+
+def _reader_title_is_clean(value: str) -> bool:
+    compact = " ".join(value.split())
+    return not _READER_TITLE_PREFIX_RE.search(compact) and not _MISSING_READER_TITLE_RE.fullmatch(compact)
 
 
 class StrictBundleModel(BaseModel):
@@ -501,7 +546,9 @@ class RightsMetadata(StrictBundleModel):
     id: StableId
     publication_allowed: bool
     private_preview_allowed: bool = False
+    personal_use_allowed: bool = False
     source_serving_allowed: bool = True
+    download_allowed: bool = False
     audience_ids: AudienceIdTuple
     rights_holder: str | None = Field(default=None, min_length=1, max_length=240)
     basis: Literal[
@@ -521,7 +568,13 @@ class RightsMetadata(StrictBundleModel):
         return _safe_display_text(value) if value is not None else None
 
     @model_validator(mode="after")
-    def holder_matches_basis(self) -> RightsMetadata:
+    def policy_is_consistent(self) -> RightsMetadata:
+        # Legacy v1/v2 bundles exposed every servable asset through both routes.
+        # Schema v3 requires this field explicitly in the manifest.
+        if "download_allowed" not in self.model_fields_set:
+            object.__setattr__(self, "download_allowed", self.source_serving_allowed)
+        if self.download_allowed and not self.source_serving_allowed:
+            raise ValueError("download rights require inline source serving")
         if self.basis == "requester_private_processing":
             if self.rights_holder is not None:
                 raise ValueError("private processing cannot assert a rights holder")
@@ -565,7 +618,7 @@ class SourceMetadata(StrictBundleModel):
 
 class SearchIndexMetadata(StrictBundleModel):
     file_id: StableId
-    format: Literal["json-v1", "json-v2"]
+    format: Literal["json-v1", "json-v2", "json-v3"]
     language: Literal["fr"]
     revision: str = Field(min_length=1, max_length=64)
     document_count: int = Field(ge=0, le=20_000)
@@ -583,11 +636,17 @@ class SearchDocument(StrictBundleModel):
     audience_ids: AudienceIdTuple
     title: str = Field(min_length=1, max_length=240)
     body: str = Field(min_length=1, max_length=200_000)
+    reader_excerpt: str | None = Field(default=None, min_length=1, max_length=500)
 
     @field_validator("title", "body")
     @classmethod
     def safe_text(cls, value: str) -> str:
         return _safe_display_text(value)
+
+    @field_validator("reader_excerpt")
+    @classmethod
+    def safe_reader_excerpt(cls, value: str | None) -> str | None:
+        return _safe_reader_excerpt(value) if value is not None else None
 
 
 class SearchResult(StrictBundleModel):
@@ -687,15 +746,26 @@ class LearningBundleManifest(StrictBundleModel):
 
         if self.search_index.format != f"json-v{self.schema_version}":
             raise ValueError("search index format must match the bundle schema version")
-        if self.schema_version == 2:
+        if self.schema_version >= 2:
             for node in self.catalog:
                 if node.kind in _DEFAULT_SECTION_BY_KIND and not {
                     "section",
                     "reader_visibility",
                 }.issubset(node.model_fields_set):
-                    raise ValueError("schema v2 presentation fields must be explicit")
+                    raise ValueError("schema v2/v3 presentation fields must be explicit")
 
-        expected_review_status = "private_preview" if self.release_mode == "private_preview" else "published"
+        if self.schema_version == 3 and any(
+            not _V3_RIGHTS_FIELDS.issubset(rights.model_fields_set) for rights in self.rights
+        ):
+            raise ValueError("schema v3 rights policy fields must be explicit")
+        if self.schema_version == 3 and any(not _reader_title_is_clean(node.title) for node in self.catalog):
+            raise ValueError("schema v3 reader titles must not contain manufacturing status")
+
+        expected_review_status = {
+            "published": "published",
+            "private_preview": "private_preview",
+            "personal_library": "reviewed",
+        }[self.release_mode]
         if self.release_mode == "private_preview":
             if any(not audience.id.startswith("personal:") for audience in self.audiences):
                 raise ValueError("a private preview requires personal audiences")
@@ -704,13 +774,31 @@ class LearningBundleManifest(StrictBundleModel):
             if any(
                 rights.publication_allowed
                 or not rights.private_preview_allowed
+                or rights.personal_use_allowed
                 or rights.source_serving_allowed
+                or rights.download_allowed
                 for rights in self.rights
             ):
                 raise ValueError("private preview rights must fail closed")
+        elif self.release_mode == "personal_library":
+            if self.schema_version != 3:
+                raise ValueError("a personal library requires schema v3")
+            if len(self.audiences) != 1 or not self.audiences[0].id.startswith("personal:"):
+                raise ValueError("a personal library requires one personal audience")
+            personal_audiences = {self.audiences[0].id}
+            if any(
+                rights.publication_allowed
+                or rights.private_preview_allowed
+                or not rights.personal_use_allowed
+                or rights.basis != "requester_private_processing"
+                or set(rights.audience_ids) != personal_audiences
+                for rights in self.rights
+            ):
+                raise ValueError("personal library rights must allow personal use only")
         elif any(
             not rights.publication_allowed
             or rights.private_preview_allowed
+            or rights.personal_use_allowed
             or rights.basis == "requester_private_processing"
             for rights in self.rights
         ):
@@ -783,6 +871,10 @@ class LearningBundleManifest(StrictBundleModel):
             rights = rights_by_id.get(asset.rights_id)
             if rights is None or not set(asset.audience_ids) <= set(rights.audience_ids):
                 raise ValueError("asset audience is not covered by its rights")
+            if not rights.source_serving_allowed:
+                raise ValueError("an asset requires inline serving rights")
+            if self.schema_version == 3 and set(asset.audience_ids) != set(rights.audience_ids):
+                raise ValueError("schema v3 asset and rights audiences must match")
 
         for source in self.sources:
             rights = rights_by_id.get(source.rights_id)
@@ -791,6 +883,8 @@ class LearningBundleManifest(StrictBundleModel):
             source_audiences = set(source.audience_ids)
             if not source_audiences <= set(rights.audience_ids):
                 raise ValueError("source audience is not covered by its rights")
+            if self.schema_version == 3 and source_audiences != set(rights.audience_ids):
+                raise ValueError("schema v3 source and rights audiences must match")
             if source.asset_id is None:
                 if rights.source_serving_allowed:
                     raise ValueError("a metadata-only source must explicitly forbid serving")
@@ -818,7 +912,7 @@ class LearningBundleManifest(StrictBundleModel):
             if isinstance(block, ImageBlock)
         )
         if referenced_asset_ids != set(asset_by_id):
-            raise ValueError("assets must be referenced by published content")
+            raise ValueError("assets must be referenced by declared content")
         referenced_rights_ids = {asset.rights_id for asset in self.assets}
         referenced_rights_ids.update(source.rights_id for source in self.sources)
         if referenced_rights_ids != set(rights_by_id):

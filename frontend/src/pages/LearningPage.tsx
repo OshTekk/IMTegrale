@@ -29,7 +29,7 @@ import { Link, Navigate, NavLink, Route, Routes, useLocation, useParams, useSear
 import { LearningRenderer } from "../components/LearningRenderer";
 import { LearningHomeOverview } from "../components/LearningHomeOverview";
 import { LearningModuleOverview } from "../components/LearningModuleOverview";
-import { LearningReviewPanel, LearningReviewProvider, LearningReviewToggle } from "../components/LearningReviewMode";
+import { LearningReviewMenu, LearningReviewPanel, LearningReviewProvider } from "../components/LearningReviewMode";
 import { Modal } from "../components/Modal";
 import { PassReconnectModal } from "../components/PassReconnectModal";
 import {
@@ -256,7 +256,7 @@ function LearningNavigation({ session }: { session: Session }) {
           <ListChecks size={17} /> Progression
         </NavLink>
       </nav>
-      <LearningReviewToggle />
+      <LearningReviewMenu />
     </header>
   );
 }
@@ -433,7 +433,7 @@ function LearningUePage() {
                         (item.content_id || item.source_id) && isDescendantOf(item, module.id, catalog.data.nodes),
                     ).length
                   }{" "}
-                  contenus
+                  activités
                 </p>
               </div>
               <ChevronRight aria-hidden="true" />
@@ -446,14 +446,14 @@ function LearningUePage() {
           <header>
             <div>
               <p className="learning-eyebrow">Accès direct</p>
-              <h2>Contenus de l'UE</h2>
+              <h2>Activités de l'UE</h2>
             </div>
           </header>
           <LearningContentList items={directContent} />
         </section>
       ) : null}
       {!modules.length && !directContent.length ? (
-        <LearningEmpty title="UE vide" message="Cette UE ne contient pas encore de contenu publié." />
+        <LearningEmpty title="UE vide" message="Cette UE ne propose encore aucune activité." />
       ) : null}
       <LearningReviewPanel
         rows={[
@@ -584,8 +584,15 @@ function LearningContentPage({ mode }: { mode: "lesson" | "exercise" }) {
     });
     return () => window.cancelAnimationFrame(frame);
   }, [content.data, location.hash]);
-  if (!contentId) return <LearningEmpty title="Contenu introuvable" message="La référence demandée est invalide." />;
-  if (content.isPending || catalog.isPending) return <LearningLoading label="Chargement du contenu" />;
+  if (!contentId)
+    return (
+      <LearningEmpty
+        title={mode === "exercise" ? "Exercice introuvable" : "Leçon introuvable"}
+        message="La référence demandée est invalide."
+      />
+    );
+  if (content.isPending || catalog.isPending)
+    return <LearningLoading label={mode === "exercise" ? "Chargement de l'exercice" : "Chargement de la leçon"} />;
   if (content.isError || catalog.isError || !content.data || !catalog.data)
     return (
       <LearningError
@@ -596,20 +603,17 @@ function LearningContentPage({ mode }: { mode: "lesson" | "exercise" }) {
         }}
       />
     );
-  if (releaseMismatch) return <LearningLoading label="Alignement de la release du contenu" />;
+  if (releaseMismatch) return <LearningLoading label="Actualisation de l'activité" />;
   if (!resolvedMode)
     return (
-      <LearningEmpty
-        title="Contenu indisponible"
-        message="Ce type de contenu ne possède pas de vue sûre dans cette version."
-      />
+      <LearningEmpty title="Activité indisponible" message="Cette activité ne possède pas encore de vue adaptée." />
     );
   if (resolvedMode !== mode) {
     const canonicalHref = learningContentHref(content.data.kind, content.data.id);
     return canonicalHref ? (
       <Navigate to={canonicalHref} replace />
     ) : (
-      <LearningEmpty title="Contenu indisponible" message="Ce contenu ne possède pas de route valide." />
+      <LearningEmpty title="Activité indisponible" message="Cette activité ne possède pas de route valide." />
     );
   }
   if (progress.isPending) return <LearningLoading label="Chargement de la progression personnelle" />;
@@ -949,7 +953,7 @@ function ContentHeader({
     <>
       <LearningBreadcrumbs items={[{ label: "Parcours", to: "/parcours" }, ...crumbs, { label: title }]} />
       <header className="learning-page-header">
-        <p className="learning-eyebrow">{node ? contentKindLabel(node.kind) : "Contenu"}</p>
+        <p className="learning-eyebrow">{node ? contentKindLabel(node.kind) : "Activité"}</p>
         <h1>{title}</h1>
         <div className="learning-metadata">
           {content.frontmatter.estimated_minutes && (
@@ -1117,6 +1121,8 @@ function LearningSourcePage() {
         <Suspense fallback={<LearningLoading label="Ouverture du lecteur" />}>
           <LearningSourceViewer
             assetId={data.asset_id}
+            assetUrl={data.asset_url!}
+            downloadUrl={data.download_allowed ? data.download_url : null}
             mimeType={data.mime_type}
             title={sourceTitle}
             page={normalizedPage}
@@ -1265,7 +1271,7 @@ function LearningProgressPage() {
         <article>
           <BookOpen aria-hidden="true" />
           <strong>{started.length}</strong>
-          <span>contenus commencés</span>
+          <span>activités commencées</span>
         </article>
         <article>
           <Check aria-hidden="true" />
@@ -1308,7 +1314,7 @@ function LearningProgressPage() {
       ) : (
         <LearningEmpty
           title="Aucune progression"
-          message="Les contenus consultés apparaîtront ici."
+          message="Les activités consultées apparaîtront ici."
           action={
             <Link className="primary-button" to="/parcours">
               Découvrir le catalogue

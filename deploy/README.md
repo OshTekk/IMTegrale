@@ -72,7 +72,7 @@ Le même garde réseau sert les API, assets, téléchargements et deep links `/p
 
 L'unité web déclare `ReadOnlyPaths=-/opt/botnote-learning`. Le préfixe `-` autorise l'absence du dossier : sans bundle, sans lien `current` ou avec un bundle invalide, l'application principale démarre normalement et seul Parcours répond de manière indisponible. Lorsqu'il existe, le volume reste en lecture seule dans l'espace de montage du service, en plus des permissions Unix.
 
-Le chargeur borne une release v1 ou v2 à un manifest de 32 Mio, un index de recherche de 16 Mio et 10 000 documents, un asset de 512 Mio, et 2 Gio cumulés. Il recalcule intégralement chaque SHA-256 lors de l'activation. Ensuite, une ouverture d'asset vérifie uniquement que le descripteur est toujours un fichier régulier avec un seul lien physique et que son identité immuable enregistrée (`device`, inode, taille, `mtime`, `ctime`) n'a pas changé ; le payload n'est donc pas lu une première fois avant son streaming. Cette optimisation suppose impérativement une release réellement immuable et non modifiable par l'utilisateur du service. Une modification, un remplacement ou un hardlink après validation rend l'asset indisponible, mais un administrateur privilégié capable de falsifier le stockage reste hors de cette frontière de confiance.
+Le chargeur borne une release v1, v2 ou v3 à un manifest de 32 Mio, un index de recherche de 16 Mio et 10 000 documents, un asset de 512 Mio, et 2 Gio cumulés. Il recalcule intégralement chaque SHA-256 lors de l'activation. Ensuite, une ouverture d'asset vérifie uniquement que le descripteur est toujours un fichier régulier avec un seul lien physique et que son identité immuable enregistrée (`device`, inode, taille, `mtime`, `ctime`) n'a pas changé ; le payload n'est donc pas lu une première fois avant son streaming. Cette optimisation suppose impérativement une release réellement immuable et non modifiable par l'utilisateur du service. Une modification, un remplacement ou un hardlink après validation rend l'asset indisponible, mais un administrateur privilégié capable de falsifier le stockage reste hors de cette frontière de confiance.
 
 La recherche prépare les textes normalisés et les rattachements structurels une fois au chargement, applique les filtres avant le matching, refuse plus de quatre recherches CPU simultanées par processus et conserve la limite par compte. La solution reste un parcours linéaire borné : mesurer latence et RSS avec le pire index synthétique avant d'augmenter l'une de ces limites. Toute augmentation doit être alignée avec le compilateur privé et les tests de charge, sans fallback silencieux.
 
@@ -89,8 +89,12 @@ La compilation s'exécute sur un hôte de build séparé, depuis `IMTegrale-Parc
 
 Le validateur doit échouer avant installation pour un schéma inconnu, une clé supplémentaire, un checksum faux, un droit incompatible, une référence non résolue, un chemin absolu, une traversée ou un lien symbolique sortant. Le chargement runtime refait les contrôles qui protègent la frontière web ; un rapport de compilation ne remplace jamais cette validation.
 
-Le format v1 reste accepté afin de ne pas interrompre une release active. Pour
-compiler une candidate v2, suivre le [guide de migration générique](../docs/presentation-schema-v2.md) : mettre à jour ensemble le manifest et l'index, écrire les champs de présentation sur tous les nœuds concernés, valider les mathématiques, puis recalculer les checksums. Ne jamais convertir le dossier pointé par `current` sur place.
+Les formats v1 et v2 restent acceptés afin de ne pas interrompre une release
+active. Pour compiler une bibliothèque personnelle v3, suivre le [guide de
+migration générique](../docs/presentation-schema-v3.md) : mettre à jour ensemble
+le manifest et l'index, déclarer les droits par action, écrire les extraits
+lecteur, valider les mathématiques, puis recalculer les checksums. Ne jamais
+convertir le dossier pointé par `current` sur place.
 
 ### Installer et basculer
 

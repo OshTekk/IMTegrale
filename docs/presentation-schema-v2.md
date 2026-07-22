@@ -6,12 +6,15 @@ métadonnée pédagogique réelle.
 
 ## Compatibilité
 
-Le runtime accepte temporairement les schémas `1` et `2`.
+Le runtime accepte les schémas `1`, `2` et `3`. Ce document reste le guide
+historique v1 vers v2. Pour une nouvelle bibliothèque personnelle avec assets,
+utiliser le [schéma v3](presentation-schema-v3.md).
 
 | Bundle              | Index     | Présentation                                                  | État                                           |
 | ------------------- | --------- | ------------------------------------------------------------- | ---------------------------------------------- |
 | `schema_version: 1` | `json-v1` | `section` et `reader_visibility` dérivés de `kind`            | compatible, aucune migration immédiate requise |
-| `schema_version: 2` | `json-v2` | champs de présentation explicites sur chaque nœud pédagogique | format recommandé                              |
+| `schema_version: 2` | `json-v2` | champs de présentation explicites sur chaque nœud pédagogique | compatible                                     |
+| `schema_version: 3` | `json-v3` | présentation, droits et extrait lecteur explicites            | recommandé pour les nouvelles releases         |
 
 Une release v1 déjà active continue donc à être chargée sans modification. Le
 passage en v2 doit produire une nouvelle release immuable et un nouvel index ; il

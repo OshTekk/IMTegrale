@@ -19,7 +19,7 @@ async function expectCleanReaderCopy(page: Page) {
   await expect(body).not.toContainText(/private[ _-]?preview/i);
   await expect(body).not.toContainText(/Brouillon privé/i);
   await expect(body).not.toContainText(/titre non renseigné/i);
-  await expect(body).not.toContainText("synthetic-release-private-preview-001");
+  await expect(body).not.toContainText("synthetic-personal-library-001");
 }
 
 test("la route directe refuse un token owner sans sonder Parcours", async ({ page }) => {
@@ -49,7 +49,9 @@ test("une passkey expirée affiche la revérification sans audience interne et p
   await page.goto("/parcours");
 
   await expect(page.getByRole("heading", { name: "Confirme ton statut étudiant" })).toBeVisible();
-  await expect(page.locator("#main-content").getByText("Niveau 2A fictif", { exact: true })).toBeVisible();
+  await expect(
+    page.locator("#main-content").getByText("Bibliothèque fictive · Niveau 2A fictif", { exact: true }),
+  ).toBeVisible();
   await expect(page.locator("body")).not.toContainText(/private[ _-]?preview/i);
   const trigger = page.getByRole("button", { name: "Vérifier avec mon compte IMT" });
   await trigger.focus();
@@ -135,7 +137,7 @@ test("la page module sépare cours, pratique, annales, révision, glossaire et d
 
   await expect(page.getByRole("heading", { name: "Raisonnement symbolique", level: 1 })).toBeVisible();
   await expect(page.getByText("MOD-FIC", { exact: true })).toBeVisible();
-  await expect(page.getByText("Version de travail", { exact: true })).toHaveCount(1);
+  await expect(page.getByText("Version de travail", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Comprendre" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "S'entraîner" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Annales" })).toBeVisible();
@@ -149,15 +151,17 @@ test("la page module sépare cours, pratique, annales, révision, glossaire et d
   await expect(course).not.toContainText("Carnet synthétique");
   await expect(page.locator("#glossaire")).toContainText("Symbole alpha");
   await expect(page.locator("#documents")).toContainText("Carnet synthétique");
-  await expect(page.locator("#documents")).toContainText("Document pédagogique");
+  await expect(page.locator("#documents")).toContainText("Mémo visuel fictif");
+  await expect(page.locator("#documents")).toContainText("PDF");
   await expect(page.locator("#documents .learning-editorial-row-marker b")).toHaveCount(0);
   await expectCleanReaderCopy(page);
 
-  await page.getByRole("button", { name: "Revue" }).click();
+  await page.getByLabel("Options Parcours").click();
+  await page.getByRole("button", { name: "Informations de vérification" }).click();
   const reviewPanel = page.getByRole("complementary", { name: "Métadonnées de revue" });
   await expect(reviewPanel).toBeVisible();
-  await expect(reviewPanel).toContainText("synthetic-release-private-preview-001");
-  await expect(reviewPanel).toContainText("Version de travail");
+  await expect(reviewPanel).toContainText("synthetic-personal-library-001");
+  await expect(reviewPanel).toContainText("Relu");
   await expectNoSeriousA11yViolations(page);
   expect(state.externalRequests).toEqual([]);
 });
@@ -223,6 +227,23 @@ test("une référence ouvre la page exacte dans PDF.js et le lecteur reste pilot
   await expectCleanReaderCopy(page);
   await expectNoSeriousA11yViolations(page);
   expect(state.assetRequests).toBeGreaterThan(0);
+  expect(state.assetRequestIds).toContain("asset-pdf-fictif");
+  expect(state.externalRequests).toEqual([]);
+});
+
+test("un document consultable sans droit de téléchargement reste lisible", async ({ page }) => {
+  const state = await installFakeLearningApi(page);
+  await page.goto("/parcours/modules/module-fictif");
+
+  await page.getByRole("link", { name: /Mémo visuel fictif/ }).click();
+  await expect(page).toHaveURL(/\/parcours\/sources\/source-memo-fictif$/);
+  const viewer = page.getByRole("region", { name: "Lecteur PDF : Mémo visuel fictif" });
+  await expect(viewer.locator("canvas")).toBeVisible();
+  await expect(viewer.getByRole("link", { name: /Télécharger/ })).toHaveCount(0);
+  await expect(viewer.getByRole("button", { name: /Télécharger/ })).toHaveCount(0);
+  expect(state.assetRequestIds).toContain("asset-pdf-inline-fictif");
+  await expectCleanReaderCopy(page);
+  await expectNoSeriousA11yViolations(page);
   expect(state.externalRequests).toEqual([]);
 });
 

@@ -40,9 +40,11 @@ from sqlalchemy import func, select
 
 from tests.conftest import csrf_headers
 from tests.learning_bundle_factory import (
+    SECOND_SOURCE_BYTES,
     SOURCE_BYTES,
     write_fictitious_learning_bundle,
     write_fictitious_metadata_only_preview_bundle,
+    write_fictitious_personal_library_bundle,
 )
 
 _PRIVATE_HEADERS = {
@@ -157,6 +159,22 @@ def fictitious_personal_preview_content_root(
     monkeypatch: pytest.MonkeyPatch,
 ) -> Path:
     release = write_fictitious_metadata_only_preview_bundle(
+        tmp_path,
+        audience_id=_PERSONAL_AUDIENCE_ID,
+    )
+    settings = get_settings()
+    monkeypatch.setattr(settings, "learning_content_root", release)
+    reset_learning_bundle_cache()
+    yield release
+    reset_learning_bundle_cache()
+
+
+@pytest.fixture
+def fictitious_personal_library_content_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Path:
+    release = write_fictitious_personal_library_bundle(
         tmp_path,
         audience_id=_PERSONAL_AUDIENCE_ID,
     )
@@ -386,6 +404,225 @@ def test_personal_owner_is_allowed_from_exact_lan_and_tailnet_ingress(
         _assert_private_headers(response)
 
 
+def test_personal_library_is_hidden_from_cohort_runtime(
+    client: TestClient,
+    fictitious_personal_library_content_root: Path,
+) -> None:
+    _install_identity(client)
+
+    response = client.get("/api/v1/learning/access")
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "LEARNING_CATALOG_UNAVAILABLE"
+    assert str(fictitious_personal_library_content_root) not in response.text
+    _assert_private_headers(response)
+
+
+def test_personal_library_still_requires_an_authenticated_session(
+    client: TestClient,
+    fictitious_personal_library_content_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_personal_mode(monkeypatch)
+    client.headers["X-BotNote-Client-Identity"] = "lan:192.0.2.10"
+
+    response = client.get("/api/v1/learning/access")
+
+    assert response.status_code == 401
+    assert_api_error(response, "Authentification requise")
+    _assert_private_headers(response)
+
+
+@pytest.mark.parametrize("auth_method", ["imt", "passkey"])
+def test_personal_library_exposes_each_asset_only_for_its_allowed_actions(
+    client: TestClient,
+    fictitious_personal_library_content_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    auth_method: str,
+) -> None:
+    _configure_personal_mode(monkeypatch)
+    client.headers["X-BotNote-Client-Identity"] = "lan:192.0.2.10"
+    _install_identity(
+        client,
+        auth_method=auth_method,
+        imt_username="fictitious-personal-owner@example.invalid",
+    )
+
+    catalog = client.get("/api/v1/learning/catalog")
+    downloadable = client.get("/api/v1/learning/sources/source-fiction")
+    inline_only = client.get("/api/v1/learning/sources/source-inline-fiction")
+    downloadable_inline = client.get("/api/v1/learning/assets/asset-source-fiction")
+    downloadable_file = client.get("/api/v1/learning/assets/asset-source-fiction/download")
+    inline_only_file = client.get("/api/v1/learning/assets/asset-inline-fiction")
+    inline_range = client.get(
+        "/api/v1/learning/assets/asset-inline-fiction",
+        headers={"Range": "bytes=0-3"},
+    )
+    invalid_range = client.get(
+        "/api/v1/learning/assets/asset-inline-fiction",
+        headers={"Range": "bytes=9999-10000"},
+    )
+    multiple_range = client.get(
+        "/api/v1/learning/assets/asset-inline-fiction",
+        headers={"Range": "bytes=0-1,4-5"},
+    )
+    forbidden_download = client.get("/api/v1/learning/assets/asset-inline-fiction/download")
+    search = client.post(
+        "/api/v1/learning/search",
+        json={"query": "nébuleuse", "filters": {}, "limit": 5},
+        headers=csrf_headers(client),
+    )
+
+    assert catalog.status_code == 200
+    catalog_payload = catalog.json()
+    assert catalog_payload["schema_version"] == 3
+    assert catalog_payload["release_mode"] == "personal_library"
+    catalog_by_id = {item["id"]: item for item in catalog_payload["nodes"]}
+    capability_fields = (
+        "source_serving_allowed",
+        "download_allowed",
+        "asset_url",
+        "download_url",
+    )
+    assert {field: catalog_by_id["source-node-fiction"][field] for field in capability_fields} == {
+        "source_serving_allowed": True,
+        "download_allowed": True,
+        "asset_url": "/api/v1/learning/assets/asset-source-fiction",
+        "download_url": "/api/v1/learning/assets/asset-source-fiction/download",
+    }
+    assert {field: catalog_by_id["source-node-inline-fiction"][field] for field in capability_fields} == {
+        "source_serving_allowed": True,
+        "download_allowed": False,
+        "asset_url": "/api/v1/learning/assets/asset-inline-fiction",
+        "download_url": None,
+    }
+    assert downloadable.status_code == inline_only.status_code == 200
+    assert downloadable_inline.content == SOURCE_BYTES
+    assert downloadable_file.content == SOURCE_BYTES
+    assert inline_only_file.content == SECOND_SOURCE_BYTES
+    assert inline_range.status_code == 206
+    assert inline_range.content == SECOND_SOURCE_BYTES[:4]
+    assert inline_range.headers["accept-ranges"] == "bytes"
+    assert inline_range.headers["content-range"] == (f"bytes 0-3/{len(SECOND_SOURCE_BYTES)}")
+    assert invalid_range.status_code == multiple_range.status_code == 416
+    assert forbidden_download.status_code == 404
+    assert_api_error(forbidden_download, "Ressource introuvable")
+    assert "source-inline-fiction.bin" not in forbidden_download.text
+    assert "memo-fictif.pdf" not in forbidden_download.text
+
+    downloadable_payload = downloadable.json()
+    assert downloadable_payload["source_serving_allowed"] is True
+    assert downloadable_payload["download_allowed"] is True
+    assert downloadable_payload["asset_url"] == ("/api/v1/learning/assets/asset-source-fiction")
+    assert downloadable_payload["download_url"] == ("/api/v1/learning/assets/asset-source-fiction/download")
+    inline_only_payload = inline_only.json()
+    assert inline_only_payload["source_serving_allowed"] is True
+    assert inline_only_payload["download_allowed"] is False
+    assert inline_only_payload["asset_url"] == ("/api/v1/learning/assets/asset-inline-fiction")
+    assert inline_only_payload["download_url"] is None
+    assert inline_only_payload["rights_label"] == "Usage personnel"
+
+    assert search.status_code == 200
+    search_payload = search.json()
+    assert len(search_payload["items"]) == 1
+    excerpt = search_payload["items"][0]["excerpt"]
+    assert excerpt == "Un mémo entièrement fictif complète la bibliothèque personnelle."
+    assert "nébuleuse" not in excerpt.casefold()
+    assert "source-inline-fiction" not in excerpt
+    assert "private_preview" not in excerpt
+    assert "\\" not in excerpt
+    assert "body" not in search_payload["items"][0]
+    for response in (
+        catalog,
+        downloadable,
+        inline_only,
+        downloadable_inline,
+        downloadable_file,
+        inline_only_file,
+        inline_range,
+        invalid_range,
+        multiple_range,
+        forbidden_download,
+        search,
+    ):
+        assert str(fictitious_personal_library_content_root) not in response.text
+        _assert_private_headers(response)
+
+
+@pytest.mark.parametrize(
+    ("principal", "expected_status", "message"),
+    [
+        ("viewer", 404, "Ressource introuvable"),
+        ("owner-token", 404, "Ressource introuvable"),
+        ("other-account", 404, "Ressource introuvable"),
+        ("disabled", 403, "Compte désactivé"),
+        ("other-ingress", 404, "Route introuvable"),
+    ],
+)
+def test_personal_library_rejects_every_non_exact_principal(
+    client: TestClient,
+    fictitious_personal_library_content_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    principal: str,
+    expected_status: int,
+    message: str,
+) -> None:
+    _configure_personal_mode(monkeypatch)
+    client.headers["X-BotNote-Client-Identity"] = (
+        "lan:192.0.2.11" if principal == "other-ingress" else "lan:192.0.2.10"
+    )
+    _install_identity(
+        client,
+        role="viewer" if principal == "viewer" else "owner",
+        auth_method="token" if principal == "owner-token" else "imt",
+        shared=principal == "owner-token",
+        is_disabled=principal == "disabled",
+        imt_username=(
+            "fictitious-other@example.invalid"
+            if principal == "other-account"
+            else "fictitious-personal-owner@example.invalid"
+        ),
+    )
+
+    response = client.get("/api/v1/learning/assets/asset-source-fiction")
+
+    assert response.status_code == expected_status
+    assert_api_error(response, message)
+    assert str(fictitious_personal_library_content_root) not in response.text
+    _assert_private_headers(response)
+
+
+def test_personal_library_refuses_a_revoked_session_before_asset_resolution(
+    client: TestClient,
+    fictitious_personal_library_content_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_personal_mode(monkeypatch)
+    client.headers["X-BotNote-Client-Identity"] = "lan:192.0.2.10"
+    identity = _install_identity(
+        client,
+        imt_username="fictitious-personal-owner@example.invalid",
+    )
+    assert client.get("/api/v1/learning/assets/asset-source-fiction").status_code == 200
+
+    with SessionLocal() as db:
+        account = db.get(Account, identity.account_id)
+        assert account is not None
+        account.access_generation += 1
+        db.commit()
+
+    def forbidden_open(*_args, **_kwargs):  # noqa: ANN002, ANN003, ANN202
+        raise AssertionError("a revoked session must not resolve a personal asset")
+
+    monkeypatch.setattr(LearningBundleSnapshot, "open_asset", forbidden_open)
+    revoked = client.get("/api/v1/learning/assets/asset-source-fiction")
+
+    assert revoked.status_code == 401
+    assert_api_error(revoked, "Accès révoqué")
+    assert str(fictitious_personal_library_content_root) not in revoked.text
+    _assert_private_headers(revoked)
+
+
 def test_personal_preview_exposes_citations_but_never_source_assets(
     client: TestClient,
     fictitious_personal_preview_content_root: Path,
@@ -428,6 +665,8 @@ def test_personal_preview_exposes_citations_but_never_source_assets(
     assert source_payload["asset_id"] is None
     assert source_payload["asset_url"] is None
     assert source_payload["source_serving_allowed"] is False
+    assert source_payload["download_allowed"] is False
+    assert source_payload["download_url"] is None
     assert source_payload["kind"] is None
     assert source_payload["mime_type"] is None
     assert source_payload["filename"] is None
@@ -437,6 +676,8 @@ def test_personal_preview_exposes_citations_but_never_source_assets(
     assert source_payload["pages"] == [{"page": 1, "label": "[FICTIF] Page unique"}]
     assert reference.json()["asset_url"] is None
     assert reference.json()["source_serving_allowed"] is False
+    assert reference.json()["download_allowed"] is False
+    assert reference.json()["download_url"] is None
     assert [item["entity_id"] for item in search.json()["items"]] == ["source-fiction"]
     for response in (inline, download):
         assert response.status_code == 404
@@ -1015,7 +1256,9 @@ def test_eligible_owner_can_use_the_complete_learning_api_surface(
         "label": "page fictive",
         "source_url": "/api/v1/learning/sources/source-fiction",
         "source_serving_allowed": True,
+        "download_allowed": True,
         "asset_url": "/api/v1/learning/assets/asset-source-fiction",
+        "download_url": "/api/v1/learning/assets/asset-source-fiction/download",
     }
     assert inline_asset.content == SOURCE_BYTES
     assert downloaded_asset.content == SOURCE_BYTES
@@ -1218,9 +1461,7 @@ def test_learning_assets_support_one_authenticated_byte_range(
     assert response.status_code == 206
     assert response.content == SOURCE_BYTES[expected_start : expected_end + 1]
     assert response.headers["accept-ranges"] == "bytes"
-    assert response.headers["content-range"] == (
-        f"bytes {expected_start}-{expected_end}/{len(SOURCE_BYTES)}"
-    )
+    assert response.headers["content-range"] == (f"bytes {expected_start}-{expected_end}/{len(SOURCE_BYTES)}")
     assert response.headers["content-length"] == str(expected_end - expected_start + 1)
     _assert_private_headers(response)
 
@@ -1355,10 +1596,10 @@ def test_asset_db_dependency_closes_before_stream_consumption(
 
     original_open_asset = LearningBundleSnapshot.open_asset
 
-    def open_after_db_cleanup(self, asset_id, audience_id):  # noqa: ANN001, ANN202
+    def open_after_db_cleanup(self, asset_id, audience_id, *, action):  # noqa: ANN001, ANN202
         events.append("asset-opened")
         assert "db-closed" in events
-        return original_open_asset(self, asset_id, audience_id)
+        return original_open_asset(self, asset_id, audience_id, action=action)
 
     original_stream_file = learning_router._stream_file
 

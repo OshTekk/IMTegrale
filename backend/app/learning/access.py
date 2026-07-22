@@ -28,9 +28,7 @@ STUDENT_REVERIFICATION_REQUIRED = "STUDENT_REVERIFICATION_REQUIRED"
 LEARNING_CATALOG_UNAVAILABLE = "LEARNING_CATALOG_UNAVAILABLE"
 
 _NOT_FOUND_DETAIL = "Ressource introuvable"
-_REVERIFICATION_MESSAGE = (
-    "Une nouvelle vérification IMT est requise pour accéder à Parcours."
-)
+_REVERIFICATION_MESSAGE = "Une nouvelle vérification IMT est requise pour accéder à Parcours."
 _CATALOG_UNAVAILABLE_MESSAGE = "Le catalogue Parcours est temporairement indisponible."
 
 BundleLoader = Callable[[Settings], "LearningBundleSnapshot"]
@@ -116,6 +114,28 @@ def _require_supported_audience(bundle: object, audience_id: str) -> None:
         raise _catalog_unavailable()
 
 
+def _require_runtime_release_compatibility(
+    bundle: object,
+    settings: Settings,
+    audience_id: str,
+) -> None:
+    manifest = getattr(bundle, "manifest", None)
+    release_mode = getattr(manifest, "release_mode", None)
+    if release_mode != "personal_library":
+        return
+    try:
+        bundle_audiences = {audience.id for audience in bundle.audiences}
+    except (AttributeError, TypeError):
+        raise _catalog_unavailable() from None
+    if (
+        settings.learning_access_mode != "personal"
+        or not audience_id.startswith("personal:")
+        or audience_id != settings.learning_audience_id
+        or bundle_audiences != {settings.learning_audience_id}
+    ):
+        raise _catalog_unavailable()
+
+
 def require_learning_ingress(request: Request, settings: Settings) -> str | None:
     """Require an exact LAN/Tailnet identity when personal mode is enabled."""
 
@@ -142,6 +162,7 @@ def load_learning_catalog_for_access(
         raise _catalog_unavailable() from None
     try:
         _require_supported_audience(bundle, context.audience)
+        _require_runtime_release_compatibility(bundle, settings, context.audience)
         catalog_version = _catalog_version(bundle)
     except HTTPException:
         raise

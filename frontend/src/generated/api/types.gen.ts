@@ -2140,6 +2140,10 @@ export type LearningCatalogNodeEnvelopeResponse = {
  */
 export type LearningCatalogNodeResponse = {
     /**
+     * Asset Url
+     */
+    asset_url?: string | null;
+    /**
      * Code
      */
     code: string | null;
@@ -2163,6 +2167,10 @@ export type LearningCatalogNodeResponse = {
      * Download Allowed
      */
     download_allowed?: boolean;
+    /**
+     * Download Url
+     */
+    download_url?: string | null;
     /**
      * Estimated Minutes
      */
@@ -2212,6 +2220,10 @@ export type LearningCatalogNodeResponse = {
      */
     source_id: string | null;
     /**
+     * Source Serving Allowed
+     */
+    source_serving_allowed?: boolean;
+    /**
      * Title
      */
     title: string;
@@ -2240,11 +2252,11 @@ export type LearningCatalogResponse = {
     /**
      * Release Mode
      */
-    release_mode: 'published' | 'private_preview';
+    release_mode: 'published' | 'private_preview' | 'personal_library';
     /**
      * Schema Version
      */
-    schema_version: 1 | 2;
+    schema_version: 1 | 2 | 3;
 };
 
 /**
@@ -2856,6 +2868,14 @@ export type LearningSourceReferenceResponse = {
      */
     content_id: string;
     /**
+     * Download Allowed
+     */
+    download_allowed: boolean;
+    /**
+     * Download Url
+     */
+    download_url: string | null;
+    /**
      * End Page
      */
     end_page: number | null;
@@ -2905,6 +2925,14 @@ export type LearningSourceResponse = {
      * Asset Url
      */
     asset_url: string | null;
+    /**
+     * Download Allowed
+     */
+    download_allowed: boolean;
+    /**
+     * Download Url
+     */
+    download_url: string | null;
     /**
      * Filename
      */

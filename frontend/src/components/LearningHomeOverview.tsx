@@ -197,7 +197,7 @@ export function LearningHomeOverview({
           ) : (
             <div className="learning-inline-empty compact">
               <BookOpen aria-hidden="true" />
-              <span>Aucun contenu signalé comme fragile.</span>
+              <span>Aucune activité signalée comme fragile.</span>
             </div>
           )}
         </section>
