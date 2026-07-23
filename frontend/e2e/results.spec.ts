@@ -224,9 +224,13 @@ for (const viewport of responsiveCases) {
     await openResults(page);
 
     await expect(page.locator("html")).toHaveAttribute("data-theme", viewport.theme);
-    expect(
-      await page.evaluate(() => document.documentElement.scrollWidth === document.documentElement.clientWidth),
-    ).toBe(true);
+    const layoutWidths = await page.evaluate(() => ({
+      body: document.body.scrollWidth,
+      document: document.documentElement.scrollWidth,
+      viewport: window.innerWidth,
+    }));
+    expect(layoutWidths.document).toBeLessThanOrEqual(layoutWidths.viewport);
+    expect(layoutWidths.body).toBeLessThanOrEqual(layoutWidths.viewport);
     const targets = page.locator(".results-tabs button, .results-ue-card > footer a, .results-ue-card > footer button");
     for (let index = 0; index < (await targets.count()); index += 1) {
       const box = await targets.nth(index).boundingBox();
