@@ -51,7 +51,7 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
   const primaryOwner = isPrimaryOwnerSession(session);
   const visibleNav = visibleAppNavigation(session, primaryOwner);
   const mobilePrimaryPaths = useMemo(
-    () => (primaryOwner ? ["/", "/notes", "/calendar", "/simulations/gpa"] : ["/", "/notes", "/ues"]),
+    () => (primaryOwner ? ["/", "/results", "/calendar", "/simulations/gpa"] : ["/", "/results", "/settings"]),
     [primaryOwner],
   );
   const mobilePrimaryNav = useMemo(

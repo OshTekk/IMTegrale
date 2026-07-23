@@ -97,9 +97,9 @@ const steps: DemoStep[] = [
   },
   {
     title: "Chaque semestre reste lisible",
-    short: "Notes & ECTS",
+    short: "Résultats",
     detail:
-      "Les vues Notes et UE & ECTS détaillent les évaluations officielles, les coefficients, les grades et les crédits. Les filtres S5 à S10 permettent de retrouver les résultats et le GPA de chaque semestre.",
+      "L'espace Résultats réunit les UE, les évaluations et les nouveautés avec leurs coefficients, grades et crédits. Les filtres S5 à S10 permettent de retrouver les résultats et le GPA de chaque semestre.",
     proof: "Une donnée PASS ou COMPETENCES ne peut être ni ajoutée, ni modifiée, ni masquée par l'étudiant.",
     node: "dashboard",
     icon: TableProperties,

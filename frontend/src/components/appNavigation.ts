@@ -5,7 +5,6 @@ import {
   Gauge,
   KeyRound,
   LibraryBig,
-  NotebookPen,
   Settings,
   Trophy,
   type LucideIcon,
@@ -26,9 +25,8 @@ export interface AppNavItem {
 
 export const appNavItems: AppNavItem[] = [
   { to: "/", label: "Vue d'ensemble", short: "Accueil", icon: Gauge, ownerOnly: false },
-  { to: "/notes", label: "Notes", short: "Notes", icon: NotebookPen, ownerOnly: false },
+  { to: "/results", label: "Résultats", short: "Résultats", icon: BookOpenCheck, ownerOnly: false },
   { to: "/calendar", label: "Agenda", short: "Agenda", icon: CalendarDays, ownerOnly: true, primaryOwnerOnly: true },
-  { to: "/ues", label: "UE & ECTS", short: "UE", icon: BookOpenCheck, ownerOnly: false },
   { to: "/parcours", label: "Parcours", short: "Parcours", icon: LibraryBig, ownerOnly: false, learningOnly: true },
   {
     to: "/simulations/gpa",
@@ -45,9 +43,8 @@ export const appNavItems: AppNavItem[] = [
 
 export const appPageTitles: Record<string, [string, string]> = {
   "/": ["Vue d'ensemble", "Ta situation académique en un coup d'œil"],
-  "/notes": ["Notes", "Détail des évaluations officielles importées depuis PASS"],
+  "/results": ["Résultats", "UE, évaluations et nouveautés dans un espace unique"],
   "/calendar": ["Agenda", "Tes cours et ton rythme de formation au même endroit"],
-  "/ues": ["UE & ECTS", "Moyennes, grades et pondération par crédits"],
   "/ues/releve": ["Relevé académique", "Prépare un document personnel clair et partageable"],
   "/simulations/gpa": ["Simulations", "Projette ton GPA sans modifier tes données officielles"],
   "/simulations/notes": ["Simulations", "Teste tes prochaines notes et leur impact sur ta moyenne"],
@@ -57,7 +54,7 @@ export const appPageTitles: Record<string, [string, string]> = {
 };
 
 export const mobileNavDescriptions: Record<string, string> = {
-  "/ues": "Grades, crédits et détail des évaluations",
+  "/results": "Grades, crédits et détail des évaluations",
   "/calendar": "Cours personnels et calendrier de formation",
   "/sharing": "Tokens et accès partagés",
   "/settings": "Compte, synchronisation et notifications",
@@ -65,6 +62,7 @@ export const mobileNavDescriptions: Record<string, string> = {
 };
 
 export function isAppNavItemActive(to: string, pathname: string): boolean {
+  if (to === "/results") return pathname.startsWith("/results");
   if (to === "/parcours") return pathname.startsWith("/parcours");
   if (to.startsWith("/simulations")) return pathname.startsWith("/simulations");
   return to === pathname;
@@ -78,6 +76,7 @@ export function visibleAppNavigation(session: Session, primaryOwner: boolean): A
 }
 
 export function appPageHeading(pathname: string, session: Session): [string, string] {
+  if (pathname.startsWith("/results")) return appPageTitles["/results"]!;
   if (pathname.startsWith("/parcours")) {
     return ["Parcours", readerAudienceSubtitle(session.learning?.audience_label, session.learning?.level_label)];
   }

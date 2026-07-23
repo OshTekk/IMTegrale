@@ -14,8 +14,7 @@ import { clearAccountState, queryKeys, replaceSessionState, useSession } from ".
 import { broadcastSessionChange, subscribeToSessionChanges } from "./lib/sessionSync";
 
 const loadOverviewPage = () => import("./pages/OverviewPage");
-const loadNotesPage = () => import("./pages/NotesPage");
-const loadUesPage = () => import("./pages/UesPage");
+const loadResultsPages = () => import("./pages/results");
 const loadAcademicReportPage = () => import("./pages/AcademicReportPage");
 const loadSharingPage = () => import("./pages/SharingPage");
 const loadSettingsPage = () => import("./pages/SettingsPage");
@@ -25,8 +24,8 @@ const loadNoteSimulationsPage = () => import("./pages/NoteSimulationsPage");
 const loadCalendarPage = () => import("./pages/CalendarPage");
 const loadLearningPage = () => import("./pages/LearningPage");
 const OverviewPage = lazy(() => loadOverviewPage().then((module) => ({ default: module.OverviewPage })));
-const NotesPage = lazy(() => loadNotesPage().then((module) => ({ default: module.NotesPage })));
-const UesPage = lazy(() => loadUesPage().then((module) => ({ default: module.UesPage })));
+const ResultsPage = lazy(() => loadResultsPages().then((module) => ({ default: module.ResultsPage })));
+const ResultsUeDetailPage = lazy(() => loadResultsPages().then((module) => ({ default: module.ResultsUeDetailPage })));
 const AcademicReportPage = lazy(() =>
   loadAcademicReportPage().then((module) => ({ default: module.AcademicReportPage })),
 );
@@ -45,9 +44,8 @@ const DemoPage = lazy(() => import("./pages/DemoPage").then((module) => ({ defau
 
 const studentRouteLoaders: Record<string, () => Promise<unknown>> = {
   "/": loadOverviewPage,
-  "/notes": loadNotesPage,
+  "/results": loadResultsPages,
   "/calendar": loadCalendarPage,
-  "/ues": loadUesPage,
   "/ues/releve": loadAcademicReportPage,
   "/leaderboard": loadLeaderboardPage,
   "/simulations": loadSimulationsPage,
@@ -60,9 +58,8 @@ const studentRouteLoaders: Record<string, () => Promise<unknown>> = {
 
 const documentTitles: Record<string, string> = {
   "/": "Vue d'ensemble",
-  "/notes": "Notes",
+  "/results": "Résultats",
   "/calendar": "Agenda",
-  "/ues": "UE & ECTS",
   "/ues/releve": "Relevé académique",
   "/leaderboard": "Classement",
   "/simulations": "Simulations",
@@ -78,9 +75,17 @@ function preloadStudentRoute(path: string) {
 }
 
 function studentDocumentTitle(path: string): string | undefined {
+  if (path.startsWith("/results")) return "Résultats";
   if (path.startsWith("/simulations")) return "Simulations";
   if (path.startsWith("/parcours")) return learningDocumentTitle(path);
   return documentTitles[path];
+}
+
+function LegacyResultsRedirect({ view }: { view: "ues" | "evaluations" }) {
+  const location = useLocation();
+  const params = new URLSearchParams(location.search);
+  params.set("view", view);
+  return <Navigate to={`/results?${params.toString()}`} replace />;
 }
 
 export default function App() {
@@ -179,10 +184,15 @@ function StudentApp() {
       <Routes>
         <Route element={<AppShell session={session.data} preloadRoute={preloadStudentRoute} />}>
           <Route index element={<OverviewPage />} />
-          <Route path="notes" element={<NotesPage />} />
+          <Route path="results" element={<ResultsPage />} />
+          <Route path="results/ue/:ueCode" element={<ResultsUeDetailPage />} />
+          <Route path="notes" element={<LegacyResultsRedirect view="evaluations" />} />
           <Route path="calendar" element={isPrimaryOwner ? <CalendarPage /> : <Navigate to="/" replace />} />
-          <Route path="ues" element={<UesPage />} />
-          <Route path="ues/releve" element={isPrimaryOwner ? <AcademicReportPage /> : <Navigate to="/ues" replace />} />
+          <Route
+            path="ues/releve"
+            element={isPrimaryOwner ? <AcademicReportPage /> : <Navigate to="/results?view=ues" replace />}
+          />
+          <Route path="ues" element={<LegacyResultsRedirect view="ues" />} />
           <Route path="leaderboard" element={isOwner ? <LeaderboardPage /> : <Navigate to="/" replace />} />
           <Route path="simulations" element={isPrimaryOwner ? <SimulationLayout /> : <Navigate to="/" replace />}>
             <Route index element={<Navigate to="gpa" replace />} />

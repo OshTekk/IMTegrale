@@ -1,5 +1,14 @@
 # Changements
 
+## 4.8.0 - 23 juillet 2026
+
+- espace unique **Résultats** avec vues Par UE, Évaluations et Nouveautés ;
+- filtres, tris et état de lecture conservés dans l'URL, avec deep links par UE ;
+- redirections rétrocompatibles de `/notes` et `/ues`, sans changement pour `/ues/releve` ;
+- remplacement de la table académique large par des cartes adaptées du téléphone au desktop ;
+- libellé explicite des dates d'import, sans les présenter comme des dates d'évaluation ;
+- couverture fictive de 100 UE et 500 évaluations, huit viewports, clavier, thèmes et Axe.
+
 ## 4.7.0 - 22 juillet 2026
 
 - schéma Parcours v3 rétrocompatible et nouveau mode fermé `personal_library` ;

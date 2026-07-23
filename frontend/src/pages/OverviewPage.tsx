@@ -63,11 +63,11 @@ export function OverviewPage() {
   return (
     <div className="overview-grid">
       {data.summary.missing_ects_count > 0 && (
-        <Link className="attention-banner" to="/ues">
+        <Link className="attention-banner" to="/results?view=ues">
           <TriangleAlert size={18} />
           <span>
-            <strong>{data.summary.missing_ects_count} UE sans crédits ECTS</strong>Actualise les données IMT ou complète
-            les valeurs encore absentes.
+            <strong>{data.summary.missing_ects_count} UE sans crédits ECTS</strong>Actualise les données IMT pour
+            récupérer les valeurs encore absentes.
           </span>
           <ArrowRight size={18} />
         </Link>
@@ -194,7 +194,7 @@ export function OverviewPage() {
             <span>Performance</span>
             <h2>Moyenne par UE</h2>
           </div>
-          <Link to="/ues">
+          <Link to="/results?view=ues">
             Voir les UE <ArrowRight size={16} />
           </Link>
         </header>
@@ -277,9 +277,9 @@ export function OverviewPage() {
         <header className="panel-heading">
           <div>
             <span>Derniers résultats</span>
-            <h2>Notes récentes</h2>
+            <h2>Nouveautés</h2>
           </div>
-          <Link to="/notes">
+          <Link to="/results?view=recent">
             Tout afficher <ArrowRight size={16} />
           </Link>
         </header>

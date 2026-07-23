@@ -1,6 +1,6 @@
 # Relevé académique personnel
 
-La page **UE & ECTS > Relevé académique** permet au propriétaire du compte de générer un PDF A4 à partager dans le cadre d'une candidature, d'un entretien ou d'un suivi personnel. Le document reste volontairement présenté comme un **relevé personnel à titre informatif** : il n'est ni édité, ni certifié, ni validé par IMT Atlantique et ne remplace pas un relevé officiel.
+La page **Résultats > Relevé académique** permet au propriétaire du compte de générer un PDF A4 à partager dans le cadre d'une candidature, d'un entretien ou d'un suivi personnel. Le document reste volontairement présenté comme un **relevé personnel à titre informatif** : il n'est ni édité, ni certifié, ni validé par IMT Atlantique et ne remplace pas un relevé officiel.
 
 ## Contenu
 

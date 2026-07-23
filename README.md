@@ -11,7 +11,7 @@ IMTégrale est un projet étudiant indépendant. Il n'est ni affilié, ni approu
 ## Ce que fait le projet
 
 - première importation depuis un compte PASS sans conserver le mot de passe IMT, puis connexion par passkey, compte IMT ou token personnel ;
-- notes PASS, intitulés, semestres, grades et crédits ECTS officiels COMPETENCES, moyenne générale et GPA sur 4 ;
+- espace Résultats unifié avec vues par UE, évaluations et nouveautés, à partir des notes PASS, grades et crédits ECTS officiels COMPETENCES ;
 - actualisation manuelle ou automatique facultative, avec des quotas pour ne pas marteler PASS ;
 - notification Telegram privée lorsqu'une note évolue ;
 - partage en lecture seule avec des tokens révocables ;
@@ -103,6 +103,7 @@ pnpm audit --prod
 - [simulations GPA et simulations de notes privées](docs/simulations.md) ;
 - [agenda INPASS et calendrier de formation FIP](docs/calendars.md) ;
 - [relevé académique personnel et transparence](docs/academic-report.md) ;
+- [espace Résultats, routes et sémantique des données](docs/results.md) ;
 - [présentation des bundles Parcours v1/v2](docs/presentation-schema-v2.md) et [bibliothèque personnelle v3](docs/presentation-schema-v3.md) ;
 - [données, consentements et cadre d'utilisation](docs/data-and-usage.md) ;
 - [actualisation automatique](docs/automatic-sync.md) et [synchronisation manuelle](docs/manual-sync.md) ;

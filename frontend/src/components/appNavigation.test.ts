@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Session } from "../types";
-import { appPageHeading } from "./appNavigation";
+import { appNavItems, appPageHeading, isAppNavItemActive, visibleAppNavigation } from "./appNavigation";
 
 function fictitiousSession(audienceLabel: string, levelLabel: string): Session {
   return {
@@ -38,5 +38,24 @@ describe("appPageHeading Parcours", () => {
     expect(
       appPageHeading("/parcours", fictitiousSession("personal:synthetic-owner", "release_id:synthetic-r1")),
     ).toEqual(["Parcours", "Espace pédagogique personnel"]);
+  });
+});
+
+describe("navigation Résultats", () => {
+  const session = fictitiousSession("FIP 2028", "2A");
+
+  it("exposes one unified academic entry", () => {
+    const navigation = visibleAppNavigation(session, true);
+    expect(navigation.filter((item) => item.to === "/results")).toHaveLength(1);
+    expect(navigation.some((item) => item.to === "/notes" || item.to === "/ues")).toBe(false);
+    expect(appNavItems.filter((item) => item.label === "Résultats")).toHaveLength(1);
+  });
+
+  it("keeps the Result entry active on UE deep links", () => {
+    expect(isAppNavItemActive("/results", "/results/ue/UE-FICTIVE")).toBe(true);
+    expect(appPageHeading("/results/ue/UE-FICTIVE", session)).toEqual([
+      "Résultats",
+      "UE, évaluations et nouveautés dans un espace unique",
+    ]);
   });
 });

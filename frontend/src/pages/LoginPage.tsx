@@ -79,7 +79,7 @@ export function LoginPage() {
           </div>
           <span className="login-product-label">{BRAND.descriptor}</span>
           <h1>{BRAND.tagline}</h1>
-          <p>Notes PASS, UE et ECTS officiels, agenda, simulations, moyenne et GPA réunis dans un espace personnel.</p>
+          <p>Résultats PASS, ECTS officiels, agenda, simulations, moyenne et GPA réunis dans un espace personnel.</p>
           <div className="security-points">
             <span>
               <ShieldCheck size={18} /> Mot de passe IMT jamais conservé

@@ -193,7 +193,13 @@ export function AcademicReportPage() {
   return (
     <div className="academic-report-page">
       <section className="report-intro-band">
-        <Link className="icon-button" to="/ues" viewTransition aria-label="Revenir aux UE" title="Revenir aux UE">
+        <Link
+          className="icon-button"
+          to="/results?view=ues"
+          viewTransition
+          aria-label="Revenir aux résultats"
+          title="Revenir aux résultats"
+        >
           <ArrowLeft size={18} />
         </Link>
         <div>
