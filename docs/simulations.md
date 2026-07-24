@@ -57,6 +57,14 @@ Le scénario actif est mémorisé localement sans donnée académique. La sélec
 
 Le résumé est calculé immédiatement depuis le brouillon avec les fonctions pures communes. Cette mise à jour locale ne change ni les formules, ni les payloads API, ni le délai d'autosauvegarde, ni le contrôle de version optimiste. Les états `Modifications locales`, `Enregistrement…`, `Enregistré`, `Action requise` et `Échec, réessayer` sont annoncés sans dépendre uniquement de la couleur.
 
+## Ergonomie de la projection GPA
+
+L'éditeur GPA reprend la même progression : scénario, synthèse, semestre, puis UE. Le mode d'édition dépend de la largeur réelle du workspace, après déduction de la navigation, et non de la seule largeur du viewport. Un conteneur étroit présente des cartes d'UE repliées et n'insère aucun formulaire dans le DOM tant qu'une UE n'est pas choisie. Un conteneur large utilise une liste et un éditeur adjacent afin de conserver une lecture dense sans comprimer les champs.
+
+Sur téléphone et tablette, l'édition d'une UE s'effectue dans une feuille avec un brouillon temporaire. Annuler ne change pas le scénario ; appliquer reporte les valeurs dans le brouillon principal, recalcule immédiatement le GPA et laisse l'autosauvegarde existante agir. Le corps de la feuille défile indépendamment de ses actions afin que celles-ci restent accessibles lorsque le clavier virtuel réduit la hauteur visible.
+
+Le filtre de semestre ne modifie jamais les données. Une nouvelle UE reprend le semestre actif, puis sa carte reçoit le focus sans saut de scroll. Les conflits et sources indisponibles restent visibles sur les cartes fermées. La résolution compare toujours la valeur officielle et l'hypothèse ; elle n'est jamais automatique.
+
 ## Confidentialité
 
 Les scénarios sont liés au compte propriétaire et contrôlés côté serveur à chaque requête. Les sessions ouvertes par token de partage sont refusées, même lorsqu'un ancien token possède un rôle propriétaire. Les événements de simulation sont également retirés du tableau de bord et du flux SSE d'une session par token.
