@@ -63,12 +63,14 @@ test("l’éditeur mobile progresse scénario, semestre, UE puis évaluation san
       ),
     ).filter((element) => element.offsetParent !== null).length,
     height: document.documentElement.scrollHeight,
-    width: document.documentElement.scrollWidth,
-    viewport: document.documentElement.clientWidth,
+    bodyWidth: document.body.scrollWidth,
+    documentWidth: document.documentElement.scrollWidth,
+    viewport: window.innerWidth,
   }));
   expect(initialMetrics.focusable).toBeLessThan(60);
   expect(initialMetrics.height).toBeLessThan(5_000);
-  expect(initialMetrics.width).toBe(initialMetrics.viewport);
+  expect(initialMetrics.documentWidth).toBeLessThanOrEqual(initialMetrics.viewport);
+  expect(initialMetrics.bodyWidth).toBeLessThanOrEqual(initialMetrics.viewport);
 
   await page.getByLabel("Semestre").selectOption("S6");
   await expect(page.locator(".note-workbench-ue")).toHaveCount(5);
@@ -243,8 +245,9 @@ for (const viewport of responsiveCases) {
     await expect(page.locator(".note-workbench-ue")).toHaveCount(20);
 
     const dimensions = await page.evaluate(() => ({
-      scrollWidth: document.documentElement.scrollWidth,
-      clientWidth: document.documentElement.clientWidth,
+      bodyWidth: document.body.scrollWidth,
+      documentWidth: document.documentElement.scrollWidth,
+      viewportWidth: window.innerWidth,
       pageHeight: document.documentElement.scrollHeight,
       focusable: Array.from(
         document.querySelectorAll<HTMLElement>(
@@ -252,7 +255,8 @@ for (const viewport of responsiveCases) {
         ),
       ).filter((element) => element.offsetParent !== null).length,
     }));
-    expect(dimensions.scrollWidth).toBe(dimensions.clientWidth);
+    expect(dimensions.documentWidth).toBeLessThanOrEqual(dimensions.viewportWidth);
+    expect(dimensions.bodyWidth).toBeLessThanOrEqual(dimensions.viewportWidth);
     expect(dimensions.focusable).toBeLessThan(40);
     if (viewport.width <= 430) expect(dimensions.pageHeight).toBeLessThan(5_000);
 
