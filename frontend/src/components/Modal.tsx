@@ -1,5 +1,5 @@
 import { X } from "lucide-react";
-import { type ReactNode, useEffect, useId, useRef } from "react";
+import { type ReactNode, type RefObject, useId, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 
 interface ModalProps {
@@ -11,6 +11,7 @@ interface ModalProps {
   size?: "small" | "medium" | "large";
   className?: string;
   dismissible?: boolean;
+  initialFocusRef?: RefObject<HTMLElement | null>;
 }
 
 export function Modal({
@@ -22,13 +23,14 @@ export function Modal({
   size = "medium",
   className,
   dismissible = true,
+  initialFocusRef,
 }: ModalProps) {
   const titleId = useId();
   const descriptionId = useId();
   const dialogRef = useRef<HTMLElement>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!open) return;
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const handleKey = (event: KeyboardEvent) => {
@@ -60,13 +62,13 @@ export function Modal({
     };
     document.addEventListener("keydown", handleKey);
     document.body.classList.add("modal-open");
-    window.requestAnimationFrame(() => dialogRef.current?.focus());
+    window.requestAnimationFrame(() => (initialFocusRef?.current ?? dialogRef.current)?.focus());
     return () => {
       document.removeEventListener("keydown", handleKey);
       document.body.classList.remove("modal-open");
       previousFocus?.focus();
     };
-  }, [dismissible, open]);
+  }, [dismissible, initialFocusRef, open]);
 
   if (!open) return null;
   return createPortal(

@@ -1,0 +1,1617 @@
+.note-simulations-page {
+  min-width: 0;
+  overflow: clip;
+}
+
+.note-workbench-scenarios {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+  box-shadow: var(--shadow-xs);
+}
+
+.note-scenario-tabs {
+  display: flex;
+  min-width: 0;
+  gap: 5px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.note-scenario-tabs > button {
+  position: relative;
+  display: grid;
+  min-width: 164px;
+  min-height: 54px;
+  flex: 1 0 164px;
+  align-content: center;
+  gap: 3px;
+  padding: 7px 11px;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  text-align: left;
+  cursor: pointer;
+}
+
+.note-scenario-tabs > button:hover:not(:disabled) {
+  border-color: var(--line);
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+
+.note-scenario-tabs > button.active {
+  border-color: var(--line-strong);
+  background: var(--surface-muted);
+  color: var(--ink);
+  box-shadow: inset 3px 0 0 var(--brand);
+}
+
+.note-scenario-tabs > button.active small {
+  color: var(--ink);
+}
+
+.note-scenario-tabs > button:disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
+}
+
+.note-scenario-tabs span,
+.note-scenario-tabs small {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-scenario-tabs span {
+  font-size: var(--text-xs);
+  font-weight: 780;
+}
+
+.note-scenario-tabs small {
+  color: var(--muted);
+  font-size: var(--text-2xs);
+}
+
+.note-scenario-tabs i {
+  position: absolute;
+  top: 9px;
+  right: 8px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--amber);
+}
+
+.note-create-scenario {
+  min-height: 44px;
+  white-space: nowrap;
+}
+
+.note-scenario-limit {
+  min-width: 26px;
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  font-weight: 750;
+  text-align: center;
+}
+
+.note-scenario-select {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.note-scenario-select > span,
+.note-semester-select > span {
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  font-weight: 760;
+}
+
+.note-scenario-select select,
+.note-semester-select select {
+  width: 100%;
+  min-width: 0;
+  height: 44px;
+  padding-right: 34px;
+  overflow: hidden;
+  color: var(--ink);
+  font-weight: 720;
+  text-overflow: ellipsis;
+}
+
+.note-scenario-select > small {
+  display: flex;
+  min-width: 0;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted);
+  font-size: var(--text-2xs);
+}
+
+.note-scenario-select > small strong {
+  color: var(--brand-dark);
+  font-variant-numeric: tabular-nums;
+}
+
+.note-workbench {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow-xs);
+}
+
+.note-workbench-header {
+  display: flex;
+  min-height: 82px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.note-workbench-title {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 10px;
+}
+
+.note-workbench-title label {
+  min-width: 0;
+}
+
+.note-workbench-title input {
+  width: min(100%, 520px);
+  height: 38px;
+  padding: 0 8px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--ink);
+  font-size: 20px;
+  font-weight: 790;
+  text-overflow: ellipsis;
+}
+
+.note-workbench-title input:hover,
+.note-workbench-title input:focus {
+  border-color: var(--line-strong);
+  background: var(--control-bg);
+}
+
+.note-workbench-title > small {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-workbench-header-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+}
+
+.note-workbench-header-actions > button,
+.note-workbench-header-actions .icon-button {
+  min-height: 44px;
+}
+
+.note-workbench-header-actions .icon-button {
+  width: 44px;
+  height: 44px;
+}
+
+.note-workbench-summary {
+  display: grid;
+  grid-template-columns: minmax(210px, 0.9fr) minmax(0, 2.5fr);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-subtle);
+}
+
+.note-summary-primary {
+  display: grid;
+  min-height: 132px;
+  align-content: center;
+  padding: 20px 22px;
+  border-right: 1px solid var(--line);
+  background: var(--brand-soft);
+}
+
+.note-summary-primary > span,
+.note-summary-metrics dt {
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  font-weight: 780;
+}
+
+.note-summary-primary strong {
+  margin-top: 3px;
+  font-size: 38px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.note-summary-primary small,
+.note-summary-metrics small {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: var(--text-2xs);
+}
+
+.note-summary-primary > span,
+.note-summary-primary > small {
+  color: var(--brand-dark);
+}
+
+.note-summary-metrics {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0;
+}
+
+.note-summary-metrics > div {
+  display: grid;
+  min-width: 0;
+  min-height: 132px;
+  align-content: center;
+  padding: 16px;
+  border-right: 1px solid var(--line);
+}
+
+.note-summary-metrics > div:last-child {
+  border-right: 0;
+}
+
+.note-summary-metrics dd {
+  display: grid;
+  gap: 4px;
+  margin: 5px 0 0;
+}
+
+.note-summary-metric-value {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 23px;
+  font-weight: 820;
+  font-variant-numeric: tabular-nums;
+}
+
+.note-summary-metric-value i {
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-style: normal;
+}
+
+.note-summary-progress-value svg {
+  color: var(--brand);
+}
+
+.note-summary-metrics progress {
+  width: 100%;
+  height: 5px;
+  margin-top: 8px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 3px;
+  background: var(--neutral-track);
+}
+
+.note-summary-metrics progress::-webkit-progress-bar {
+  background: var(--neutral-track);
+}
+
+.note-summary-metrics progress::-webkit-progress-value {
+  background: var(--brand);
+}
+
+.note-summary-metrics progress::-moz-progress-bar {
+  background: var(--brand);
+}
+
+.note-workbench-toolbar {
+  display: grid;
+  min-height: 66px;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.note-semester-tabs {
+  display: flex;
+  min-width: 0;
+  gap: 3px;
+  overflow-x: auto;
+}
+
+.note-semester-tabs button {
+  min-width: 54px;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: 760;
+  cursor: pointer;
+}
+
+.note-semester-tabs button:hover {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+
+.note-semester-tabs button.active {
+  border-color: var(--line);
+  background: var(--surface-muted);
+  color: var(--brand-dark);
+  box-shadow: inset 0 -2px 0 var(--brand);
+}
+
+.note-visible-count {
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  white-space: nowrap;
+}
+
+.note-add-ue {
+  min-height: 44px;
+  white-space: nowrap;
+}
+
+.note-workbench-ue-list {
+  min-height: 220px;
+  padding: 16px;
+  background: var(--surface-subtle);
+}
+
+.note-ue-list-heading {
+  display: flex;
+  min-height: 42px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 10px;
+}
+
+.note-ue-list-heading > div {
+  display: grid;
+  gap: 1px;
+}
+
+.note-ue-list-heading span,
+.note-ue-information header span,
+.note-workbench-assessments > header span {
+  color: var(--brand-dark);
+  font-size: 10px;
+  font-weight: 840;
+  text-transform: uppercase;
+}
+
+.note-ue-list-heading h3 {
+  font-size: 17px;
+}
+
+.note-ue-list-heading .text-button {
+  min-height: 40px;
+}
+
+.note-ue-cards {
+  display: grid;
+  gap: 9px;
+}
+
+.note-workbench-ue {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+  box-shadow: var(--shadow-xs);
+}
+
+.note-workbench-ue::before {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 3px;
+  background: transparent;
+  content: "";
+}
+
+.note-workbench-ue.nature-modified::before {
+  background: var(--amber);
+}
+
+.note-workbench-ue.nature-simulated::before {
+  background: var(--blue);
+}
+
+.note-workbench-ue.has-conflict {
+  border-color: var(--warning-border);
+}
+
+.note-ue-trigger {
+  display: grid;
+  width: 100%;
+  min-height: 86px;
+  grid-template-columns:
+    minmax(260px, 1.7fr)
+    minmax(80px, 0.48fr)
+    minmax(92px, 0.52fr)
+    minmax(54px, 0.3fr)
+    minmax(138px, 0.75fr)
+    22px;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 15px 11px 18px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.note-ue-trigger:hover {
+  background: var(--surface-hover);
+}
+
+.note-workbench-ue.is-open .note-ue-trigger {
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-muted);
+}
+
+.note-workbench-ue.is-open .note-ue-trigger small,
+.note-workbench-ue.is-open .note-ue-trigger i {
+  color: var(--ink);
+}
+
+.note-ue-identity {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 42px minmax(0, 1fr);
+  align-items: center;
+  gap: 11px;
+}
+
+.note-ue-identity > span:last-child {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.note-ue-identity strong,
+.note-ue-identity small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-ue-identity strong {
+  font-size: var(--text-sm);
+}
+
+.note-ue-identity small {
+  color: var(--muted);
+  font-size: var(--text-2xs);
+}
+
+.note-workbench-ue .note-ue-semester {
+  display: grid;
+  width: 42px;
+  height: 36px;
+  place-items: center;
+  border-radius: 5px;
+  background: var(--surface-muted);
+  color: var(--brand-dark);
+  font-size: var(--text-xs);
+  font-weight: 820;
+}
+
+.note-ue-result,
+.note-workbench-ue .note-ue-grade,
+.note-ue-completion,
+.note-ue-origin-summary {
+  display: grid;
+  min-width: 0;
+  justify-items: start;
+  gap: 2px;
+}
+
+.note-ue-result > small,
+.note-workbench-ue .note-ue-grade > small,
+.note-ue-completion > small {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 730;
+  text-transform: uppercase;
+}
+
+.note-ue-result strong {
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+}
+
+.note-ue-result i {
+  margin-left: 2px;
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+}
+
+.note-ue-completion strong {
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.note-ue-origin-summary .simulation-origin-pill {
+  max-width: 100%;
+}
+
+.note-ue-origin-summary > small,
+.note-assessment-origin > small {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 740;
+}
+
+.note-ue-origin-summary .is-conflict,
+.note-assessment-origin .is-conflict {
+  color: var(--warning-text);
+}
+
+.note-ue-origin-summary .is-unavailable,
+.note-assessment-origin .is-unavailable {
+  color: var(--danger-text);
+}
+
+.note-workbench-ue .note-ue-chevron {
+  color: var(--muted);
+  transition: transform var(--motion-base) var(--ease-standard);
+}
+
+.note-workbench-ue.is-open .note-ue-chevron {
+  transform: rotate(180deg);
+}
+
+.note-ue-panel {
+  min-width: 0;
+  animation: disclosure-in var(--motion-base) var(--ease-emphasized) both;
+}
+
+.note-ue-information {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--row-line);
+}
+
+.note-ue-information > header,
+.note-workbench-assessments > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.note-ue-information > header > div,
+.note-workbench-assessments > header > div {
+  display: grid;
+  gap: 1px;
+}
+
+.note-ue-information h4,
+.note-workbench-assessments h4 {
+  font-size: var(--text-sm);
+}
+
+.note-ue-information header button,
+.note-workbench-assessments > header button {
+  min-height: 44px;
+}
+
+.note-ue-information dl {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 13px 0 0;
+}
+
+.note-ue-information dl > div {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--row-line);
+  border-radius: 5px;
+  background: var(--surface-subtle);
+}
+
+.note-ue-information dt {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.note-ue-information dd {
+  margin: 3px 0 0;
+  overflow: hidden;
+  font-size: var(--text-xs);
+  font-weight: 760;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-ue-information > p,
+.note-ue-actions > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 9px;
+  color: var(--muted);
+  font-size: var(--text-2xs);
+}
+
+.note-workbench-conflict {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--warning-border);
+  background: var(--warning-surface);
+  color: var(--warning-text);
+}
+
+.note-workbench-conflict > div:nth-child(2) {
+  display: grid;
+  gap: 2px;
+}
+
+.note-workbench-conflict p {
+  color: var(--muted);
+  font-size: var(--text-2xs);
+}
+
+.note-workbench-conflict > div:last-child {
+  display: flex;
+  gap: 7px;
+}
+
+.note-workbench-conflict button {
+  min-height: 44px;
+}
+
+.note-workbench-assessments {
+  padding: 15px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.note-assessment-cards {
+  display: grid;
+  gap: 7px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.note-assessment-cards > li {
+  min-width: 0;
+}
+
+.note-assessment-card {
+  position: relative;
+  display: grid;
+  width: 100%;
+  min-height: 74px;
+  grid-template-columns:
+    minmax(190px, 1.5fr)
+    minmax(88px, 0.5fr)
+    minmax(76px, 0.4fr)
+    minmax(140px, 0.75fr)
+    auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 13px;
+  overflow: hidden;
+  border: 1px solid var(--row-line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.note-assessment-card::before {
+  position: absolute;
+  top: 11px;
+  bottom: 11px;
+  left: 0;
+  width: 2px;
+  background: transparent;
+  content: "";
+}
+
+.note-assessment-card.nature-modified::before {
+  background: var(--amber);
+}
+
+.note-assessment-card.nature-simulated::before {
+  background: var(--blue);
+}
+
+.note-assessment-card:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: var(--surface-hover);
+}
+
+.note-assessment-card.has-conflict {
+  border-color: var(--warning-border);
+  background: var(--warning-surface);
+}
+
+.note-assessment-card:disabled {
+  cursor: not-allowed;
+}
+
+.note-assessment-main {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.note-assessment-main strong,
+.note-assessment-main small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-assessment-main strong {
+  font-size: var(--text-xs);
+}
+
+.note-assessment-main small {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.note-assessment-score,
+.note-assessment-coefficient {
+  display: grid;
+  min-width: 0;
+  justify-items: start;
+  gap: 1px;
+}
+
+.note-assessment-score strong,
+.note-assessment-coefficient strong {
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.note-assessment-score small,
+.note-assessment-coefficient small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.note-assessment-score.pending strong {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.note-assessment-origin {
+  display: grid;
+  min-width: 0;
+  justify-items: start;
+  gap: 2px;
+}
+
+.note-assessment-edit {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  color: var(--brand-dark);
+  font-size: var(--text-2xs);
+  font-weight: 780;
+}
+
+.note-assessment-cards .note-workbench-conflict {
+  margin-top: -1px;
+  border: 1px solid var(--warning-border);
+  border-radius: 0 0 6px 6px;
+}
+
+.note-workbench-assessments > .empty-state {
+  min-height: 140px;
+  margin-top: 10px;
+}
+
+.note-ue-actions {
+  display: flex;
+  min-height: 62px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 9px 16px;
+  background: var(--surface-subtle);
+}
+
+.note-ue-actions > span {
+  margin: 0;
+}
+
+.note-ue-actions button {
+  min-height: 44px;
+}
+
+.note-workbench-formula {
+  border-top: 1px solid var(--line);
+}
+
+.note-workbench-formula > summary {
+  min-height: 54px;
+}
+
+.note-editor-modal {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.note-editor-form {
+  display: grid;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.note-editor-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  padding: 20px 22px;
+}
+
+.note-editor-fields > label {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: 740;
+}
+
+.note-editor-fields input,
+.note-editor-fields select {
+  width: 100%;
+  height: 44px;
+  color: var(--ink);
+}
+
+.note-ue-editor-fields > label:first-child,
+.note-editor-wide-field,
+.note-editor-resit {
+  grid-column: 1 / -1;
+}
+
+.field-error {
+  color: var(--danger-text) !important;
+  font-size: var(--text-2xs) !important;
+  font-weight: 680;
+}
+
+.note-editor-form > .field-error {
+  margin: -12px 22px 16px;
+}
+
+.note-editor-provenance {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0 22px 20px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-subtle);
+}
+
+.note-editor-provenance > div {
+  display: grid;
+  gap: 5px;
+}
+
+.note-editor-provenance > div > span {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.note-editor-provenance > div > strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--text-xs);
+}
+
+.note-editor-provenance > p {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  line-height: 1.45;
+}
+
+.note-editor-resit {
+  min-height: 66px;
+}
+
+.note-editor-danger {
+  margin: 0 22px 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--danger-border);
+}
+
+.danger-link-button {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--danger-text);
+  font-weight: 720;
+  cursor: pointer;
+}
+
+.danger-link-button:hover {
+  border-color: var(--danger-border);
+  background: var(--danger-surface);
+}
+
+.note-editor-danger > div {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 9px;
+  color: var(--danger-text);
+}
+
+.note-editor-danger > div p {
+  align-self: center;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.note-editor-danger > div > div {
+  display: flex;
+  grid-column: 2;
+  gap: 8px;
+}
+
+.note-editor-danger button {
+  min-height: 44px;
+}
+
+.note-editor-actions {
+  position: sticky;
+  z-index: 2;
+  bottom: 0;
+  margin-top: 0;
+}
+
+.note-editor-actions button,
+.note-comparison-actions button {
+  min-height: 44px;
+}
+
+.note-editor-actions {
+  position: sticky;
+  z-index: 3;
+  bottom: 0;
+}
+
+.note-comparison-modal {
+  overflow: hidden auto;
+}
+
+.note-comparison-actions {
+  position: sticky;
+  z-index: 2;
+  bottom: 0;
+}
+
+.note-comparison-modal .simulation-comparison-score small {
+  color: inherit;
+}
+
+html[data-theme="dark"] .note-workbench-scenarios,
+html[data-theme="dark"] .note-workbench,
+html[data-theme="dark"] .note-workbench-ue,
+html[data-theme="dark"] .note-assessment-card {
+  border-color: #2b3836;
+  background: #17201f;
+}
+
+html[data-theme="dark"] .note-summary-primary {
+  background: #153b38;
+}
+
+html[data-theme="dark"] .note-workbench-summary,
+html[data-theme="dark"] .note-workbench-ue-list,
+html[data-theme="dark"] .note-ue-actions {
+  background: #111817;
+}
+
+html[data-theme="dark"] .note-scenario-tabs > button.active,
+html[data-theme="dark"] .note-workbench-ue.is-open .note-ue-trigger,
+html[data-theme="dark"] .note-ue-information dl > div,
+html[data-theme="dark"] .note-editor-provenance {
+  background: #1a2422;
+}
+
+html[data-theme="dark"] .note-workbench-conflict,
+html[data-theme="dark"] .note-assessment-card.has-conflict {
+  background: #322a1d;
+}
+
+@media (max-width: 1180px) {
+  .note-ue-trigger {
+    grid-template-columns:
+      minmax(220px, 1.5fr)
+      80px
+      90px
+      54px
+      22px;
+  }
+
+  .note-ue-origin-summary {
+    display: none;
+  }
+
+  .note-assessment-card {
+    grid-template-columns:
+      minmax(170px, 1.35fr)
+      86px
+      72px
+      minmax(120px, 0.7fr)
+      auto;
+  }
+}
+
+@media (max-width: 1023px) {
+  .note-workbench-scenarios {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .note-scenario-limit {
+    display: none;
+  }
+
+  .note-workbench-header {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 9px;
+  }
+
+  .note-workbench-header-actions {
+    justify-content: space-between;
+  }
+
+  .note-workbench-header-actions > .secondary-button {
+    flex: 1;
+  }
+
+  .note-workbench-summary {
+    grid-template-columns: minmax(190px, 0.7fr) minmax(0, 1.8fr);
+  }
+
+  .note-summary-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .note-summary-metrics > div {
+    min-height: 90px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .note-summary-metrics > div:nth-child(2) {
+    border-right: 0;
+  }
+
+  .note-summary-metrics > div:nth-last-child(-n + 2) {
+    border-bottom: 0;
+  }
+
+  .note-workbench-toolbar {
+    grid-template-columns: minmax(160px, 1fr) auto;
+  }
+
+  .note-semester-select {
+    display: grid;
+    min-width: 0;
+    gap: 5px;
+  }
+
+  .note-visible-count {
+    display: none;
+  }
+
+  .note-ue-trigger {
+    grid-template-columns: minmax(0, 1fr) 82px 88px 58px 22px;
+    gap: 9px;
+  }
+
+  .note-assessment-card {
+    grid-template-columns: minmax(0, 1fr) 82px 70px auto;
+  }
+
+  .note-assessment-origin {
+    display: none;
+  }
+
+  .note-workbench-conflict {
+    grid-template-columns: 22px minmax(0, 1fr);
+  }
+
+  .note-workbench-conflict > div:last-child {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .note-workbench-scenarios {
+    margin-right: -14px;
+    margin-left: -14px;
+    padding: 10px 14px;
+    border-right: 0;
+    border-left: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .note-create-scenario {
+    width: 44px;
+    min-width: 44px;
+    padding: 0;
+  }
+
+  .note-create-scenario > span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .note-workbench {
+    margin-right: -14px;
+    margin-left: -14px;
+    border-right: 0;
+    border-left: 0;
+    border-radius: 0;
+  }
+
+  .note-workbench-header {
+    padding: 12px 14px;
+  }
+
+  .note-workbench-title {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .note-workbench-title input {
+    height: 42px;
+    padding-left: 0;
+    font-size: 18px;
+  }
+
+  .note-workbench-title > small {
+    display: none;
+  }
+
+  .note-workbench-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .note-summary-primary {
+    min-height: 108px;
+    padding: 16px 18px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .note-summary-primary strong {
+    font-size: 34px;
+  }
+
+  .note-summary-metrics > div {
+    min-height: 88px;
+  }
+
+  .note-summary-metrics dd {
+    font-size: 20px;
+  }
+
+  .note-workbench-toolbar {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    padding: 10px 12px;
+  }
+
+  .note-add-ue {
+    min-width: 44px;
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .note-workbench-ue-list {
+    padding: 12px 8px;
+  }
+
+  .note-ue-list-heading {
+    padding: 0 4px;
+  }
+
+  .note-ue-trigger {
+    min-height: 96px;
+    grid-template-columns: minmax(0, 1fr) 76px 20px;
+    grid-template-areas:
+      "identity result chevron"
+      "identity grade chevron";
+    gap: 5px 9px;
+    padding: 11px 10px 11px 13px;
+  }
+
+  .note-ue-identity {
+    grid-area: identity;
+    grid-template-columns: 38px minmax(0, 1fr);
+    gap: 9px;
+  }
+
+  .note-workbench-ue .note-ue-semester {
+    width: 38px;
+    height: 40px;
+  }
+
+  .note-ue-result {
+    grid-area: result;
+    justify-items: end;
+  }
+
+  .note-workbench-ue .note-ue-grade {
+    grid-area: grade;
+    grid-auto-flow: column;
+    align-items: center;
+    justify-content: end;
+    justify-items: end;
+    gap: 4px;
+  }
+
+  .note-workbench-ue .note-ue-grade > small {
+    display: none;
+  }
+
+  .note-ue-completion {
+    display: none;
+  }
+
+  .note-workbench-ue .note-ue-chevron {
+    grid-area: chevron;
+  }
+
+  .note-ue-information,
+  .note-workbench-assessments {
+    padding: 13px 12px;
+  }
+
+  .note-ue-information > header,
+  .note-workbench-assessments > header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .note-ue-information header button,
+  .note-workbench-assessments > header button {
+    width: 100%;
+  }
+
+  .note-ue-information dl {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .note-assessment-cards {
+    gap: 8px;
+  }
+
+  .note-assessment-card {
+    min-height: 116px;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "main edit"
+      "score coefficient";
+    gap: 10px 12px;
+    padding: 12px;
+  }
+
+  .note-assessment-main {
+    grid-area: main;
+  }
+
+  .note-assessment-score {
+    grid-area: score;
+  }
+
+  .note-assessment-coefficient {
+    grid-area: coefficient;
+    justify-items: end;
+  }
+
+  .note-assessment-edit {
+    grid-area: edit;
+  }
+
+  .note-assessment-origin {
+    display: none;
+  }
+
+  .note-assessment-cards .note-workbench-conflict {
+    margin-top: -8px;
+  }
+
+  .note-workbench-conflict {
+    padding: 12px;
+  }
+
+  .note-workbench-conflict > div:last-child {
+    grid-template-columns: 1fr;
+  }
+
+  .note-ue-actions {
+    align-items: stretch;
+    flex-direction: column;
+    padding: 11px 12px;
+  }
+
+  .note-ue-actions > span {
+    line-height: 1.4;
+  }
+
+  .note-ue-actions button {
+    width: 100%;
+  }
+
+  .note-editor-modal,
+  .note-comparison-modal {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    max-width: none;
+    height: 100dvh;
+    max-height: 100dvh;
+    margin: 0;
+    border-radius: 0;
+    animation: none;
+    transform: none;
+  }
+
+  .note-editor-modal > .modal-header,
+  .note-comparison-modal > .modal-header {
+    position: sticky;
+    z-index: 3;
+    top: 0;
+    min-height: 72px;
+    padding: calc(12px + env(safe-area-inset-top)) 18px 13px;
+    background: var(--surface);
+  }
+
+  .note-editor-modal > .modal-header .icon-button,
+  .note-comparison-modal > .modal-header .icon-button {
+    width: 44px;
+    height: 44px;
+    flex: 0 0 44px;
+  }
+
+  .note-editor-fields {
+    grid-template-columns: 1fr;
+    gap: 13px;
+    padding: 18px;
+  }
+
+  .note-ue-editor-fields > label:first-child,
+  .note-editor-wide-field,
+  .note-editor-resit {
+    grid-column: 1;
+  }
+
+  .note-editor-provenance {
+    grid-template-columns: 1fr;
+    margin-right: 18px;
+    margin-left: 18px;
+  }
+
+  .note-editor-provenance > p {
+    grid-column: 1;
+  }
+
+  .note-editor-form > .field-error {
+    margin-right: 18px;
+    margin-left: 18px;
+  }
+
+  .note-editor-danger {
+    margin-right: 18px;
+    margin-left: 18px;
+  }
+
+  .note-editor-danger > div > div {
+    grid-column: 1 / -1;
+    flex-direction: column;
+  }
+
+  .note-editor-actions {
+    position: fixed;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    padding-right: 18px;
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+    padding-left: 18px;
+  }
+
+  .note-editor-form {
+    padding-bottom: calc(70px + env(safe-area-inset-bottom));
+  }
+
+  .note-editor-actions > button {
+    flex: 1;
+  }
+
+  .note-comparison-modal .simulation-compare-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .note-comparison-modal .simulation-compare-controls > svg {
+    margin: 0;
+    transform: rotate(90deg);
+  }
+
+  .note-comparison-modal .simulation-comparison {
+    padding: 14px;
+  }
+
+  .note-comparison-modal .simulation-comparison-score {
+    grid-template-columns: 1fr;
+  }
+
+  .note-comparison-modal .simulation-comparison-score > div {
+    min-height: 76px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .note-comparison-modal .simulation-comparison-score > div:last-child {
+    border-bottom: 0;
+  }
+
+  .note-comparison-modal .simulation-differences > div:not(.empty-state) {
+    grid-template-columns: 1fr;
+  }
+
+  .note-comparison-modal .note-comparison-values {
+    justify-content: start;
+  }
+
+  .note-comparison-actions {
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  }
+
+  .note-comparison-actions button {
+    width: 100%;
+  }
+}
+
+@media (max-width: 420px) {
+  .note-scenario-select > small span {
+    max-width: 148px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .note-workbench-header-actions > .secondary-button {
+    min-width: 0;
+  }
+
+  .note-summary-metrics > div {
+    padding: 11px;
+  }
+
+  .note-summary-metrics small {
+    line-height: 1.25;
+  }
+
+  .note-add-ue {
+    width: 44px;
+    font-size: 0;
+  }
+
+  .note-add-ue svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .note-ue-identity strong {
+    font-size: var(--text-xs);
+  }
+
+  .note-ue-identity small {
+    max-width: 165px;
+  }
+
+  .note-assessment-card {
+    grid-template-columns: minmax(0, 1fr) 64px;
+  }
+
+  .note-assessment-edit {
+    font-size: 0;
+  }
+
+  .note-assessment-edit svg {
+    width: 18px;
+    height: 18px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .note-workbench *,
+  .note-workbench *::before,
+  .note-workbench *::after,
+  .note-workbench-scenarios *,
+  .note-editor-modal,
+  .note-comparison-modal {
+    animation: none !important;
+    scroll-behavior: auto !important;
+    transition: none !important;
+  }
+}

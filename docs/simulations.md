@@ -47,6 +47,16 @@ Modifier une valeur importée transforme uniquement la copie en hypothèse. Lors
 
 Un scénario peut être renommé, dupliqué, réinitialisé, comparé ou supprimé. Les modifications valides sont enregistrées automatiquement sur le serveur. Un numéro de version empêche deux onglets de s'écraser ; l'utilisateur peut recharger la version distante ou préserver ses changements dans une nouvelle copie.
 
+## Ergonomie de la projection de notes
+
+L'éditeur de notes suit une progression stable : scénario, synthèse, semestre, UE, puis évaluation. Les UE sont repliées au chargement, sauf lorsqu'un conflit doit être traité. Leur contenu n'est monté dans le DOM qu'à l'ouverture. Sur téléphone et tablette, ouvrir une UE referme la précédente ; sur ordinateur, plusieurs UE peuvent rester ouvertes et une action permet de tout replier.
+
+Une évaluation fermée reste une ligne de synthèse. Son édition utilise un formulaire temporaire dans une feuille plein écran sur téléphone : annuler ne modifie pas le scénario, tandis qu'appliquer reporte la valeur dans le brouillon principal puis laisse l'autosauvegarde existante agir. Le même principe s'applique à l'ajout d'une UE ou d'une évaluation afin de ne jamais créer de ligne vide après une annulation.
+
+Le scénario actif est mémorisé localement sans donnée académique. La sélection, le filtre de semestre, l'UE ouverte, le scroll et le focus restent indépendants de l'état serveur. Une réponse d'autosauvegarde met à jour les identifiants et la version sans remonter la page ni rouvrir toutes les UE. Après une feuille ou une confirmation, le focus revient à l'action d'origine.
+
+Le résumé est calculé immédiatement depuis le brouillon avec les fonctions pures communes. Cette mise à jour locale ne change ni les formules, ni les payloads API, ni le délai d'autosauvegarde, ni le contrôle de version optimiste. Les états `Modifications locales`, `Enregistrement…`, `Enregistré`, `Action requise` et `Échec, réessayer` sont annoncés sans dépendre uniquement de la couleur.
+
 ## Confidentialité
 
 Les scénarios sont liés au compte propriétaire et contrôlés côté serveur à chaque requête. Les sessions ouvertes par token de partage sont refusées, même lorsqu'un ancien token possède un rôle propriétaire. Les événements de simulation sont également retirés du tableau de bord et du flux SSE d'une session par token.

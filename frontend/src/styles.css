@@ -5439,7 +5439,7 @@ select:disabled {
   padding: 6px 11px;
   border: 1px solid transparent;
   border-radius: 5px;
-  color: var(--muted);
+  color: var(--ink);
   transition: border-color var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard);
 }
 
@@ -5447,7 +5447,7 @@ select:disabled {
 .simulation-mode-switch a.active { border-color: var(--line); background: var(--surface); color: var(--brand-dark); box-shadow: var(--shadow-xs); }
 .simulation-mode-switch svg { grid-row: 1 / span 2; align-self: center; justify-self: center; }
 .simulation-mode-switch span { overflow: hidden; font-size: var(--text-sm); font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
-.simulation-mode-switch small { overflow: hidden; color: var(--soft); font-size: var(--text-2xs); font-weight: 620; text-overflow: ellipsis; white-space: nowrap; }
+.simulation-mode-switch small { overflow: hidden; color: var(--ink); font-size: var(--text-2xs); font-weight: 620; text-overflow: ellipsis; white-space: nowrap; }
 
 .simulations-page,
 .simulation-page-loading {
@@ -5483,7 +5483,7 @@ select:disabled {
 .simulation-privacy-band p { margin-top: 2px; color: var(--muted); font-size: var(--text-xs); }
 .simulation-privacy-band > div:last-child { display: grid; justify-items: end; gap: 2px; }
 .simulation-privacy-band i { padding: 3px 7px; border-radius: 4px; background: var(--surface); color: var(--brand-dark); font-size: var(--text-2xs); font-style: normal; font-weight: 800; }
-.simulation-privacy-band small { color: var(--soft); font-size: var(--text-2xs); }
+.simulation-privacy-band small { color: var(--muted); font-size: var(--text-2xs); }
 
 .simulation-scenario-bar {
   display: flex;
