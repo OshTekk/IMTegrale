@@ -208,6 +208,7 @@ jobs:
             --output artifacts/release-manifest.json
           python scripts/smoke_release.py --wheel "${wheels[0]}" --dist frontend/dist
           cp -R frontend/dist artifacts/frontend
+          python scripts/verify_release_artifact.py artifacts
           sha256sum "${wheels[0]}" artifacts/imtegrale.cdx.json artifacts/release-manifest.json
       - name: Retain audited release bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -216,3 +217,49 @@ jobs:
           path: artifacts/
           if-no-files-found: error
           retention-days: 30
+          include-hidden-files: true
+
+  release-artifact-roundtrip:
+    needs: release-artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install locked runtime for the downloaded smoke-test
+        run: python -m pip install --disable-pip-version-check -r deploy/requirements.lock
+      - name: Download the exact uploaded release bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: imtegrale-${{ github.sha }}
+          path: downloaded-artifact
+          digest-mismatch: error
+      - name: Verify the downloaded release bundle
+        run: |
+          test -f downloaded-artifact/frontend/.vite/manifest.json
+          python scripts/verify_release_artifact.py downloaded-artifact
+      - name: Re-run release boundaries on the download
+        shell: bash
+        run: |
+          mapfile -t wheels < <(find downloaded-artifact/wheel -maxdepth 1 -type f -name '*.whl' -print)
+          test "${#wheels[@]}" -eq 1
+          python scripts/check_content_boundary.py \
+            --wheel "${wheels[0]}" \
+            --dist downloaded-artifact/frontend
+          mapfile -d '' artifact_files < <(find downloaded-artifact -type f -print0)
+          python scripts/check_secrets.py \
+            --repo-root downloaded-artifact \
+            "${artifact_files[@]}"
+      - name: Smoke-test the downloaded release bundle
+        shell: bash
+        run: |
+          mapfile -t wheels < <(find downloaded-artifact/wheel -maxdepth 1 -type f -name '*.whl' -print)
+          test "${#wheels[@]}" -eq 1
+          python scripts/smoke_release.py \
+            --wheel "${wheels[0]}" \
+            --dist downloaded-artifact/frontend

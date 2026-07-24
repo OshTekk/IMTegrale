@@ -14,6 +14,43 @@ La production utilise deux liens atomiques :
 5. Créer l'archive avec `COPYFILE_DISABLE=1` et `tar --no-xattrs`; exclure `build`, `dist`, `*.egg-info`, `__pycache__`, `*.pyc`, les tests, `node_modules` et les caches.
 6. Vérifier les SHA-256 après chaque transfert.
 
+### Artefact GitHub vérifié
+
+Le seul bundle déployable est l'artefact `imtegrale-<sha>` produit par le job
+`release-artifact`, puis retéléchargé et accepté par
+`release-artifact-roundtrip`. L'upload inclut explicitement les fichiers cachés,
+mais le vérificateur n'en autorise qu'un :
+`frontend/.vite/manifest.json`. Tout autre fichier caché, lien, hardlink, fichier
+spécial, permission dangereuse, fichier supplémentaire ou digest incohérent fait
+échouer la CI.
+
+Le manifest Vite n'est actuellement pas chargé par FastAPI en production. Il est
+néanmoins généré volontairement par Vite, utilisé pendant le contrôle des budgets
+et conservé comme inventaire vérifiable du graphe frontend audité. Sa suppression
+éventuelle relève d'un changement d'architecture séparé.
+
+Pour préparer une release, télécharger le bundle exact du workflow vert dans un
+répertoire de staging vide, puis exécuter avant toute installation :
+
+```bash
+gh run download <run-id> \
+  --name "imtegrale-<sha>" \
+  --dir /var/tmp/imtegrale-<sha>
+python scripts/verify_release_artifact.py /var/tmp/imtegrale-<sha>
+```
+
+Le vérificateur relit `release-manifest.json`, contrôle le wheel unique, le SBOM,
+chaque fichier frontend, le manifest Vite, les SHA-256, les tailles, les secrets
+et la frontière pédagogique. Il refuse aussi tout fichier non inventorié. Le
+smoke-test doit ensuite utiliser directement le wheel et le dossier `frontend`
+de ce même répertoire.
+
+Il est interdit de reconstruire le frontend ou le wheel après téléchargement,
+de restaurer manuellement `.vite/manifest.json`, ou de remplacer un fichier par
+une copie locale portant seulement le même SHA Git. Un manifest absent implique
+un échec fermé avant la bascule. Conserver la release active comme cible de
+rollback jusqu'à la fin des vérifications.
+
 La révision `0017` supprime physiquement les anciennes colonnes de mot de passe IMT. Si l'opérateur choisit l'exception facultative pour son unique compte propriétaire, il doit créer **avant** la migration `/etc/botnote/owner-imt-password`, sans passer le secret dans l'historique du shell, puis l'installer en `botnote:botnote 0400`. Définir ensuite `BOTNOTE_OWNER_IMT_USERNAME` et `BOTNOTE_OWNER_IMT_PASSWORD_FILE` dans l'environnement privé. Aucun autre compte ne doit disposer d'un secret local.
 
 ## Installation LXC

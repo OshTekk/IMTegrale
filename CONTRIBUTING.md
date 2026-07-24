@@ -58,6 +58,6 @@ remplacement.
 - Ajoutez des tests proportionnés au risque, en particulier pour l'authentification, les quotas, les autorisations et le classement.
 - Signalez explicitement toute migration, nouvelle dépendance, donnée persistée ou modification du modèle de menace.
 - Vérifiez le lint, les tests, le build, le scan de secrets et les audits de dépendances avant ouverture.
-- Toute modification de la chaîne de release doit conserver le SBOM CycloneDX, le manifeste SHA-256, l'audit des frontières wheel/frontend et le smoke-test de l'artefact installé.
+- Toute modification de la chaîne de release doit conserver le SBOM CycloneDX, le manifeste SHA-256, l'audit des frontières wheel/frontend et le smoke-test de l'artefact retéléchargé depuis GitHub. Aucun fichier ne peut être reconstruit, restauré ou remplacé entre le téléchargement, la vérification et l'installation.
 
 Les vulnérabilités ne doivent pas être proposées par pull request publique. Utilisez la procédure de [`SECURITY.md`](SECURITY.md).
