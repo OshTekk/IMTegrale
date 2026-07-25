@@ -1276,6 +1276,20 @@ export type AutoSyncUpdate = {
 };
 
 /**
+ * AutonomousSyncSettingsResponse
+ */
+export type AutonomousSyncSettingsResponse = {
+    /**
+     * Available
+     */
+    available: false;
+    /**
+     * Configured
+     */
+    configured: false;
+};
+
+/**
  * BusinessHoursResponse
  */
 export type BusinessHoursResponse = {
@@ -4576,6 +4590,26 @@ export type SimulationWarningResponse = {
 };
 
 /**
+ * SyncMode
+ */
+export type SyncMode = 'manual' | 'session_only' | 'autonomous';
+
+/**
+ * SyncModeUpdate
+ */
+export type SyncModeUpdate = {
+    /**
+     * Adaptive
+     */
+    adaptive?: boolean;
+    /**
+     * Interval Hours
+     */
+    interval_hours?: 2 | 4 | 6 | 8 | 12 | 24;
+    mode: SyncMode;
+};
+
+/**
  * SyncRequestSummaryResponse
  */
 export type SyncRequestSummaryResponse = {
@@ -4617,6 +4651,11 @@ export type SyncSettingsResponse = {
      * Allowed Intervals
      */
     allowed_intervals: Array<2 | 4 | 6 | 8 | 12 | 24>;
+    autonomous: AutonomousSyncSettingsResponse;
+    /**
+     * Available Modes
+     */
+    available_modes: Array<SyncMode>;
     business_hours: BusinessHoursResponse;
     /**
      * Consented At
@@ -4634,6 +4673,7 @@ export type SyncSettingsResponse = {
      * Interval Hours
      */
     interval_hours: 2 | 4 | 6 | 8 | 12 | 24;
+    mode: SyncMode;
     /**
      * Next Eligible At
      */
@@ -9704,6 +9744,63 @@ export type SettingsUpdateAutoSyncResponses = {
 };
 
 export type SettingsUpdateAutoSyncResponse = SettingsUpdateAutoSyncResponses[keyof SettingsUpdateAutoSyncResponses];
+
+export type SettingsUpdateSyncModeData = {
+    body: SyncModeUpdate;
+    path?: never;
+    query?: never;
+    url: '/api/v1/settings/sync-mode';
+};
+
+export type SettingsUpdateSyncModeErrors = {
+    /**
+     * Requête refusée
+     */
+    400: ApiErrorEnvelope;
+    /**
+     * Authentification requise
+     */
+    401: ApiErrorEnvelope;
+    /**
+     * Action interdite
+     */
+    403: ApiErrorEnvelope;
+    /**
+     * Ressource introuvable
+     */
+    404: ApiErrorEnvelope;
+    /**
+     * Conflit d'état
+     */
+    409: ApiErrorEnvelope;
+    /**
+     * Requête trop volumineuse
+     */
+    413: ApiErrorEnvelope;
+    /**
+     * Validation impossible
+     */
+    422: ApiErrorEnvelope;
+    /**
+     * Limite temporaire atteinte
+     */
+    429: ApiErrorEnvelope;
+    /**
+     * Service temporairement indisponible
+     */
+    503: ApiErrorEnvelope;
+};
+
+export type SettingsUpdateSyncModeError = SettingsUpdateSyncModeErrors[keyof SettingsUpdateSyncModeErrors];
+
+export type SettingsUpdateSyncModeResponses = {
+    /**
+     * Successful Response
+     */
+    200: SettingsResponse;
+};
+
+export type SettingsUpdateSyncModeResponse = SettingsUpdateSyncModeResponses[keyof SettingsUpdateSyncModeResponses];
 
 export type SettingsCompleteSyncSetupData = {
     body: SyncSetupUpdate;

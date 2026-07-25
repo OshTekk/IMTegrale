@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     pass_daily_quota: int = Field(default=8, ge=1, le=48)
     scheduler_poll_seconds: int = Field(default=60, ge=15, le=900)
     worker_heartbeat_ttl_seconds: int = Field(default=180, ge=60, le=900)
+    autonomous_sync_enabled: bool = False
     sync_lock_dir: Path = Path("/run/botnote")
     trusted_proxy_ips: list[str] = Field(default_factory=lambda: ["127.0.0.1"])
     admin_allowed_identities: list[str] = Field(default_factory=list)
@@ -164,6 +165,15 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "Personal learning mode requires a distinct personal:<id> audience"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def reject_unimplemented_autonomous_sync(self) -> Settings:
+        if self.autonomous_sync_enabled:
+            raise ValueError(
+                "BOTNOTE_AUTONOMOUS_SYNC_ENABLED cannot be enabled: "
+                "the autonomous runtime is not implemented"
+            )
         return self
 
     def validate_secrets(self) -> None:

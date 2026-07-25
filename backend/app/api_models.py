@@ -13,6 +13,7 @@ from app.learning.schemas import (
     ReleaseMode,
     ReviewStatus,
 )
+from app.sync_modes import SyncMode
 
 Role = Literal["owner", "editor", "viewer"]
 AuthMethod = Literal["imt", "token", "passkey"]
@@ -232,8 +233,16 @@ class BusinessHoursResponse(ApiModel):
     timezone: str
 
 
+class AutonomousSyncSettingsResponse(ApiModel):
+    available: Literal[False]
+    configured: Literal[False]
+
+
 class SyncSettingsResponse(ApiModel):
     enabled: bool
+    mode: SyncMode
+    available_modes: list[SyncMode]
+    autonomous: AutonomousSyncSettingsResponse
     interval_hours: Literal[2, 4, 6, 8, 12, 24]
     adaptive: bool
     current_interval_hours: Literal[2, 4, 6, 8, 12, 24]

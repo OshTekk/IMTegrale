@@ -58,6 +58,7 @@ from app.services.sync_schedule import (
     defer_automatic_sync,
     update_adaptive_cadence,
 )
+from app.sync_modes import stored_sync_mode_is_supported
 
 logger = logging.getLogger(__name__)
 
@@ -715,6 +716,17 @@ def sync_due_accounts() -> list[dict]:
                 )
             )
         )
+        unsupported_count = sum(
+            not stored_sync_mode_is_supported(account) for account in accounts
+        )
+        if unsupported_count:
+            logger.error(
+                "Unsupported automatic sync mode ignored",
+                extra={
+                    "event": "sync_mode_unsupported",
+                    "count": unsupported_count,
+                },
+            )
         due_accounts = [account for account in accounts if auto_sync_is_due(account, now)]
         due_accounts.sort(
             key=lambda account: (

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from decimal import Decimal
 
@@ -19,7 +20,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.ext.mutable import MutableList
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from app.database import Base, utcnow
 from app.model_helpers import new_id
@@ -32,6 +33,7 @@ from app.models_operations import (
 from app.models_operations import (
     RuntimeHeartbeat as RuntimeHeartbeat,
 )
+from app.sync_modes import SYNC_MODE_VALUES
 
 
 class Account(Base):
@@ -45,6 +47,10 @@ class Account(Base):
         CheckConstraint(
             "auto_sync_current_interval_hours IN (2, 4, 6, 8, 12, 24)",
             name="ck_accounts_auto_sync_current_interval",
+        ),
+        CheckConstraint(
+            f"auto_sync_mode IN ({', '.join(repr(mode) for mode in SYNC_MODE_VALUES)})",
+            name="ck_accounts_auto_sync_mode",
         ),
     )
 
@@ -64,6 +70,9 @@ class Account(Base):
     last_sync_status: Mapped[str] = mapped_column(String(32), default="never")
     last_sync_error: Mapped[str | None] = mapped_column(Text)
     auto_sync_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    auto_sync_mode: Mapped[str] = mapped_column(
+        String(24), default="manual", server_default="manual"
+    )
     auto_sync_interval_hours: Mapped[int] = mapped_column(Integer, default=2)
     auto_sync_adaptive: Mapped[bool] = mapped_column(Boolean, default=True)
     auto_sync_current_interval_hours: Mapped[int] = mapped_column(Integer, default=2)
@@ -124,6 +133,11 @@ class Account(Base):
     )
     pass_service_sessions: Mapped[list[PassServiceSession]] = relationship(
         back_populates="account", cascade="all, delete-orphan"
+    )
+    imt_sync_credential: Mapped[ImtSyncCredential | None] = relationship(
+        back_populates="account",
+        cascade="all, delete-orphan",
+        uselist=False,
     )
     learning_access_grants: Mapped[list[LearningAccessGrant]] = relationship(
         back_populates="account", cascade="all, delete-orphan"
@@ -634,6 +648,97 @@ class PassOperation(Base):
     error_class: Mapped[str | None] = mapped_column(String(64))
     upstream_status: Mapped[int | None] = mapped_column(Integer)
     retry_after_seconds: Mapped[int | None] = mapped_column(Integer)
+
+
+class ImtSyncCredential(Base):
+    __tablename__ = "imt_sync_credentials"
+    __table_args__ = (
+        UniqueConstraint("account_id", name="uq_imt_sync_credentials_account"),
+        CheckConstraint(
+            "state IN ('active', 'invalid', 'revoked')",
+            name="ck_imt_sync_credentials_state",
+        ),
+        CheckConstraint(
+            "credential_generation >= 1",
+            name="ck_imt_sync_credentials_generation",
+        ),
+        CheckConstraint(
+            "consent_version >= 1",
+            name="ck_imt_sync_credentials_consent_version",
+        ),
+        CheckConstraint(
+            "failure_count >= 0",
+            name="ck_imt_sync_credentials_failure_count",
+        ),
+        CheckConstraint(
+            "encrypted_envelope IS NULL "
+            "OR length(encrypted_envelope) BETWEEN 48 AND 4096",
+            name="ck_imt_sync_credentials_envelope_size",
+        ),
+        CheckConstraint(
+            "envelope_version IS NULL OR envelope_version >= 1",
+            name="ck_imt_sync_credentials_envelope_version",
+        ),
+        CheckConstraint(
+            "key_id IS NULL OR length(key_id) BETWEEN 1 AND 64",
+            name="ck_imt_sync_credentials_key_id_size",
+        ),
+        CheckConstraint(
+            "revoked_reason IS NULL OR revoked_reason IN ("
+            "'manual_mode', 'session_only_mode', 'pass_access_purged', "
+            "'credential_replaced', 'credential_invalid', 'key_unavailable'"
+            ")",
+            name="ck_imt_sync_credentials_revoked_reason",
+        ),
+        CheckConstraint(
+            "state != 'active' OR ("
+            "encrypted_envelope IS NOT NULL "
+            "AND envelope_version >= 1 "
+            "AND key_id IS NOT NULL "
+            "AND verified_at IS NOT NULL"
+            ")",
+            name="ck_imt_sync_credentials_active_fields",
+        ),
+        CheckConstraint(
+            "state = 'active' OR encrypted_envelope IS NULL",
+            name="ck_imt_sync_credentials_inactive_envelope",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    account_id: Mapped[str] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False
+    )
+    encrypted_envelope: Mapped[bytes | None] = mapped_column(LargeBinary)
+    envelope_version: Mapped[int | None] = mapped_column(Integer)
+    key_id: Mapped[str | None] = mapped_column(String(64))
+    credential_generation: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1"
+    )
+    state: Mapped[str] = mapped_column(String(16))
+    consent_version: Mapped[int] = mapped_column(Integer)
+    consented_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_failure_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    failure_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_reason: Mapped[str | None] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    account: Mapped[Account] = relationship(back_populates="imt_sync_credential")
+
+    @validates("key_id")
+    def validate_key_id(self, _attribute: str, value: str | None) -> str | None:
+        if value is not None and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,63}", value) is None:
+            raise ValueError("key_id must be a non-empty ASCII identifier")
+        return value
 
 
 class PassServiceSession(Base):

@@ -2371,6 +2371,27 @@
         "title": "AutoSyncUpdate",
         "type": "object"
       },
+      "AutonomousSyncSettingsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "available": {
+            "const": false,
+            "title": "Available",
+            "type": "boolean"
+          },
+          "configured": {
+            "const": false,
+            "title": "Configured",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "available",
+          "configured"
+        ],
+        "title": "AutonomousSyncSettingsResponse",
+        "type": "object"
+      },
       "BusinessHoursResponse": {
         "additionalProperties": false,
         "properties": {
@@ -9153,6 +9174,46 @@
         "title": "SimulationWarningResponse",
         "type": "object"
       },
+      "SyncMode": {
+        "enum": [
+          "manual",
+          "session_only",
+          "autonomous"
+        ],
+        "title": "SyncMode",
+        "type": "string"
+      },
+      "SyncModeUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "adaptive": {
+            "default": true,
+            "title": "Adaptive",
+            "type": "boolean"
+          },
+          "interval_hours": {
+            "default": 2,
+            "enum": [
+              2,
+              4,
+              6,
+              8,
+              12,
+              24
+            ],
+            "title": "Interval Hours",
+            "type": "integer"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/SyncMode"
+          }
+        },
+        "required": [
+          "mode"
+        ],
+        "title": "SyncModeUpdate",
+        "type": "object"
+      },
       "SyncRequestSummaryResponse": {
         "additionalProperties": false,
         "properties": {
@@ -9237,6 +9298,16 @@
             "title": "Allowed Intervals",
             "type": "array"
           },
+          "autonomous": {
+            "$ref": "#/components/schemas/AutonomousSyncSettingsResponse"
+          },
+          "available_modes": {
+            "items": {
+              "$ref": "#/components/schemas/SyncMode"
+            },
+            "title": "Available Modes",
+            "type": "array"
+          },
           "business_hours": {
             "$ref": "#/components/schemas/BusinessHoursResponse"
           },
@@ -9279,6 +9350,9 @@
             ],
             "title": "Interval Hours",
             "type": "integer"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/SyncMode"
           },
           "next_eligible_at": {
             "anyOf": [
@@ -9343,6 +9417,9 @@
         },
         "required": [
           "enabled",
+          "mode",
+          "available_modes",
+          "autonomous",
           "interval_hours",
           "adaptive",
           "current_interval_hours",
@@ -19542,6 +19619,127 @@
           }
         },
         "summary": "Update Auto Sync",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/api/v1/settings/sync-mode": {
+      "patch": {
+        "operationId": "settings_update_sync_mode",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SyncModeUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requête refusée"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authentification requise"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Action interdite"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Ressource introuvable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflit d'état"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requête trop volumineuse"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Validation impossible"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Limite temporaire atteinte"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Service temporairement indisponible"
+          }
+        },
+        "summary": "Update Sync Mode",
         "tags": [
           "settings"
         ]

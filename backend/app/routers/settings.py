@@ -14,6 +14,7 @@ from app.models import PasskeyCredential
 from app.schemas import (
     AccountUpdate,
     AutoSyncUpdate,
+    SyncModeUpdate,
     SyncSetupUpdate,
     TelegramToggle,
     TelegramUpdate,
@@ -29,8 +30,13 @@ from app.security import (
 from app.services.events import record_event
 from app.services.pass_gateway import pass_status_view
 from app.services.pass_sessions import service_session_view
+from app.services.sync_preferences import (
+    AutonomousSyncUnavailable,
+    set_sync_mode,
+)
 from app.services.sync_schedule import auto_sync_view
 from app.services.telegram import TelegramError, send_telegram
+from app.sync_modes import SyncMode
 
 router = APIRouter(prefix="/api/v1/settings", tags=["settings"])
 TELEGRAM_TEST_COOLDOWN = timedelta(seconds=30)
@@ -110,38 +116,41 @@ def update_auto_sync(
 ) -> dict:
     if payload.enabled:
         require_primary_owner(auth)
-    account = auth.account
-    was_enabled = account.auto_sync_enabled
-    account.auto_sync_enabled = payload.enabled
-    account.auto_sync_interval_hours = payload.interval_hours
-    account.auto_sync_adaptive = payload.adaptive
-    account.auto_sync_current_interval_hours = payload.interval_hours
-    account.auto_sync_no_change_streak = 0
-    account.auto_sync_next_at = None
-    if payload.enabled and (not was_enabled or account.auto_sync_consented_at is None):
-        account.auto_sync_consented_at = utcnow()
-    elif not payload.enabled:
-        account.auto_sync_consented_at = None
-        account.auto_sync_paused_reason = None
-        account.auto_sync_paused_at = None
-    if payload.enabled:
-        account.auto_sync_paused_reason = None
-        account.auto_sync_paused_at = None
-        session_state = service_session_view(db, account)["state"]
-        if session_state == "reauth_required":
-            account.auto_sync_paused_reason = "reauth_required"
-            account.auto_sync_paused_at = utcnow()
-    account.updated_at = utcnow()
-    record_event(
+    set_sync_mode(
         db,
-        account_id=account.id,
-        kind="sync:auto_enabled" if payload.enabled else "sync:auto_disabled",
+        auth.account,
+        mode=SyncMode.SESSION_ONLY if payload.enabled else SyncMode.MANUAL,
+        interval_hours=payload.interval_hours,
+        adaptive=payload.adaptive,
         actor=auth.actor,
-        payload={
-            "interval_hours": payload.interval_hours,
-            "adaptive": payload.adaptive,
-        },
     )
+    db.commit()
+    return settings_view(auth, db)
+
+
+@router.patch("/sync-mode", response_model=SettingsResponse)
+def update_sync_mode(
+    payload: SyncModeUpdate,
+    auth: AuthContext = Depends(require_primary_owner_action),
+    db: Session = Depends(get_db),
+) -> dict:
+    try:
+        set_sync_mode(
+            db,
+            auth.account,
+            mode=payload.mode,
+            interval_hours=payload.interval_hours,
+            adaptive=payload.adaptive,
+            actor=auth.actor,
+        )
+    except AutonomousSyncUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "AUTONOMOUS_SYNC_UNAVAILABLE",
+                "message": str(exc),
+            },
+        ) from exc
     db.commit()
     return settings_view(auth, db)
 
@@ -154,33 +163,14 @@ def complete_sync_setup(
 ) -> dict:
     if payload.enabled:
         require_primary_owner(auth)
-    account = auth.account
-    now = utcnow()
-    account.auto_sync_enabled = payload.enabled
-    account.auto_sync_interval_hours = payload.interval_hours
-    account.auto_sync_adaptive = payload.adaptive
-    account.auto_sync_current_interval_hours = payload.interval_hours
-    account.auto_sync_no_change_streak = 0
-    account.auto_sync_next_at = None
-    account.auto_sync_consented_at = now if payload.enabled else None
-    account.auto_sync_paused_reason = None
-    account.auto_sync_paused_at = None
-    if payload.enabled and service_session_view(db, account)["state"] == "reauth_required":
-        account.auto_sync_paused_reason = "reauth_required"
-        account.auto_sync_paused_at = now
-    account.sync_setup_completed_at = now
-    account.updated_at = now
-    record_event(
+    set_sync_mode(
         db,
-        account_id=account.id,
-        kind="sync:setup_completed",
+        auth.account,
+        mode=SyncMode.SESSION_ONLY if payload.enabled else SyncMode.MANUAL,
+        interval_hours=payload.interval_hours,
+        adaptive=payload.adaptive,
         actor=auth.actor,
-        payload={
-            "enabled": payload.enabled,
-            "interval_hours": payload.interval_hours,
-            "adaptive": payload.adaptive,
-            "beta": True,
-        },
+        complete_setup=True,
     )
     db.commit()
     return settings_view(auth, db)

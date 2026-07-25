@@ -1,0 +1,92 @@
+from __future__ import annotations
+
+from datetime import datetime
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.database import utcnow
+from app.models import Account
+from app.services.events import record_event
+from app.services.pass_sessions import service_session_view
+from app.sync_modes import SyncMode
+
+
+class AutonomousSyncUnavailable(RuntimeError):
+    pass
+
+
+def set_sync_mode(
+    db: Session,
+    account: Account,
+    *,
+    mode: SyncMode,
+    interval_hours: int,
+    adaptive: bool,
+    actor: str,
+    complete_setup: bool = False,
+    now: datetime | None = None,
+) -> Account:
+    if mode is SyncMode.AUTONOMOUS:
+        raise AutonomousSyncUnavailable(
+            "La synchronisation autonome n'est pas encore disponible."
+        )
+
+    locked_account = db.scalar(
+        select(Account).where(Account.id == account.id).with_for_update()
+    )
+    if locked_account is None:
+        raise LookupError("Compte introuvable")
+
+    current = now or utcnow()
+    enabled = mode is SyncMode.SESSION_ONLY
+    was_enabled = locked_account.auto_sync_enabled
+    locked_account.auto_sync_enabled = enabled
+    locked_account.auto_sync_mode = mode.value
+    locked_account.auto_sync_interval_hours = interval_hours
+    locked_account.auto_sync_adaptive = adaptive
+    locked_account.auto_sync_current_interval_hours = interval_hours
+    locked_account.auto_sync_no_change_streak = 0
+    locked_account.auto_sync_next_at = None
+
+    if complete_setup:
+        locked_account.auto_sync_consented_at = current if enabled else None
+    elif enabled and (
+        not was_enabled or locked_account.auto_sync_consented_at is None
+    ):
+        locked_account.auto_sync_consented_at = current
+    elif not enabled:
+        locked_account.auto_sync_consented_at = None
+
+    locked_account.auto_sync_paused_reason = None
+    locked_account.auto_sync_paused_at = None
+    if enabled and service_session_view(db, locked_account)["state"] == "reauth_required":
+        locked_account.auto_sync_paused_reason = "reauth_required"
+        locked_account.auto_sync_paused_at = current
+
+    if complete_setup:
+        locked_account.sync_setup_completed_at = current
+    locked_account.updated_at = current
+
+    if complete_setup:
+        event_kind = "sync:setup_completed"
+        event_payload = {
+            "enabled": enabled,
+            "interval_hours": interval_hours,
+            "adaptive": adaptive,
+            "beta": True,
+        }
+    else:
+        event_kind = "sync:auto_enabled" if enabled else "sync:auto_disabled"
+        event_payload = {
+            "interval_hours": interval_hours,
+            "adaptive": adaptive,
+        }
+    record_event(
+        db,
+        account_id=locked_account.id,
+        kind=event_kind,
+        actor=actor,
+        payload=event_payload,
+    )
+    return locked_account

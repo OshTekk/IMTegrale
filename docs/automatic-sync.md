@@ -1,8 +1,34 @@
 # Actualisation automatique PASS
 
+## Modes et fondation autonome
+
+La configuration possède désormais trois valeurs de domaine : `manual`,
+`session_only` et `autonomous`. Seules les deux premières sont disponibles :
+
+- `manual` conserve le fonctionnement à la demande ;
+- `session_only` correspond exactement à l'automatisation actuelle par cookies
+  PASS/HUB chiffrés ;
+- `autonomous` est réservé à une architecture future et reçoit
+  `AUTONOMOUS_SYNC_UNAVAILABLE` avant toute mutation.
+
+Pendant la migration expand/contract, `auto_sync_enabled` reste l'autorité
+comportementale compatible avec l'ancienne release. La colonne
+`auto_sync_mode` est un miroir écrit par la nouvelle application. Le mode
+effectif est donc dérivé du booléen jusqu'à la fermeture documentée de la
+fenêtre de rollback.
+
+La migration crée également `imt_sync_credentials`, mais cette table reste vide
+et aucune route ne peut y écrire. Aucun mot de passe, chiffrement asymétrique ou
+fallback autonome n'est implémenté. Le détail des gates se trouve dans
+[`security/autonomous-sync-architecture.md`](security/autonomous-sync-architecture.md).
+
 ## Consentement
 
-L'actualisation planifiée est désactivée pour chaque nouveau compte. Seul le propriétaire connecté avec son compte IMT peut l'activer depuis les paramètres, après une confirmation dédiée. Le choix et sa date sont enregistrés ; un token partagé et l'administrateur ne peuvent pas donner ce consentement à sa place.
+L'actualisation planifiée est désactivée pour chaque nouveau compte. Seul le
+propriétaire dans une session primaire IMT ou passkey peut l'activer depuis les
+paramètres, après une confirmation dédiée. Le choix et sa date sont enregistrés ;
+un token partagé et l'administrateur ne peuvent pas donner ce consentement à sa
+place.
 
 La désactivation est immédiate pour tout nouveau démarrage. L'ordonnanceur revérifie le consentement sous le verrou du compte juste avant la connexion à PASS, ce qui ferme aussi la fenêtre entre la sélection d'un compte et son exécution. Une synchronisation réseau déjà commencée peut terminer son traitement.
 
@@ -42,3 +68,9 @@ Après la migration `0017`, tous les anciens mots de passe chiffrés sont suppri
 Les jobs réussis sont conservés 7 jours, les notifications livrées 30 jours et les états `dead_letter` 90 jours. La maintenance horaire applique ces rétentions ainsi que celles des métriques PASS et calendrier. Une notification Telegram est livrée au moins une fois : un crash après acceptation par Telegram mais avant l'acquittement PostgreSQL peut produire un doublon, car Telegram ne fournit pas de clé d'idempotence exploitable.
 
 Le portail administrateur affiche l'état et la fréquence choisis pour faciliter le support, sans proposer d'activation administrateur. Les événements `sync:auto_enabled` et `sync:auto_disabled` assurent la traçabilité du choix du propriétaire.
+
+Dans la release de fondation, `BOTNOTE_AUTONOMOUS_SYNC_ENABLED` doit rester
+absent ou valoir `false`. Une valeur `true` fait échouer le démarrage. Si une
+ligne `autonomous` est injectée manuellement en base, le scheduler l'ignore,
+émet une alerte agrégée sans identité et le worker la refuse avant tout appel
+PASS.

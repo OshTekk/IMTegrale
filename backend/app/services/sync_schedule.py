@@ -5,6 +5,11 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.database import utcnow
 from app.models import Account
+from app.sync_modes import (
+    AVAILABLE_SYNC_MODES,
+    effective_sync_mode,
+    stored_sync_mode_is_supported,
+)
 
 AUTO_SYNC_INTERVALS = (2, 4, 6, 8, 12, 24)
 BUSINESS_START = time(8, 0)
@@ -34,7 +39,8 @@ def in_business_window(account: Account, now: datetime | None = None) -> bool:
 def auto_sync_is_due(account: Account, now: datetime | None = None) -> bool:
     current = ensure_utc(now or utcnow())
     if (
-        not account.auto_sync_enabled
+        not stored_sync_mode_is_supported(account)
+        or not account.auto_sync_enabled
         or account.auto_sync_consented_at is None
         or account.auto_sync_paused_reason is not None
         or account.is_disabled
@@ -63,7 +69,8 @@ def next_business_time(account: Account, candidate: datetime) -> datetime:
 
 def next_auto_sync_at(account: Account, now: datetime | None = None) -> datetime | None:
     if (
-        not account.auto_sync_enabled
+        not stored_sync_mode_is_supported(account)
+        or not account.auto_sync_enabled
         or account.auto_sync_consented_at is None
         or account.auto_sync_paused_reason is not None
         or account.is_disabled
@@ -154,8 +161,15 @@ def defer_automatic_sync(
 
 
 def auto_sync_view(account: Account) -> dict:
+    mode = effective_sync_mode(account)
     return {
         "enabled": account.auto_sync_enabled,
+        "mode": mode.value,
+        "available_modes": [available.value for available in AVAILABLE_SYNC_MODES],
+        "autonomous": {
+            "available": False,
+            "configured": False,
+        },
         "interval_hours": account.auto_sync_interval_hours,
         "adaptive": account.auto_sync_adaptive,
         "current_interval_hours": effective_auto_sync_interval(account),

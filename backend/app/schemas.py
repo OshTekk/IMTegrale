@@ -4,7 +4,9 @@ from datetime import datetime
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.sync_modes import SyncMode
 
 
 class ImtLoginRequest(BaseModel):
@@ -76,6 +78,14 @@ class AutoSyncUpdate(BaseModel):
 
 class SyncSetupUpdate(AutoSyncUpdate):
     pass
+
+
+class SyncModeUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: SyncMode
+    interval_hours: Literal[2, 4, 6, 8, 12, 24] = 2
+    adaptive: bool = True
 
 
 class TelegramUpdate(BaseModel):
