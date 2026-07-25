@@ -57,9 +57,9 @@ type TimelineStyle = CSSProperties & {
 
 const DAY_MS = 86_400_000;
 const viewOptions: Array<{ value: CalendarView; label: string; icon: typeof CalendarDays }> = [
-  { value: "dayGridMonth", label: "Mois", icon: CalendarDays },
-  { value: "timeGridWeek", label: "Semaine", icon: CalendarCheck2 },
   { value: "listMonth", label: "Liste", icon: List },
+  { value: "timeGridWeek", label: "Semaine", icon: CalendarCheck2 },
+  { value: "dayGridMonth", label: "Mois", icon: CalendarDays },
 ];
 
 function plainDateValue(value: string): number {
@@ -137,6 +137,14 @@ function eventDateLabel(event: CalendarEventItem): string {
   return `${date} · ${time.format(start)} – ${time.format(end)}`;
 }
 
+function normalizeCalendarEventSemantics({ el }: { el: HTMLElement }) {
+  const eventGroup = el.parentElement;
+  if (eventGroup?.getAttribute("role") === "list" && eventGroup.getAttribute("aria-label") === "Events") {
+    eventGroup.setAttribute("role", "group");
+    eventGroup.setAttribute("aria-label", "Cours");
+  }
+}
+
 function CalendarConnectionModal({
   open,
   configured,
@@ -150,6 +158,7 @@ function CalendarConnectionModal({
   const resetConnect = connect.reset;
   const { showToast } = useToast();
   const [url, setUrl] = useState("");
+  const urlInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (open) {
@@ -175,11 +184,13 @@ function CalendarConnectionModal({
       description="Le premier import démarre après la validation du lien."
       onClose={onClose}
       size="large"
+      initialFocusRef={urlInputRef}
     >
       <form className="modal-form calendar-connect-form" onSubmit={submit}>
         <label htmlFor="calendar-feed-url">
           Lien iCalendar INPASS
           <input
+            ref={urlInputRef}
             id="calendar-feed-url"
             name="calendar-feed-url"
             type="url"
@@ -406,13 +417,13 @@ function PersonalCalendar({ status }: { status: CalendarStatus }) {
             </button>
           </div>
           <h2 aria-live="polite">{title || "Agenda"}</h2>
-          <div className="calendar-view-switch segmented-control" role="tablist" aria-label="Vue de l'agenda">
+          <div className="calendar-view-switch segmented-control" role="group" aria-label="Vue de l'agenda">
             {viewOptions.map((option) => (
               <button
                 key={option.value}
                 type="button"
-                role="tab"
-                aria-selected={view === option.value}
+                aria-label={`Afficher la vue ${option.label}`}
+                aria-pressed={view === option.value}
                 className={view === option.value ? "active" : ""}
                 onClick={() => changeView(option.value)}
                 title={option.label}
@@ -423,7 +434,12 @@ function PersonalCalendar({ status }: { status: CalendarStatus }) {
             ))}
           </div>
         </header>
-        {events.isFetching && <span className="calendar-loading-line" aria-hidden="true" />}
+        {events.isFetching && (
+          <div className="calendar-loading-state" role="status">
+            <span className="sr-only">Actualisation des cours…</span>
+            <span className="calendar-loading-line" aria-hidden="true" />
+          </div>
+        )}
         {events.isError && (
           <div className="calendar-inline-error">
             <CircleAlert size={17} /> {events.error.message}
@@ -457,6 +473,7 @@ function PersonalCalendar({ status }: { status: CalendarStatus }) {
             events={calendarEvents}
             datesSet={datesSet}
             eventClick={selectEvent}
+            eventDidMount={normalizeCalendarEventSemantics}
           />
         </div>
       </section>
@@ -586,13 +603,12 @@ function TrainingCalendarView({ calendar }: { calendar: FipTrainingCalendar }) {
       </section>
 
       <section className="training-promotion-selector" aria-label="Choisir une promotion FIP">
-        <div className="segmented" role="tablist" aria-label="Promotion">
+        <div className="segmented" role="group" aria-label="Promotion">
           {calendar.promotions.map((item) => (
             <button
               key={item.promotion_year}
               type="button"
-              role="tab"
-              aria-selected={promotion.promotion_year === item.promotion_year}
+              aria-pressed={promotion.promotion_year === item.promotion_year}
               className={promotion.promotion_year === item.promotion_year ? "active" : ""}
               onClick={() => setPromotionYear(item.promotion_year)}
             >
@@ -672,6 +688,17 @@ function TrainingCalendarView({ calendar }: { calendar: FipTrainingCalendar }) {
               ))}
             </div>
           )}
+        </div>
+        <div className="training-mobile-overview">
+          <p>Repères de l'année, détaillés chronologiquement dans la section suivante.</p>
+          <dl>
+            {promotion.semesters.map((semester) => (
+              <div key={semester.semester}>
+                <dt>{semester.semester}</dt>
+                <dd>{formatPlainRange(semester.start, semester.end)}</dd>
+              </div>
+            ))}
+          </dl>
         </div>
       </section>
 
@@ -774,11 +801,10 @@ export function CalendarPage() {
     <div className="page-stack calendar-page">
       {status.data.fip_training_available && (
         <section className="calendar-section-tabs">
-          <div className="segmented" role="tablist" aria-label="Type de calendrier">
+          <div className="segmented" role="group" aria-label="Type de calendrier">
             <button
               type="button"
-              role="tab"
-              aria-selected={section === "courses"}
+              aria-pressed={section === "courses"}
               className={section === "courses" ? "active" : ""}
               onClick={() => setSection("courses")}
             >
@@ -786,8 +812,7 @@ export function CalendarPage() {
             </button>
             <button
               type="button"
-              role="tab"
-              aria-selected={section === "training"}
+              aria-pressed={section === "training"}
               className={section === "training" ? "active" : ""}
               onClick={() => setSection("training")}
             >

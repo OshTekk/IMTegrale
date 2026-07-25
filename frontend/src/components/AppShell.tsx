@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, Ellipsis, LibraryBig, LogOut, RefreshCw, ShieldCheck } from "lucide-react";
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown, Ellipsis, LibraryBig, LogIn, LogOut, RefreshCw, ShieldCheck } from "lucide-react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { authLogout } from "../generated/api/sdk.gen";
 import { ApiError } from "../lib/api";
@@ -22,6 +22,7 @@ import {
   appPageHeading,
   appPageTitles,
   isAppNavItemActive,
+  mobileAppNavigation,
   mobileNavDescriptions,
   visibleAppNavigation,
 } from "./appNavigation";
@@ -50,19 +51,9 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
   const [title, subtitle] = appPageHeading(location.pathname, session);
   const primaryOwner = isPrimaryOwnerSession(session);
   const visibleNav = visibleAppNavigation(session, primaryOwner);
-  const mobilePrimaryPaths = useMemo(
-    () => (primaryOwner ? ["/", "/results", "/calendar", "/simulations/gpa"] : ["/", "/results", "/settings"]),
-    [primaryOwner],
-  );
-  const mobilePrimaryNav = useMemo(
-    () => visibleNav.filter((item) => mobilePrimaryPaths.includes(item.to)),
-    [mobilePrimaryPaths, visibleNav],
-  );
-  const mobileSecondaryNav = useMemo(
-    () => visibleNav.filter((item) => !mobilePrimaryPaths.includes(item.to)),
-    [mobilePrimaryPaths, visibleNav],
-  );
+  const { primary: mobilePrimaryNav, secondary: mobileSecondaryNav } = mobileAppNavigation(session, primaryOwner);
   const profileWrap = useRef<HTMLDivElement>(null);
+  const mobileSecondaryFirstLink = useRef<HTMLAnchorElement>(null);
   const mainRef = useRef<HTMLElement>(null);
   const previousPath = useRef(location.pathname);
   const manualSync = dashboard.data?.account.manual_sync;
@@ -199,32 +190,26 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
             <p>{subtitle}</p>
           </div>
           <div className="topbar-actions">
-            {learningEntryVisible(session) && (
-              <NavLink
-                className="secondary-button learning-shell-cta"
-                to="/parcours"
-                aria-label={location.pathname.startsWith("/parcours") ? "Continuer mon parcours" : "Réussir ma 2A"}
-                onMouseEnter={() => preloadRoute("/parcours")}
-                onFocus={() => preloadRoute("/parcours")}
-              >
-                <LibraryBig size={17} />
-                <span>{location.pathname.startsWith("/parcours") ? "Continuer mon parcours" : "Réussir ma 2A"}</span>
-              </NavLink>
-            )}
             {primaryOwner && (
               <button
-                className="secondary-button sync-button"
+                className={`secondary-button sync-button${manualSync?.state === "reauth_required" ? " is-reauth-required" : ""}`}
                 type="button"
                 onClick={runSync}
                 disabled={sync.isPending || (!manualSync?.can_start && manualSync?.state !== "reauth_required")}
                 aria-label={syncMessage}
                 title={syncMessage}
               >
-                <RefreshCw size={17} className={sync.isPending || manualSync?.state === "in_progress" ? "spin" : ""} />
+                {manualSync?.state === "reauth_required" ? (
+                  <LogIn size={18} />
+                ) : (
+                  <RefreshCw
+                    size={17}
+                    className={sync.isPending || manualSync?.state === "in_progress" ? "spin" : ""}
+                  />
+                )}
                 <span>{syncButtonLabel}</span>
               </button>
             )}
-            <ThemeToggle />
             <div className="profile-wrap" ref={profileWrap}>
               <button
                 className="profile-button"
@@ -256,6 +241,19 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
                 </div>
               )}
             </div>
+            <ThemeToggle />
+            {learningEntryVisible(session) && (
+              <NavLink
+                className="secondary-button learning-shell-cta"
+                to="/parcours"
+                aria-label={location.pathname.startsWith("/parcours") ? "Continuer mon parcours" : "Réussir ma 2A"}
+                onMouseEnter={() => preloadRoute("/parcours")}
+                onFocus={() => preloadRoute("/parcours")}
+              >
+                <LibraryBig size={17} />
+                <span>{location.pathname.startsWith("/parcours") ? "Continuer mon parcours" : "Réussir ma 2A"}</span>
+              </NavLink>
+            )}
           </div>
         </header>
         <main ref={mainRef} className="page-content" id="main-content" tabIndex={-1}>
@@ -277,7 +275,8 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
             viewTransition
             onTouchStart={() => preloadRoute(item.to)}
             onFocus={() => preloadRoute(item.to)}
-            className={() => (isAppNavItemActive(item.to, location.pathname) ? "active" : "")}
+            aria-current={isAppNavItemActive(item.to, location.pathname) ? "page" : undefined}
+            className={isAppNavItemActive(item.to, location.pathname) ? "active" : ""}
           >
             <item.icon size={20} />
             <span>{item.short}</span>
@@ -292,6 +291,10 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
             onClick={() => setMobileMenuOpen(true)}
             aria-label="Ouvrir les autres pages"
             aria-expanded={mobileMenuOpen}
+            aria-controls="mobile-overflow-navigation"
+            aria-current={
+              mobileSecondaryNav.some((item) => isAppNavItemActive(item.to, location.pathname)) ? "page" : undefined
+            }
           >
             <Ellipsis size={21} />
             <span>Plus</span>
@@ -302,18 +305,22 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
       <Modal
         open={mobileMenuOpen}
         title="Autres pages"
-        description="Données académiques, accès et préférences."
+        description="Retrouve les pages disponibles pour ton compte."
         onClose={() => setMobileMenuOpen(false)}
+        initialFocusRef={mobileSecondaryFirstLink}
       >
-        <nav className="mobile-overflow-links" aria-label="Navigation secondaire">
-          {mobileSecondaryNav.map((item) => (
+        <nav className="mobile-overflow-links" id="mobile-overflow-navigation" aria-label="Navigation secondaire">
+          {mobileSecondaryNav.map((item, index) => (
             <NavLink
               key={item.to}
+              ref={index === 0 ? mobileSecondaryFirstLink : undefined}
               to={item.to}
               viewTransition
               onTouchStart={() => preloadRoute(item.to)}
               onFocus={() => preloadRoute(item.to)}
               onClick={() => setMobileMenuOpen(false)}
+              aria-current={isAppNavItemActive(item.to, location.pathname) ? "page" : undefined}
+              className={isAppNavItemActive(item.to, location.pathname) ? "active" : ""}
             >
               <item.icon size={19} />
               <span>

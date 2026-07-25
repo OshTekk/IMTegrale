@@ -18,6 +18,16 @@ L'ordonnanceur systemd ajoute ensuite un job PostgreSQL échu chaque heure ; le 
 
 Le parseur conserve uniquement le titre, le lieu, les bornes temporelles et le caractère journée entière. Les descriptions, commentaires, organisateurs, participants et métadonnées de calendrier sont ignorés. L'expansion est limitée à la fenêtre comprise entre 400 jours dans le passé et 730 jours dans le futur, avec 5 000 événements maximum. Les récurrences horaires ou plus fréquentes sont refusées.
 
+## Interface et accessibilité
+
+Sous 700 px, l'agenda s'ouvre en vue Liste ; la vue Mois reste la vue initiale au-dessus de ce seuil. Les commandes de période, le bouton Aujourd'hui, les trois choix de vue, la gestion du lien et les événements possèdent une cible tactile d'au moins 44 par 44 px. Le groupe de vues emploie des boutons à état `aria-pressed`, tandis que les événements de la vue Liste sont exposés comme un groupe de commandes, sans liste ARIA invalide produite par le renderer.
+
+La modale de connexion place le focus dans le champ du lien. Toutes les modales restaurent le focus vers la commande d'origine, restent au-dessus de la navigation mobile et conservent un contenu interne défilable. Le détail d'un cours n'affiche que le titre, l'horaire et le lieu réellement importés ; aucun enseignant n'est déduit.
+
+Sur les écrans étroits, la frise annuelle FIP est remplacée par un résumé textuel des semestres. La liste chronologique des périodes école et entreprise reste la source détaillée, afin qu'aucune information ne dépende uniquement de la couleur ou de la largeur d'une frise.
+
+Sous `prefers-reduced-motion: reduce`, la ligne de chargement, les transitions FullCalendar et les mouvements de modale sont neutralisés. Un statut textuel reste annoncé pendant l'actualisation.
+
 ## Calendrier de formation FIP
 
 Le calendrier 2026-2027 est une transcription structurée du document IMT Atlantique / ITII Bretagne, version du 28 avril 2026. Il couvre les promotions FIP 2027, 2028 et 2029. Tous les comptes dont le cursus officiel est `FIP` peuvent sélectionner les trois promotions.

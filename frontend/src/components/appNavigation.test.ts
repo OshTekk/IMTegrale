@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { Session } from "../types";
-import { appNavItems, appPageHeading, isAppNavItemActive, visibleAppNavigation } from "./appNavigation";
+import {
+  appNavItems,
+  appPageHeading,
+  isAppNavItemActive,
+  mobileAppNavigation,
+  visibleAppNavigation,
+} from "./appNavigation";
 
 function fictitiousSession(audienceLabel: string, levelLabel: string): Session {
   return {
@@ -53,9 +59,46 @@ describe("navigation Résultats", () => {
 
   it("keeps the Result entry active on UE deep links", () => {
     expect(isAppNavItemActive("/results", "/results/ue/UE-FICTIVE")).toBe(true);
+    expect(isAppNavItemActive("/results", "/ues/releve")).toBe(true);
     expect(appPageHeading("/results/ue/UE-FICTIVE", session)).toEqual([
       "Résultats",
       "UE, évaluations et nouveautés dans un espace unique",
     ]);
+  });
+});
+
+describe("navigation mobile selon le niveau d'accès", () => {
+  it("keeps four primary destinations and a populated Plus menu for a primary owner", () => {
+    const session = fictitiousSession("FIP 2028", "2A");
+    const navigation = mobileAppNavigation(session, true);
+    expect(navigation.primary.map((item) => item.to)).toEqual(["/", "/results", "/calendar", "/simulations/gpa"]);
+    expect(navigation.secondary.map((item) => item.to)).toEqual(["/parcours", "/leaderboard", "/sharing", "/settings"]);
+    expect(navigation.primary).toHaveLength(4);
+  });
+
+  it("never reserves forbidden owner destinations for a viewer", () => {
+    const session: Session = {
+      ...fictitiousSession("FIP 2028", "2A"),
+      role: "viewer",
+      auth_method: "token",
+      learning: { ...fictitiousSession("FIP 2028", "2A").learning!, available: false },
+    };
+    const navigation = mobileAppNavigation(session, false);
+    expect(navigation.primary.map((item) => item.to)).toEqual(["/", "/results", "/settings"]);
+    expect(navigation.secondary).toEqual([]);
+  });
+
+  it("keeps delegated owner pages behind Plus without exposing primary-only routes", () => {
+    const session: Session = {
+      ...fictitiousSession("FIP 2028", "2A"),
+      auth_method: "token",
+      learning: { ...fictitiousSession("FIP 2028", "2A").learning!, available: false },
+    };
+    const navigation = mobileAppNavigation(session, false);
+    expect(navigation.primary.map((item) => item.to)).toEqual(["/", "/results", "/settings"]);
+    expect(navigation.secondary.map((item) => item.to)).toEqual(["/leaderboard", "/sharing"]);
+    expect(navigation.primary.some((item) => item.to === "/calendar" || item.to.startsWith("/simulations"))).toBe(
+      false,
+    );
   });
 });

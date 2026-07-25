@@ -26,6 +26,14 @@ PASS et IMT Atlantique sont cités comme source et contexte. Les formulations «
 
 Le logo, le tangram, les couleurs exactes et les compositions officielles de l'IMT ne doivent jamais être repris ou adaptés.
 
+## Interface mobile
+
+La navigation d'une session propriétaire primaire conserve au maximum cinq emplacements : Accueil, Résultats, Agenda, Simuler et Plus. Plus ouvre uniquement les destinations secondaires autorisées pour la session. Une session déléguée ou viewer ne voit ni emplacement vide ni destination interdite ; cette présentation ne remplace jamais les contrôles d'autorisation du serveur.
+
+Les interfaces tactiles réservent au moins 44 par 44 px aux commandes principales et iconographiques. La barre inférieure prend en compte `safe-area-inset-bottom`, et la structure de page réserve sa hauteur plus une marge de respiration afin qu'aucune action ne soit masquée. Les modales prennent en compte les zones sûres haute et basse.
+
+Le thème sombre conserve les mêmes niveaux de hiérarchie et de contraste que le thème clair. Avec `prefers-reduced-motion: reduce`, le comportement global supprime les animations décoratives, les transitions de vue et le défilement animé, y compris pour les feuilles chargées avec une route paresseuse.
+
 ## Compatibilité technique
 
 Les contrats internes existants restent inchangés : paquet et commande `botnote`, variables `BOTNOTE_*`, chemin `/opt/botnote`, unités systemd `botnote-*`, événements frontend `botnote:*` et en-tête proxy `X-BotNote-Client-Identity`. Ils ne doivent pas apparaître comme nom public du produit.

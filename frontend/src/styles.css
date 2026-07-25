@@ -7456,7 +7456,7 @@ html[data-theme="dark"] .token-list-panel {
 }
 
 .calendar-sync-band > dl > div { display: grid; gap: 3px; }
-.calendar-sync-band dt { color: var(--soft); font-size: var(--text-2xs); font-weight: 750; text-transform: uppercase; }
+.calendar-sync-band dt { color: var(--muted); font-size: var(--text-2xs); font-weight: 750; text-transform: uppercase; }
 .calendar-sync-band dd { margin: 0; color: var(--ink); font-size: var(--text-xs); font-weight: 720; white-space: nowrap; }
 
 .personal-calendar {
@@ -7677,7 +7677,7 @@ html[data-theme="dark"] .token-list-panel {
 }
 
 .training-promotion-selector button { display: grid; grid-template-columns: auto auto; gap: 7px; }
-.training-promotion-selector button small { color: var(--soft); font-size: var(--text-2xs); }
+.training-promotion-selector button small { color: var(--muted); font-size: var(--text-2xs); }
 .training-promotion-selector button.active small { color: var(--green); }
 
 .current-promotion-label {
@@ -7923,10 +7923,6 @@ html[data-theme="dark"] .training-block b { background: rgba(240, 244, 242, 0.92
   .training-week-count { grid-row: 2; grid-column: 2; }
   .campus-badge { grid-column: 2; }
   .training-milestones > div { padding-right: 14px; padding-left: 14px; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .calendar-loading-line::after { animation-duration: 2.4s; }
 }
 
 html[data-theme="dark"] .report-preview-stage {
@@ -8212,4 +8208,394 @@ html[data-theme="dark"] .report-sheet {
   .report-preview-followup { align-items: start; }
   .report-trust-band { align-items: start; }
   .report-trust-band .secondary-button { grid-column: 1 / -1; width: 100%; }
+}
+
+/* Mobile shell and calendar finish. */
+.sync-button.is-reauth-required {
+  border-color: var(--warning-border);
+  background: var(--warning-surface);
+  color: var(--warning-text);
+}
+
+.mobile-overflow-links a.active,
+.mobile-overflow-links a[aria-current="page"] {
+  background: var(--green-soft);
+  color: var(--green-dark);
+}
+
+.calendar-section-tabs .segmented button,
+.calendar-period-controls .icon-button,
+.calendar-today-button,
+.calendar-view-switch button,
+.calendar-sync-band > .secondary-button {
+  min-height: 44px;
+}
+
+.calendar-period-controls .icon-button {
+  width: 44px;
+  height: 44px;
+  flex-basis: 44px;
+}
+
+.calendar-today-button {
+  padding-right: 13px;
+  padding-left: 13px;
+}
+
+.calendar-view-switch {
+  grid-template-columns: repeat(3, minmax(44px, auto));
+}
+
+.calendar-view-switch button {
+  width: auto;
+  height: 44px;
+  padding: 0 10px;
+}
+
+.calendar-loading-state {
+  height: 2px;
+  overflow: hidden;
+  background: var(--brand-soft);
+}
+
+.calendar-loading-line {
+  position: static;
+  display: block;
+  width: 100%;
+  height: 2px;
+  overflow: hidden;
+  background: transparent;
+}
+
+.calendar-loading-line::after {
+  display: block;
+  width: 35%;
+  height: 100%;
+  background: var(--brand);
+  content: "";
+  animation: loading 1.2s ease-in-out infinite;
+}
+
+.fullcalendar-frame .fc-list-event :is(a, button) {
+  display: flex;
+  width: 100%;
+  min-height: 48px;
+  align-items: center;
+}
+
+.fullcalendar-frame .fc-more-link {
+  display: inline-flex;
+  min-width: 44px;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+}
+
+.fullcalendar-frame .fc-popover-close {
+  display: inline-grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+}
+
+.calendar-event-detail p {
+  user-select: text;
+}
+
+.calendar-data-controls > button {
+  min-height: 44px;
+  padding: 8px 4px;
+}
+
+.calendar-link-guide > summary {
+  min-height: 44px;
+}
+
+.training-mobile-overview {
+  display: none;
+}
+
+@media (max-width: 980px) {
+  .app-shell {
+    --mobile-nav-height: 68px;
+  }
+
+  .topbar {
+    min-height: calc(68px + env(safe-area-inset-top));
+    gap: 10px;
+    padding:
+      calc(8px + env(safe-area-inset-top))
+      max(16px, env(safe-area-inset-right))
+      8px
+      max(16px, env(safe-area-inset-left));
+  }
+
+  .page-heading {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  .page-heading h1 {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .topbar-actions {
+    flex: 0 0 auto;
+    gap: 6px;
+  }
+
+  .learning-shell-cta {
+    display: none;
+  }
+
+  .profile-copy,
+  .profile-chevron,
+  .sync-button span {
+    display: none;
+  }
+
+  .sync-button,
+  .theme-toggle,
+  .profile-button {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    min-height: 44px;
+    flex-basis: 44px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .profile-button {
+    padding: 4px;
+  }
+
+  .profile-menu {
+    top: 50px;
+  }
+
+  .profile-menu button {
+    min-height: 44px;
+  }
+
+  .mobile-nav {
+    height: calc(var(--mobile-nav-height) + env(safe-area-inset-bottom));
+    align-items: stretch;
+    padding:
+      8px
+      max(6px, env(safe-area-inset-right))
+      calc(8px + env(safe-area-inset-bottom))
+      max(6px, env(safe-area-inset-left));
+  }
+
+  .mobile-nav a,
+  .mobile-nav > button {
+    height: 52px;
+    min-height: 44px;
+  }
+
+  .product-footer {
+    padding-bottom: calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 16px);
+  }
+
+  .toast-region {
+    bottom: calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 12px);
+  }
+
+  .modal .icon-button,
+  .modal .primary-button,
+  .modal .secondary-button,
+  .modal .danger-button,
+  .modal .text-button {
+    min-height: 44px;
+  }
+
+  .modal .icon-button {
+    width: 44px;
+    height: 44px;
+    flex-basis: 44px;
+  }
+}
+
+@media (max-width: 760px) {
+  .calendar-view-switch button {
+    width: auto;
+    padding: 0;
+  }
+
+  .calendar-today-button {
+    min-height: 44px;
+  }
+
+  .fullcalendar-frame {
+    min-width: 0;
+    overflow-x: clip;
+  }
+
+  .training-timeline-chart {
+    display: none;
+  }
+
+  .training-mobile-overview {
+    display: grid;
+    gap: 12px;
+    padding: 16px;
+    border-top: 1px solid var(--line);
+  }
+
+  .training-mobile-overview > p {
+    color: var(--muted);
+    font-size: var(--text-xs);
+    line-height: 1.5;
+  }
+
+  .training-mobile-overview dl {
+    display: grid;
+    gap: 8px;
+    margin: 0;
+  }
+
+  .training-mobile-overview dl > div {
+    display: grid;
+    min-height: 52px;
+    grid-template-columns: 52px minmax(0, 1fr);
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    background: var(--surface-subtle);
+  }
+
+  .training-mobile-overview dt {
+    font-weight: 800;
+  }
+
+  .training-mobile-overview dd {
+    margin: 0;
+    color: var(--muted);
+    font-size: var(--text-xs);
+  }
+}
+
+@media (max-width: 480px) {
+  .calendar-toolbar {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .calendar-toolbar h2 {
+    grid-row: 1;
+    grid-column: 1;
+  }
+
+  .calendar-period-controls {
+    grid-row: 2;
+    grid-column: 1;
+    width: 100%;
+    gap: 4px;
+  }
+
+  .calendar-period-controls .calendar-today-button {
+    flex: 1;
+  }
+
+  .calendar-period-controls .icon-button {
+    width: 44px;
+    height: 44px;
+    flex-basis: 44px;
+  }
+
+  .calendar-view-switch {
+    grid-row: 3;
+    grid-column: 1;
+    width: 100%;
+    grid-template-columns: repeat(3, minmax(44px, 1fr));
+    justify-self: stretch;
+  }
+
+  .calendar-view-switch button {
+    width: auto;
+    min-height: 44px;
+  }
+
+  .calendar-data-controls > button {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .token-row {
+    grid-template-columns: 44px minmax(0, 1fr) 44px;
+  }
+}
+
+@media (pointer: coarse) {
+  .login-methods button,
+  .login-form .field-icon,
+  .login-topbar button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .app-shell :is(button, a).icon-button,
+  .app-shell :is(button, a).primary-button,
+  .app-shell :is(button, a).secondary-button,
+  .app-shell :is(button, a).danger-button,
+  .app-shell :is(button, a).text-button,
+  .app-shell .segmented button,
+  .app-shell .segmented-control button,
+  .modal :is(button, a).icon-button,
+  .modal :is(button, a).primary-button,
+  .modal :is(button, a).secondary-button,
+  .modal :is(button, a).danger-button,
+  .modal :is(button, a).text-button,
+  .toast button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .app-shell :is(button, a).icon-button,
+  .modal :is(button, a).icon-button {
+    width: 44px;
+    height: 44px;
+    flex-basis: 44px;
+  }
+
+  .toast {
+    grid-template-columns: 20px minmax(0, 1fr) 44px;
+  }
+
+  .toast button {
+    width: 44px;
+    height: 44px;
+  }
+
+  .fullcalendar-frame .fc-daygrid-event,
+  .fullcalendar-frame .fc-timegrid-event {
+    min-height: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html,
+  body,
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  ::view-transition-old(student-page),
+  ::view-transition-new(student-page) {
+    animation: none !important;
+  }
 }

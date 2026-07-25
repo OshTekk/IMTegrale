@@ -56,13 +56,14 @@ export const appPageTitles: Record<string, [string, string]> = {
 export const mobileNavDescriptions: Record<string, string> = {
   "/results": "Grades, crédits et détail des évaluations",
   "/calendar": "Cours personnels et calendrier de formation",
+  "/leaderboard": "Classements GPA et moyenne de ta promotion",
   "/sharing": "Tokens et accès partagés",
   "/settings": "Compte, synchronisation et notifications",
   "/parcours": "Cours, exercices guidés et progression privée",
 };
 
 export function isAppNavItemActive(to: string, pathname: string): boolean {
-  if (to === "/results") return pathname.startsWith("/results");
+  if (to === "/results") return pathname.startsWith("/results") || pathname === "/ues/releve";
   if (to === "/parcours") return pathname.startsWith("/parcours");
   if (to.startsWith("/simulations")) return pathname.startsWith("/simulations");
   return to === pathname;
@@ -73,6 +74,20 @@ export function visibleAppNavigation(session: Session, primaryOwner: boolean): A
     if (item.learningOnly) return learningEntryVisible(session);
     return (!item.ownerOnly || session.role === "owner") && (!item.primaryOwnerOnly || primaryOwner);
   });
+}
+
+export function mobileAppNavigation(
+  session: Session,
+  primaryOwner: boolean,
+): { primary: AppNavItem[]; secondary: AppNavItem[] } {
+  const visible = visibleAppNavigation(session, primaryOwner);
+  const primaryPaths = primaryOwner
+    ? new Set(["/", "/results", "/calendar", "/simulations/gpa"])
+    : new Set(["/", "/results", "/settings"]);
+  return {
+    primary: visible.filter((item) => primaryPaths.has(item.to)),
+    secondary: visible.filter((item) => !primaryPaths.has(item.to)),
+  };
 }
 
 export function appPageHeading(pathname: string, session: Session): [string, string] {

@@ -5,6 +5,12 @@ export const SYNTHETIC_APP_FIXTURE_ONLY = true as const;
 export type AppSessionMode = "anonymous" | "imt" | "passkey" | "token" | "viewer";
 
 export interface FakeAppState {
+  calendarConnectRequests: string[];
+  calendarDisconnects: number;
+  calendarEvents: Array<Record<string, unknown>>;
+  calendarEventsError: boolean;
+  calendarStatus: Record<string, unknown>;
+  calendarStatusError: boolean;
   csrfHeaders: Array<string | undefined>;
   dashboard: Record<string, unknown>;
   dashboardError: boolean;
@@ -17,6 +23,8 @@ export interface FakeAppState {
   session: Record<string, unknown>;
   syncRequests: number;
   tokenCreates: Array<Record<string, unknown>>;
+  trainingCalendar: Record<string, unknown>;
+  trainingCalendarError: boolean;
   synthetic: true;
 }
 
@@ -76,6 +84,114 @@ const passAccess = {
   },
   profile: { refreshed_at: "2026-01-01T08:30:00Z", refresh_due: false },
   service_session: serviceSession,
+};
+
+export const syntheticCalendarStatus = {
+  configured: true,
+  refresh_interval_minutes: 60,
+  account_hint: "Compte agenda fictif",
+  last_attempt_at: "2026-07-25T07:00:00Z",
+  last_success_at: "2026-07-25T07:00:00Z",
+  next_refresh_at: "2026-07-25T08:00:00Z",
+  last_status: "success",
+  last_error_code: null,
+  event_count: 12,
+  fip_training_available: true,
+  promotion_year: 2028,
+};
+
+export const syntheticCalendarEvents = [
+  {
+    id: "event-calendar-fictif-1",
+    title: "Atelier de conception entièrement fictif avec un intitulé volontairement long",
+    location: "Salle fictive A-101, bâtiment de démonstration",
+    start: "2026-07-27T08:00:00+02:00",
+    end: "2026-07-27T10:00:00+02:00",
+    all_day: false,
+  },
+  {
+    id: "event-calendar-fictif-2",
+    title: "Travaux dirigés synthétiques",
+    location: "Amphithéâtre fictif",
+    start: "2026-07-27T13:30:00+02:00",
+    end: "2026-07-27T15:00:00+02:00",
+    all_day: false,
+  },
+  {
+    id: "event-calendar-fictif-3",
+    title: "Projet collectif de démonstration",
+    location: null,
+    start: "2026-07-28T09:15:00+02:00",
+    end: "2026-07-28T12:15:00+02:00",
+    all_day: false,
+  },
+  {
+    id: "event-calendar-fictif-4",
+    title: "Cours fictif de systèmes",
+    location: "Salle fictive B-204",
+    start: "2026-07-29T10:00:00+02:00",
+    end: "2026-07-29T12:00:00+02:00",
+    all_day: false,
+  },
+  {
+    id: "event-calendar-fictif-5",
+    title: "Séminaire synthétique",
+    location: "Espace fictif de travail",
+    start: "2026-07-30T14:00:00+02:00",
+    end: "2026-07-30T17:00:00+02:00",
+    all_day: false,
+  },
+  {
+    id: "event-calendar-fictif-6",
+    title: "Journée de démonstration",
+    location: "Campus fictif",
+    start: "2026-07-31",
+    end: "2026-08-01",
+    all_day: true,
+  },
+];
+
+function syntheticTrainingPromotion(promotionYear: number, level: "A1" | "A2" | "A3", firstSemester: string) {
+  const secondSemester = `S${Number(firstSemester.slice(1)) + 1}`;
+  return {
+    promotion_year: promotionYear,
+    level,
+    semesters: [
+      { semester: firstSemester, start: "2026-09-01", end: "2027-01-31" },
+      { semester: secondSemester, start: "2027-02-01", end: "2027-07-15" },
+    ],
+    totals: { school_weeks: 18, company_weeks: 27 },
+    periods: [
+      { kind: "school", start: "2026-09-01", end: "2026-10-09", weeks: 6, campus: "Site fictif Alpha" },
+      { kind: "company", start: "2026-10-10", end: "2027-01-03", weeks: 12, campus: null },
+      { kind: "school", start: "2027-01-04", end: "2027-02-12", weeks: 6, campus: "Site fictif Bêta" },
+      { kind: "company", start: "2027-02-13", end: "2027-05-28", weeks: 15, campus: null },
+      { kind: "school", start: "2027-05-29", end: "2027-07-15", weeks: 6, campus: "Site fictif Alpha" },
+    ],
+    milestones: [
+      {
+        kind: "international_project",
+        title: "Projet international fictif",
+        start: "2027-03-01",
+        end: "2027-04-30",
+        detail: "Période synthétique utilisée uniquement par les tests.",
+      },
+    ],
+  };
+}
+
+export const syntheticTrainingCalendar = {
+  academic_year: "2026-2027",
+  title: "Calendrier de formation fictif",
+  speciality: "Formation ingénieur partenaire fictive",
+  source: { label: "Calendrier synthétique de test", version_date: "2026-07-01" },
+  promotions: [
+    syntheticTrainingPromotion(2027, "A3", "S9"),
+    syntheticTrainingPromotion(2028, "A2", "S7"),
+    syntheticTrainingPromotion(2029, "A1", "S5"),
+  ],
+  default_promotion_year: 2028,
+  campus_note: "Les campus affichés sont entièrement fictifs.",
 };
 
 export const syntheticDashboard = {
@@ -393,6 +509,12 @@ function recordCsrf(route: Route, state: FakeAppState) {
 
 export async function installFakeAppApi(page: Page, mode: AppSessionMode = "imt"): Promise<FakeAppState> {
   const state: FakeAppState = {
+    calendarConnectRequests: [],
+    calendarDisconnects: 0,
+    calendarEvents: structuredClone(syntheticCalendarEvents),
+    calendarEventsError: false,
+    calendarStatus: structuredClone(syntheticCalendarStatus),
+    calendarStatusError: false,
     csrfHeaders: [],
     dashboard: structuredClone(syntheticDashboard),
     dashboardError: false,
@@ -405,6 +527,8 @@ export async function installFakeAppApi(page: Page, mode: AppSessionMode = "imt"
     session: session(mode),
     syncRequests: 0,
     tokenCreates: [],
+    trainingCalendar: structuredClone(syntheticTrainingCalendar),
+    trainingCalendarError: false,
     synthetic: SYNTHETIC_APP_FIXTURE_ONLY,
   };
   await page.context().addCookies([{ name: "botnote_csrf", value: csrfToken, url: baseUrl, sameSite: "Lax" }]);
@@ -464,6 +588,46 @@ export async function installFakeAppApi(page: Page, mode: AppSessionMode = "imt"
       } else {
         await json(route, state.dashboard);
       }
+      return;
+    }
+    if (url.pathname === "/api/v1/calendar/status" && request.method() === "GET") {
+      if (state.calendarStatusError) {
+        await json(route, { detail: { code: "SERVICE_UNAVAILABLE", message: "Agenda fictif indisponible." } }, 503);
+      } else {
+        await json(route, state.calendarStatus);
+      }
+      return;
+    }
+    if (url.pathname === "/api/v1/calendar/events" && request.method() === "GET") {
+      if (state.calendarEventsError) {
+        await json(route, { detail: { code: "SERVICE_UNAVAILABLE", message: "Cours fictifs indisponibles." } }, 503);
+      } else {
+        await json(route, state.calendarEvents);
+      }
+      return;
+    }
+    if (url.pathname === "/api/v1/calendar/training" && request.method() === "GET") {
+      if (state.trainingCalendarError) {
+        await json(route, { detail: { code: "SERVICE_UNAVAILABLE", message: "Formation fictive indisponible." } }, 503);
+      } else {
+        await json(route, state.trainingCalendar);
+      }
+      return;
+    }
+    if (url.pathname === "/api/v1/calendar/subscription" && request.method() === "PUT") {
+      recordCsrf(route, state);
+      const body = request.postDataJSON() as { url?: unknown };
+      state.calendarConnectRequests.push(String(body.url ?? ""));
+      state.calendarStatus = { ...state.calendarStatus, configured: true, event_count: state.calendarEvents.length };
+      await json(route, state.calendarStatus);
+      return;
+    }
+    if (url.pathname === "/api/v1/calendar/subscription" && request.method() === "DELETE") {
+      recordCsrf(route, state);
+      state.calendarDisconnects += 1;
+      state.calendarEvents = [];
+      state.calendarStatus = { ...state.calendarStatus, configured: false, event_count: 0 };
+      await route.fulfill({ status: 204, headers: privateHeaders() });
       return;
     }
     if (url.pathname === "/api/v1/settings" && request.method() === "GET") {
