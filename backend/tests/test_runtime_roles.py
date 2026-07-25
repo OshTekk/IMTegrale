@@ -7,6 +7,12 @@ import pytest
 from app.config import RuntimeRole, Settings
 
 
+@pytest.fixture(autouse=True)
+def _clear_legacy_sync_environment(monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.delenv("BOTNOTE_CREDENTIAL_KEY", raising=False)
+    monkeypatch.delenv("BOTNOTE_CREDENTIAL_PREVIOUS_KEYS", raising=False)
+
+
 def _production_settings(tmp_path: Path, **updates) -> Settings:  # noqa: ANN003
     lock_directory = tmp_path / "locks"
     lock_directory.mkdir(mode=0o2770, exist_ok=True)
@@ -31,8 +37,9 @@ def _production_settings(tmp_path: Path, **updates) -> Settings:  # noqa: ANN003
 
 def test_non_web_runtime_does_not_require_web_tls_or_learning_files(tmp_path: Path) -> None:
     settings = _production_settings(tmp_path)
+    sync_settings = _production_settings(tmp_path, credential_key="")
 
-    settings.validate_for_runtime(RuntimeRole.SYNC)
+    sync_settings.validate_for_runtime(RuntimeRole.SYNC)
     settings.validate_for_runtime(RuntimeRole.CALENDAR)
     settings.validate_for_runtime(RuntimeRole.OUTBOX)
     settings.validate_for_runtime(RuntimeRole.SCHEDULER)
@@ -43,22 +50,30 @@ def test_non_web_runtime_does_not_require_web_tls_or_learning_files(tmp_path: Pa
 
 def test_runtime_roles_require_only_their_current_symmetric_secrets(tmp_path: Path) -> None:
     no_credential = _production_settings(tmp_path, credential_key="")
+    sync_no_pepper = _production_settings(
+        tmp_path,
+        credential_key="",
+        token_pepper="",
+    )
     no_pepper = _production_settings(tmp_path, token_pepper="")
 
-    with pytest.raises(RuntimeError, match="CREDENTIAL_KEY"):
-        no_credential.validate_for_runtime(RuntimeRole.SYNC)
+    no_credential.validate_for_runtime(RuntimeRole.SYNC)
     with pytest.raises(RuntimeError, match="CREDENTIAL_KEY"):
         no_credential.validate_for_runtime(RuntimeRole.CALENDAR)
     no_credential.validate_for_runtime(RuntimeRole.SCHEDULER)
 
     with pytest.raises(RuntimeError, match="TOKEN_PEPPER"):
-        no_pepper.validate_for_runtime(RuntimeRole.SYNC)
+        sync_no_pepper.validate_for_runtime(RuntimeRole.SYNC)
     no_pepper.validate_for_runtime(RuntimeRole.CALENDAR)
     no_pepper.validate_for_runtime(RuntimeRole.OUTBOX)
 
 
 def test_sync_role_rejects_relative_or_symlink_lock_directory(tmp_path: Path) -> None:
-    relative = _production_settings(tmp_path, sync_lock_dir=Path("relative-locks"))
+    relative = _production_settings(
+        tmp_path,
+        credential_key="",
+        sync_lock_dir=Path("relative-locks"),
+    )
     with pytest.raises(RuntimeError, match="absolute"):
         relative.validate_for_runtime(RuntimeRole.SYNC)
 
@@ -66,18 +81,26 @@ def test_sync_role_rejects_relative_or_symlink_lock_directory(tmp_path: Path) ->
     target.mkdir()
     link = tmp_path / "link"
     link.symlink_to(target)
-    linked = _production_settings(tmp_path, sync_lock_dir=link)
+    linked = _production_settings(tmp_path, credential_key="", sync_lock_dir=link)
     with pytest.raises(RuntimeError, match="real directory"):
         linked.validate_for_runtime(RuntimeRole.SYNC)
 
-    missing = _production_settings(tmp_path, sync_lock_dir=tmp_path / "missing")
+    missing = _production_settings(
+        tmp_path,
+        credential_key="",
+        sync_lock_dir=tmp_path / "missing",
+    )
     with pytest.raises(RuntimeError, match="provisioned"):
         missing.validate_for_runtime(RuntimeRole.SYNC)
 
     unsafe = tmp_path / "unsafe"
     unsafe.mkdir(mode=0o750)
     unsafe.chmod(0o750)
-    wrong_mode = _production_settings(tmp_path, sync_lock_dir=unsafe)
+    wrong_mode = _production_settings(
+        tmp_path,
+        credential_key="",
+        sync_lock_dir=unsafe,
+    )
     with pytest.raises(RuntimeError, match="2770"):
         wrong_mode.validate_for_runtime(RuntimeRole.SYNC)
 
@@ -89,18 +112,45 @@ def test_sync_role_requires_exact_local_peer_database_url(tmp_path: Path) -> Non
         "postgresql+psycopg:///other",
         "postgresql+psycopg:///botnote?host=/tmp",
     ):
-        settings = _production_settings(tmp_path, database_url=database_url)
+        settings = _production_settings(
+            tmp_path,
+            credential_key="",
+            database_url=database_url,
+        )
         with pytest.raises(RuntimeError, match="local peer"):
             settings.validate_for_runtime(RuntimeRole.SYNC)
 
 
-def test_g4a_legacy_key_is_available_only_under_explicit_runtime_profiles(
+def test_g4b_legacy_key_is_forbidden_in_normal_sync_and_migration_is_explicit(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
-    normal = _production_settings(tmp_path, sync_runtime_profile="normal")
+    normal = _production_settings(
+        tmp_path,
+        credential_key="",
+        sync_runtime_profile="normal",
+    )
     migration = _production_settings(tmp_path, sync_runtime_profile="migration")
+    residual_active = _production_settings(tmp_path, sync_runtime_profile="normal")
+    residual_previous = _production_settings(
+        tmp_path,
+        credential_key="",
+        credential_previous_keys=[base64.urlsafe_b64encode(b"p" * 32).decode()],
+        sync_runtime_profile="normal",
+    )
 
     normal.validate_for_runtime(RuntimeRole.SYNC)
+    for residual in (residual_active, residual_previous):
+        with pytest.raises(RuntimeError, match="SYNC_LEGACY_CREDENTIAL_KEY_FORBIDDEN"):
+            residual.validate_for_runtime(RuntimeRole.SYNC)
+    for variable in (
+        "BOTNOTE_CREDENTIAL_KEY",
+        "BOTNOTE_CREDENTIAL_PREVIOUS_KEYS",
+    ):
+        monkeypatch.setenv(variable, "")
+        with pytest.raises(RuntimeError, match="SYNC_LEGACY_CREDENTIAL_KEY_FORBIDDEN"):
+            normal.validate_for_runtime(RuntimeRole.SYNC)
+        monkeypatch.delenv(variable)
     with pytest.raises(RuntimeError, match="migration"):
         normal.validate_for_runtime(RuntimeRole.SYNC_MIGRATION)
     with pytest.raises(RuntimeError, match="normal profile"):

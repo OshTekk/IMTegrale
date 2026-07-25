@@ -45,8 +45,8 @@ downgrade de `0026` n'est autorisé après la première enveloppe.
 
 ## G4B : contraction
 
-G4B est autorisé uniquement après un nouvel inventaire à zéro. Le runtime
-normal devient HPKE-only, refuse tout legacy et ne charge plus
+G4B a été appliqué après un nouvel inventaire à zéro. Le runtime normal est
+HPKE-only, refuse tout legacy et ne charge plus
 `BOTNOTE_CREDENTIAL_KEY` ni `BOTNOTE_CREDENTIAL_PREVIOUS_KEYS`. Le profil
 explicite de migration peut rester disponible comme outil d'incident isolé,
 mais il n'est importé par aucun worker normal.

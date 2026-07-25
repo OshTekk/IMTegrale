@@ -724,9 +724,7 @@ def perform_sync_operation(
     metadata_due = _ue_metadata_refresh_due(account, now)
     stored = load_service_session(
         account.id,
-        sealer=sync_runtime.pass_session_sealer,
         opener=sync_runtime.pass_session_opener,
-        legacy_cipher=sync_runtime.legacy_session_cipher,
     )
     owner_password = owner_password_for(account)
     if stored is None and owner_password is None:

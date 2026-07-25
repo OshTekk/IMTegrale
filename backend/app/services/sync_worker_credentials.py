@@ -20,7 +20,6 @@ from app.crypto import (
     seal_envelope,
 )
 from app.crypto.errors import HpkeEnvelopeError
-from app.security import CredentialCipher
 from app.services.pass_session_crypto import (
     PASS_SESSION_PUBLIC_CREDENTIAL,
     PassSessionOpener,
@@ -75,7 +74,6 @@ class SyncWorkerCredentials:
 class SyncRuntimeContext:
     pass_session_sealer: PassSessionSealer
     pass_session_opener: PassSessionOpener
-    legacy_session_cipher: CredentialCipher | None = None
 
     def __repr__(self) -> str:
         return "SyncRuntimeContext(pass_session_crypto=<loaded>)"
@@ -83,15 +81,12 @@ class SyncRuntimeContext:
 
 def build_sync_runtime_context(
     credentials: SyncWorkerCredentials,
-    *,
-    legacy_session_cipher: CredentialCipher | None = None,
 ) -> SyncRuntimeContext:
     return SyncRuntimeContext(
         pass_session_sealer=PassSessionSealer(credentials.service_session.public_key),
         pass_session_opener=PassSessionOpener(
             credentials.service_session.private_keyring
         ),
-        legacy_session_cipher=legacy_session_cipher,
     )
 
 

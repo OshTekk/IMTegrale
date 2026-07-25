@@ -20,7 +20,7 @@ fenêtre de rollback.
 La migration crée également `imt_sync_credentials`, mais cette table reste vide
 et aucune route ne peut y écrire. G2 fournit la
 [primitive HPKE générique](security/hpke-envelope-format.md), G3 isole le worker
-sync et G4A migre les seules sessions PASS/HUB vers ce worker. Cette protection
+sync et G4 migre les seules sessions PASS/HUB vers ce worker. Cette protection
 n'est branchée ni à la table credential, ni à une API de mot de passe. Aucun mot
 de passe ou fallback autonome n'est implémenté. Le détail des gates se trouve dans
 [`security/autonomous-sync-architecture.md`](security/autonomous-sync-architecture.md).
@@ -79,12 +79,11 @@ Toute réservation automatique actualise aussi le délai de fraîcheur manuel de
 
 Après la migration `0017`, tous les anciens mots de passe chiffrés sont
 supprimés de façon irréversible. La migration `0026` ajoute le stockage HPKE des
-sessions sans déchiffrer de ligne. G4A utilise
+sessions sans déchiffrer de ligne. G4A a utilisé
 `botnote pass-sessions-migrate-hpke` hors réseau pour convertir les anciens
-ciphertexts. Pendant cette étape intermédiaire, le worker sync G4A reçoit aussi
-temporairement la clé historique afin de migrer une ligne avant tout usage ; le
-profil explicite `migration` est réservé à la commande hors réseau. G4B retire
-la clé du worker normal. Les consentements automatiques restent
+ciphertexts. Le profil normal G4B est HPKE-only et refuse la clé historique ;
+le profil explicite `migration` reste réservé à la commande hors réseau. Les
+consentements automatiques restent
 enregistrés, mais les comptes sans session exploitable sont mis en pause jusqu'à
 leur prochaine authentification IMT. Vérifier que `botnote-scheduler.service`,
 `botnote-sync-worker.service` et les instances calendar/outbox sont actives, et

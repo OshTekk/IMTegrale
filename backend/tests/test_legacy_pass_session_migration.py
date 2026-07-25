@@ -8,6 +8,7 @@ import pytest
 import requests
 from app.database import Base, SessionLocal, utcnow
 from app.models import Account, ImtSyncCredential, PassServiceSession, new_id
+from app.security import cipher_for
 from app.services.legacy_pass_session_migration import (
     migrate_legacy_service_sessions,
     revoke_all_service_sessions,
@@ -50,15 +51,14 @@ def _account(login: str, *, automatic: bool = False) -> Account:
 
 def _legacy_session(
     account: Account,
-    runtime: SyncRuntimeContext,
+    _runtime: SyncRuntimeContext,
     *,
     snapshot: str | None = None,
     ciphertext: str | None = None,
     expires_delta: timedelta = timedelta(days=1),
 ) -> str:
     row_id = new_id()
-    legacy = runtime.legacy_session_cipher
-    assert legacy is not None
+    legacy = cipher_for()
     envelope = ciphertext or legacy.encrypt(
         snapshot or _snapshot(),
         context=f"pass-service-session:{row_id}",
@@ -80,12 +80,10 @@ def _legacy_session(
 
 
 def _migration(runtime: SyncRuntimeContext, **options):  # noqa: ANN003, ANN202
-    legacy = runtime.legacy_session_cipher
-    assert legacy is not None
     return migrate_legacy_service_sessions(
         sealer=runtime.pass_session_sealer,
         opener=runtime.pass_session_opener,
-        cipher=legacy,
+        cipher=cipher_for(),
         **options,
     )
 
@@ -350,8 +348,7 @@ def test_two_migration_commands_are_resumable_without_dual_write(
     )
     Base.metadata.create_all(database)
     factory = sessionmaker(bind=database, expire_on_commit=False)
-    legacy = pass_session_runtime.legacy_session_cipher
-    assert legacy is not None
+    legacy = cipher_for()
     with factory() as db:
         for index in range(2):
             account = Account(

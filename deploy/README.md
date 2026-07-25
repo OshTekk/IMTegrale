@@ -63,9 +63,12 @@ La révision `0017` supprime physiquement les anciennes colonnes de mot de passe
    `BOTNOTE_AUTONOMOUS_SYNC_ENABLED` est absent ou vaut `false`. Une valeur
    `true` doit faire échouer la validation de configuration. Les clés G3 sont
    provisionnées hors Git et injectées uniquement par `LoadCredential`; elles
-   ne doivent jamais être ajoutées à un environnement. Depuis G4A, le web reçoit
+   ne doivent jamais être ajoutées à un environnement. Depuis G4, le web reçoit
    exactement `pass-service-session-public`, tandis que le worker reçoit les
-   quatre credentials. La procédure de migration et de contraction est décrite
+   quatre credentials. Le fichier `botnote-sync.env` final ne contient ni
+   `BOTNOTE_CREDENTIAL_KEY`, ni `BOTNOTE_CREDENTIAL_PREVIOUS_KEYS`; leur
+   présence fait échouer le profil sync normal. La procédure de migration et de
+   contraction est décrite
    dans
    [`pass-session-hpke-migration.md`](../docs/security/pass-session-hpke-migration.md).
 5. Définir `BOTNOTE_ADMIN_ALLOWED_IDENTITIES` dans `/etc/botnote/botnote.env`. Une liste vide garde toutes les routes admin invisibles.
@@ -83,6 +86,10 @@ La révision `0017` supprime physiquement les anciennes colonnes de mot de passe
    `auto_sync_enabled=false`, `session_only` à ceux dont le booléen vaut `true`,
    et les compteurs `autonomous` et `imt_sync_credentials` doivent être nuls.
    Ces lectures ne doivent ni modifier le consentement ni réserver un job.
+   Pour la contraction G4B, conserver une copie root-only exacte du fichier
+   sync G4A pour le rollback, retirer les deux variables symétriques du fichier
+   actif, puis vérifier le heartbeat `isolated-sync-v2`, l'inventaire legacy à
+   zéro et `operations-check` avant de redémarrer le scheduler.
 9. Créer le répertoire dédié avec `install -d -o botnote -g botnote -m 0700 /var/lib/botnote-admin`, puis amorcer le premier compte avec `botnote admin-bootstrap --username <nom> --output /var/lib/botnote-admin/initial-credentials.txt`. Le fichier doit rester `0600`, être supprimé après lecture et le mot de passe doit être changé à la première connexion. La première session permet ensuite d'enrôler une passkey pendant dix minutes. Après cet enrôlement, toute nouvelle session admin exige cette passkey et les mutations sensibles exigent un step-up de moins de dix minutes. Conserver au moins deux passkeys administrateur sur des dispositifs distincts ; la dernière ne peut pas être supprimée depuis l'interface. Ne pas relâcher les permissions du répertoire legacy `/var/lib/botnote`.
 
 Un redémarrage Nginx complet est volontaire lors d'un changement d'upstream : un reload gracieux peut conserver un ancien worker tant qu'une connexion SSE reste ouverte.
@@ -214,8 +221,9 @@ production.
   `imt_sync_credentials` doit être vide. Le flag autonome doit rester fermé.
 - Après `0026`, toute session active doit avoir exactement une enveloppe HPKE de
   65 652 octets. Legacy, mixed et métadonnées invalides doivent être à zéro
-  avant G4B. Ni l'API ni l'administration ne doivent exposer le format, le
-  `key_id` ou l'enveloppe.
+  en G4B. Le worker sync normal ne doit contenir aucune variable symétrique. Ni
+  l'API ni l'administration ne doivent exposer le format, le `key_id` ou
+  l'enveloppe.
 - `systemctl --failed` doit être vide sur PVE et LXC.
 - Depuis le LAN, `/api/v1/admin/auth/session` doit répondre `404`. Depuis l'identité Tailscale autorisée, il doit répondre sans révéler de compte tant que l'authentification admin n'est pas faite.
 - Vérifier qu'une session admin obtenue par mot de passe seul ne peut pas ouvrir le portail après l'enrôlement initial, qu'une passkey est exigée et qu'une mutation sensible refuse un step-up vieux de plus de dix minutes avec `ADMIN_STEP_UP_REQUIRED`. Une lecture non destructive doit rester disponible après expiration du step-up.

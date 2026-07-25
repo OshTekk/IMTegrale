@@ -85,6 +85,8 @@ def test_postgres_peer_identity_is_limited_to_the_application_database() -> None
 def test_sync_environment_example_contains_no_hpke_or_unrelated_secrets() -> None:
     example = (ROOT / "deploy" / "botnote-sync.env.example").read_text()
     assert "BOTNOTE_AUTONOMOUS_SYNC_ENABLED=false" in example
+    assert "BOTNOTE_CREDENTIAL_KEY" not in example
+    assert "BOTNOTE_CREDENTIAL_PREVIOUS_KEYS" not in example
     assert "PRIVATE" not in example
     assert "TELEGRAM" not in example
     assert "ADMIN_" not in example
@@ -108,6 +110,17 @@ def test_hpke_runtime_context_is_limited_to_the_explicit_sync_pipeline() -> None
         source = (application / relative_path).read_text()
         assert "SyncRuntimeContext" in source
     assert "app.crypto" not in (application / "services" / "pass_sessions.py").read_text()
+    pass_sessions = (application / "services" / "pass_sessions.py").read_text()
+    runtime_context = (
+        application / "services" / "sync_worker_credentials.py"
+    ).read_text()
+    pass_gateway = (application / "services" / "pass_gateway.py").read_text()
+    assert "legacy_pass_session_migration" not in pass_sessions
+    assert "LegacySessionCipher" not in pass_sessions
+    assert "legacy_session_cipher" not in runtime_context
+    assert "CredentialCipher" not in runtime_context
+    assert "cipher_for" not in runtime_context
+    assert "legacy_session_cipher" not in pass_gateway
     assert "ImtSyncCredential(" not in "\n".join(
         path.read_text()
         for path in sorted((application / "services").glob("*.py"))

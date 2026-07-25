@@ -1,8 +1,8 @@
 # Isolation du worker de synchronisation
 
-## Portée G3 et G4A
+## Portée G3 et G4
 
-G3 crée la frontière d'exécution dédiée. G4A y branche uniquement les sessions
+G3 crée la frontière d'exécution dédiée. G4 y branche uniquement les sessions
 techniques PASS/HUB :
 
 - toute nouvelle session PASS/HUB est scellée en HPKE ;
@@ -25,10 +25,11 @@ L'utilisateur n'appartient pas au groupe privé général `botnote`. Il ne peut
 donc pas lire directement `/etc/botnote/botnote.env`, les clés TLS, Parcours,
 les secrets d'administration ou les sauvegardes. Le fichier privé
 `/etc/botnote/botnote-sync.env` est `root:root 0600` et est lu par systemd avant
-la baisse de privilèges. Pendant G4A, il contient temporairement la clé
-symétrique nécessaire à la lecture legacy et le pepper requis par le flux sync,
-mais aucune clé HPKE, donnée Telegram ou configuration Parcours. G4B retire la
-clé symétrique du profil normal.
+la baisse de privilèges. Depuis G4B, il contient le pepper requis par le flux
+sync, mais ni `BOTNOTE_CREDENTIAL_KEY`, ni
+`BOTNOTE_CREDENTIAL_PREVIOUS_KEYS`, ni clé HPKE, donnée Telegram ou
+configuration Parcours. Le profil sync normal refuse de démarrer si une clé
+symétrique legacy réapparaît.
 
 Le rôle PostgreSQL `botnote-sync` utilise le socket Unix local et
 l'authentification `peer`. Son nom correspond exactement à l'identité Unix :
@@ -165,12 +166,13 @@ Les self-tests restent en mémoire et n'ouvrent ni base, ni job, ni réseau. Une
 clé absente, invalide, incohérente ou un self-test échoué termine le processus
 avec un code stable et sans secret.
 
-Le heartbeat G4A conserve temporairement :
+Le heartbeat final G4B expose uniquement :
 
 ```text
-runtime_profile=isolated-sync-v1
+runtime_profile=isolated-sync-v2
 hpke_credentials_ready=true
-hpke_purposes=2
+pass_session_storage=hpke-v1
+legacy_decrypt_available=false
 dedicated_identity=true
 ```
 
@@ -234,8 +236,7 @@ Ne pas downgrader la base et ne jamais réécrire une enveloppe HPKE en legacy.
 
 ## Risques résiduels
 
-- Le worker sync G4A charge encore temporairement la clé symétrique générale ;
-  G4B doit la retirer.
+- Le worker sync peut ouvrir les sessions HPKE nécessaires à son travail.
 - Le web peut sceller une session mais ne peut pas l'ouvrir.
 - L'exception propriétaire historique reste compatible avec l'ancien runtime.
 - Root dans le LXC compromet toutes les clés.

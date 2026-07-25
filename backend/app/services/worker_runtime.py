@@ -25,9 +25,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 WorkerKind = Literal["sync", "calendar", "outbox", "scheduler"]
 ISOLATED_SYNC_RUNTIME_DETAILS: dict[str, int | bool | str] = {
-    "runtime_profile": "isolated-sync-v1",
+    "runtime_profile": "isolated-sync-v2",
     "hpke_credentials_ready": True,
-    "hpke_purposes": 2,
+    "pass_session_storage": "hpke-v1",
+    "legacy_decrypt_available": False,
     "dedicated_identity": True,
 }
 WORKER_POLL_SECONDS = 2
@@ -193,7 +194,9 @@ def run_worker(
                 )
                 processed = False
             else:
-                heartbeat(details={"processed": processed})
+                heartbeat(
+                    details=None if kind == "sync" else {"processed": processed}
+                )
             if not processed:
                 stop.wait(WORKER_POLL_SECONDS)
     finally:

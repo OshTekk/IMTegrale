@@ -20,6 +20,8 @@ Après l'authentification, seuls les cookies `Secure` appartenant exactement aux
 domaines PASS et Hub autorisés peuvent être retenus. Ils sont filtrés, placés
 dans un frame de taille fixe puis scellés par HPKE, révocables et supprimés au plus tard après 30 jours. Le web peut sceller avec une clé publique, mais seule
 l'identité système du worker sync reçoit la clé privée permettant de les ouvrir.
+Le worker sync normal refuse toute clé symétrique legacy et ne peut plus ouvrir
+l'ancien format.
 
 Cette session technique reste une capacité d'accès : le worker sync doit pouvoir
 la déchiffrer pour synchroniser. Une compromission de ce worker ou un accès root

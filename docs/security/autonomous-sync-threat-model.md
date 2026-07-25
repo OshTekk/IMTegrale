@@ -87,7 +87,7 @@ Les actifs futurs à protéger seront :
 - un heartbeat ancien ne satisfait plus la readiness de production ;
 - aucune donnée utilisateur, session réelle ou table credential n'utilise HPKE.
 
-## Invariants G4A
+## Invariants G4
 
 - le web possède seulement la clé publique des sessions ;
 - toute nouvelle session est écrite uniquement en HPKE ;
@@ -95,16 +95,16 @@ Les actifs futurs à protéger seront :
 - révocation, expiration et invalidation effacent les deux formats ;
 - la migration legacy est hors réseau, reprenable et ne produit que des
   agrégats ;
-- le fallback legacy temporaire n'existe que dans le worker sync G4A et la
-  commande au profil explicite `migration`, avec la clé historique ;
-- G4B doit encore supprimer ce fallback du runtime normal.
+- le runtime sync normal ne possède aucun fallback legacy et refuse toute ligne
+  ancienne sans la modifier ;
+- la clé historique et le module legacy restent accessibles uniquement à la
+  commande hors réseau sous le profil explicite `migration`.
 
 ## Risques résiduels
 
-Pendant G4A, le worker sync conserve temporairement la clé symétrique générale
-pour migrer les anciennes sessions. G4B doit la retirer après inventaire legacy
-à zéro. Le web conserve cette clé pour d'autres secrets, mais elle ne permet pas
-d'ouvrir les sessions PASS/HUB HPKE.
+Le worker sync normal ne possède plus la clé symétrique générale. Le web
+conserve cette clé pour d'autres secrets, mais elle ne permet pas d'ouvrir les
+sessions PASS/HUB HPKE.
 L'exception locale `owner_managed`, lorsqu'un exploitant l'a volontairement
 configurée pour son compte unique, reste également hors du modèle multi-compte
 et hors de G1.
@@ -115,5 +115,5 @@ irréductibles. L'enveloppe asymétrique réduira la surface de déchiffrement, 
 ne rendra jamais l'exploitation d'un mot de passe sans risque.
 
 La présence d'une table vide et d'une primitive isolée ne constitue pas une
-capacité autonome. Toute activation avant G4 à G7 doit être considérée comme
-une erreur de configuration.
+capacité autonome. Toute activation avant G5 à G7 doit être considérée comme
+une erreur de configuration. G4 est terminé ; G5 à G7 restent fermés.

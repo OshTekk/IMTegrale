@@ -15,10 +15,10 @@ Procédure :
 7. après sauvegarde post-rotation et validation applicative, retirer les anciennes clés puis redémarrer les services.
 
 La commande couvre les tokens et Chat IDs Telegram ainsi que les URL INPASS.
-Depuis G4A, elle ne traite plus les sessions PASS/HUB : celles-ci utilisent une
+Depuis G4, elle ne traite plus les sessions PASS/HUB : celles-ci utilisent une
 enveloppe HPKE liée au compte, au login et à l'identifiant de session. Leur
-migration legacy possède une commande séparée et le worker normal cessera de
-charger la clé symétrique lors de la contraction G4B. Aucun plaintext n'est
+migration legacy possède une commande séparée et le worker normal ne charge
+plus la clé symétrique depuis G4B. Aucun plaintext n'est
 écrit dans les sorties.
 
 ## Clé HPKE des sessions PASS/HUB

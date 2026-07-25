@@ -8,7 +8,7 @@ import requests
 from app.config import get_settings
 from app.crypto import RecipientPrivateKey, RecipientPrivateKeyring
 from app.database import SessionLocal, utcnow
-from app.models import Account, PassServiceSession
+from app.models import Account, PassServiceSession, new_id
 from app.services.operations import operational_alert_codes
 from app.services.pass_session_crypto import (
     PassSessionEncryptionUnavailable,
@@ -16,6 +16,7 @@ from app.services.pass_session_crypto import (
 )
 from app.services.pass_sessions import (
     PassSessionDecryptionKeyUnavailable,
+    PassSessionLegacyCiphertextPresent,
     PassSessionStorageUnavailable,
     load_service_session,
     owner_password_for,
@@ -137,7 +138,6 @@ def test_service_session_is_encrypted_replaced_and_never_keeps_password(
 
     loaded = load_service_session(
         owner.id,
-        sealer=pass_session_runtime.pass_session_sealer,
         opener=pass_session_runtime.pass_session_opener,
     )
     assert loaded is not None
@@ -179,6 +179,40 @@ def test_service_session_is_encrypted_replaced_and_never_keeps_password(
         }.isdisjoint(public_view)
 
 
+def test_normal_runtime_refuses_legacy_ciphertext_without_mutating_it(
+    pass_session_runtime: SyncRuntimeContext,
+) -> None:
+    owner = account("legacy-runtime@imt-atlantique.fr")
+    session_id = new_id()
+    legacy_ciphertext = "legacy-ciphertext-fixture"
+    with SessionLocal() as db:
+        db.add(
+            PassServiceSession(
+                id=session_id,
+                account_id=owner.id,
+                encrypted_cookie_jar=legacy_ciphertext,
+                state="active",
+                established_at=utcnow(),
+                expires_at=utcnow() + timedelta(days=1),
+                last_used_at=utcnow(),
+            )
+        )
+        db.commit()
+
+    with pytest.raises(PassSessionLegacyCiphertextPresent):
+        load_service_session(
+            owner.id,
+            opener=pass_session_runtime.pass_session_opener,
+        )
+
+    with SessionLocal() as db:
+        stored = db.get(PassServiceSession, session_id)
+        assert stored is not None
+        assert stored.state == "active"
+        assert stored.encrypted_cookie_jar == legacy_ciphertext
+        assert stored.hpke_envelope is None
+
+
 def test_tampered_or_expired_session_is_destroyed(
     pass_session_runtime: SyncRuntimeContext,
 ) -> None:
@@ -206,7 +240,6 @@ def test_tampered_or_expired_session_is_destroyed(
     assert (
         load_service_session(
             tampered_owner.id,
-            sealer=pass_session_runtime.pass_session_sealer,
             opener=pass_session_runtime.pass_session_opener,
         )
         is None
@@ -237,7 +270,6 @@ def test_tampered_or_expired_session_is_destroyed(
     assert (
         load_service_session(
             expired_owner.id,
-            sealer=pass_session_runtime.pass_session_sealer,
             opener=pass_session_runtime.pass_session_opener,
         )
         is None
@@ -290,7 +322,6 @@ def test_refresh_roundtrip_is_verified_and_replaces_the_envelope_atomically(
         assert stored.reuse_count == 1
     loaded = load_service_session(
         owner.id,
-        sealer=pass_session_runtime.pass_session_sealer,
         opener=pass_session_runtime.pass_session_opener,
     )
     assert loaded is not None
@@ -364,7 +395,6 @@ def test_missing_private_key_preserves_envelope_and_pauses_sync(
     with pytest.raises(PassSessionDecryptionKeyUnavailable):
         load_service_session(
             owner.id,
-            sealer=pass_session_runtime.pass_session_sealer,
             opener=wrong_opener,
         )
 
@@ -490,7 +520,6 @@ def test_login_change_invalidates_the_context_bound_session(
     assert (
         load_service_session(
             owner.id,
-            sealer=pass_session_runtime.pass_session_sealer,
             opener=pass_session_runtime.pass_session_opener,
         )
         is None

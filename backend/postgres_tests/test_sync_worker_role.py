@@ -95,8 +95,10 @@ def test_sync_role_is_idempotent_non_privileged_and_can_process_a_fictitious_job
             ),
             {
                 "details": (
-                    '{"runtime_profile":"isolated-sync-v1",'
-                    '"hpke_credentials_ready":true,"hpke_purposes":2,'
+                    '{"runtime_profile":"isolated-sync-v2",'
+                    '"hpke_credentials_ready":true,'
+                    '"pass_session_storage":"hpke-v1",'
+                    '"legacy_decrypt_available":false,'
                     '"dedicated_identity":true}'
                 ),
                 "now": utcnow(),

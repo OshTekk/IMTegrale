@@ -21,14 +21,15 @@ from app.models import (
 )
 from app.observability import runtime_metrics
 from app.pass_session_contract import PASS_SERVICE_SESSION_ENVELOPE_BYTES
-from app.security import ensure_utc
+from app.services.sync_control import ensure_utc
 
 EXPECTED_DATABASE_REVISION = "0026"
 REQUIRED_RUNTIME_COMPONENTS = ("scheduler", "sync", "calendar", "outbox")
 ISOLATED_SYNC_PROFILE = {
-    "runtime_profile": "isolated-sync-v1",
+    "runtime_profile": "isolated-sync-v2",
     "hpke_credentials_ready": True,
-    "hpke_purposes": 2,
+    "pass_session_storage": "hpke-v1",
+    "legacy_decrypt_available": False,
     "dedicated_identity": True,
 }
 _SAFE_HEARTBEAT_DETAIL_KEYS = {

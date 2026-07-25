@@ -7,20 +7,10 @@ import pwd
 import ssl
 
 import uvicorn
-from sqlalchemy import select
 
-from app.admin_security import (
-    generate_admin_password,
-    hash_admin_password,
-    normalize_admin_username,
-    write_initial_credentials,
-)
 from app.config import RuntimeRole, get_settings
 from app.database import Base, SessionLocal, engine
-from app.models import AdminUser
 from app.observability import configure_json_logging
-from app.security import cipher_for
-from app.services.key_rotation import reencrypt_stored_secrets
 from app.services.operations import operational_alert_codes
 from app.services.sync import sync_account, sync_all_accounts, sync_due_accounts
 from app.services.worker_runtime import ISOLATED_SYNC_RUNTIME_DETAILS, run_worker
@@ -59,10 +49,14 @@ def _load_sync_runtime_context():  # noqa: ANN202
         self_test_sync_worker_credentials(credentials)
     except SyncWorkerCredentialError as exc:
         raise SystemExit(exc.code) from None
-    return build_sync_runtime_context(
-        credentials,
-        legacy_session_cipher=cipher_for(settings),
-    )
+    return build_sync_runtime_context(credentials)
+
+
+def _load_sync_migration_runtime_context():  # noqa: ANN202
+    from app.security import cipher_for
+
+    runtime = _load_sync_runtime_context()
+    return runtime, cipher_for(get_settings())
 
 
 def _run_isolated_sync_worker() -> None:
@@ -165,6 +159,16 @@ def main() -> None:
     elif args.command == "create-schema":
         Base.metadata.create_all(engine)
     elif args.command == "admin-bootstrap":
+        from sqlalchemy import select
+
+        from app.admin_security import (
+            generate_admin_password,
+            hash_admin_password,
+            normalize_admin_username,
+            write_initial_credentials,
+        )
+        from app.models import AdminUser
+
         try:
             username = normalize_admin_username(args.username)
         except ValueError as exc:
@@ -184,6 +188,8 @@ def main() -> None:
             db.commit()
         print(json.dumps({"ok": True, "username": username, "output": args.output}))
     elif args.command == "keys-reencrypt":
+        from app.services.key_rotation import reencrypt_stored_secrets
+
         with SessionLocal() as db:
             result = reencrypt_stored_secrets(
                 db,
@@ -203,13 +209,11 @@ def main() -> None:
             migrate_legacy_service_sessions,
         )
 
-        runtime = _load_sync_runtime_context()
-        if runtime.legacy_session_cipher is None:
-            raise SystemExit("PASS_SESSION_LEGACY_DECRYPTION_UNAVAILABLE")
+        runtime, legacy_cipher = _load_sync_migration_runtime_context()
         result = migrate_legacy_service_sessions(
             sealer=runtime.pass_session_sealer,
             opener=runtime.pass_session_opener,
-            cipher=runtime.legacy_session_cipher,
+            cipher=legacy_cipher,
             dry_run=args.dry_run,
             verify_only=args.verify_only,
             batch_size=args.batch_size,

@@ -1,3 +1,5 @@
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -15,6 +17,27 @@ class StubSettings:
 
     def validate_for_runtime(self, role: RuntimeRole) -> None:
         self.validated_roles.append(role)
+
+
+def test_importing_normal_cli_does_not_load_legacy_or_symmetric_crypto() -> None:
+    backend = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; import app.cli; "
+                "print('app.security' in sys.modules); "
+                "print('app.services.legacy_pass_session_migration' in sys.modules)"
+            ),
+        ],
+        cwd=backend,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.stdout.splitlines() == ["False", "False"]
 
 
 def test_serve_requires_mtls_and_bounds_graceful_shutdown(monkeypatch) -> None:
@@ -141,6 +164,8 @@ def test_sync_commands_report_results_and_fail_on_partial_error(monkeypatch, cap
 
 
 def test_schema_rotation_and_operations_commands_are_dispatchable(monkeypatch, capsys) -> None:  # noqa: ANN001
+    from app.services import key_rotation
+
     monkeypatch.setattr(cli, "get_settings", StubSettings)
     created: list[object] = []
     monkeypatch.setattr(cli.Base.metadata, "create_all", created.append)
@@ -149,7 +174,7 @@ def test_schema_rotation_and_operations_commands_are_dispatchable(monkeypatch, c
     assert created == [cli.engine]
 
     monkeypatch.setattr(
-        cli,
+        key_rotation,
         "reencrypt_stored_secrets",
         lambda _db, **options: {"complete": True, **options},
     )
@@ -183,11 +208,15 @@ def test_pass_session_migration_and_restore_revocation_commands_are_dispatchable
     runtime = SimpleNamespace(
         pass_session_sealer=object(),
         pass_session_opener=object(),
-        legacy_session_cipher=object(),
     )
+    legacy_cipher = object()
     captured: dict[str, object] = {}
     monkeypatch.setattr(cli, "get_settings", StubSettings)
-    monkeypatch.setattr(cli, "_load_sync_runtime_context", lambda: runtime)
+    monkeypatch.setattr(
+        cli,
+        "_load_sync_migration_runtime_context",
+        lambda: (runtime, legacy_cipher),
+    )
     monkeypatch.setattr(
         legacy_pass_session_migration,
         "migrate_legacy_service_sessions",
@@ -217,7 +246,7 @@ def test_pass_session_migration_and_restore_revocation_commands_are_dispatchable
     assert captured == {
         "sealer": runtime.pass_session_sealer,
         "opener": runtime.pass_session_opener,
-        "cipher": runtime.legacy_session_cipher,
+        "cipher": legacy_cipher,
         "dry_run": True,
         "verify_only": False,
         "batch_size": 7,

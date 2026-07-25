@@ -25,7 +25,6 @@ os.environ["BOTNOTE_PASS_DAILY_QUOTA"] = "48"
 from app.crypto import RecipientPrivateKey, RecipientPrivateKeyring  # noqa: E402
 from app.database import Base, engine  # noqa: E402
 from app.main import app  # noqa: E402
-from app.security import cipher_for  # noqa: E402
 from app.services.sync_worker_credentials import (  # noqa: E402
     PurposeCredentials,
     SyncRuntimeContext,
@@ -111,10 +110,7 @@ def pass_session_runtime() -> SyncRuntimeContext:
         credential=purpose,
         service_session=purpose,
     )
-    return build_sync_runtime_context(
-        credentials,
-        legacy_session_cipher=cipher_for(),
-    )
+    return build_sync_runtime_context(credentials)
 
 
 def csrf_headers(client: TestClient) -> dict[str, str]:

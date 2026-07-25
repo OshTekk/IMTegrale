@@ -29,9 +29,9 @@ from app.observability import (
     current_correlation_id,
     new_correlation_id,
 )
-from app.security import cipher_for, ensure_utc
 from app.services.dashboard import calculate_ues
 from app.services.events import record_event
+from app.services.sync_control import ensure_utc
 from app.services.telegram import TelegramError, build_new_notes_message, send_telegram
 
 if TYPE_CHECKING:
@@ -664,6 +664,8 @@ def _deliver_outbox(claim: OutboxClaim) -> None:
             }
             for note in notes
         ]
+        from app.security import cipher_for
+
         cipher = cipher_for()
         token = cipher.decrypt(account.encrypted_telegram_token, context=f"telegram-token:{account.id}")
         chat_id = cipher.decrypt(account.encrypted_telegram_chat_id, context=f"telegram-chat:{account.id}")

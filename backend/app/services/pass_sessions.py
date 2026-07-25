@@ -8,7 +8,7 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 import requests
 from sqlalchemy import delete, or_, select
@@ -57,10 +57,6 @@ class PassSessionDecryptionKeyUnavailable(PassSessionRequired):
 class PassSessionLegacyCiphertextPresent(PassSessionRequired):
     code = "PASS_SESSION_LEGACY_CIPHERTEXT_PRESENT"
     message = "Une reconnexion IMT est requise pour renouveler la session."
-
-
-class LegacySessionCipher(Protocol):
-    def decrypt(self, envelope: str, *, context: str) -> str: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -354,9 +350,7 @@ def _active_row(
 def load_service_session(
     account_id: str,
     *,
-    sealer: PassSessionSealer,
     opener: PassSessionOpener,
-    legacy_cipher: LegacySessionCipher | None = None,
 ) -> StoredPassSession | None:
     now = utcnow()
     with SessionLocal() as db:
@@ -394,43 +388,7 @@ def load_service_session(
                 db.commit()
                 return None
         elif row.encrypted_cookie_jar:
-            if legacy_cipher is None:
-                raise PassSessionLegacyCiphertextPresent
-            from app.services.legacy_pass_session_migration import (
-                decrypt_legacy_service_session,
-            )
-
-            try:
-                snapshot = decrypt_legacy_service_session(row, legacy_cipher)
-                _validate_service_snapshot(snapshot)
-                metadata = sealer.seal(
-                    snapshot,
-                    account_id=account.id,
-                    imt_login=account.imt_username,
-                    service_session_id=row.id,
-                )
-                if (
-                    opener.open(
-                        metadata,
-                        account_id=account.id,
-                        imt_login=account.imt_username,
-                        service_session_id=row.id,
-                    )
-                    != snapshot
-                ):
-                    raise PassSessionEnvelopeInvalid
-                _write_hpke_metadata(row, metadata, migrated_at=now)
-                row.updated_at = now
-                db.commit()
-            except PassSessionKeyUnavailable:
-                db.rollback()
-                raise PassSessionDecryptionKeyUnavailable from None
-            except PassSessionEncryptionUnavailable:
-                db.rollback()
-                raise PassSessionStorageUnavailable from None
-            except RuntimeError:
-                db.rollback()
-                return None
+            raise PassSessionLegacyCiphertextPresent
         else:
             _end_session(row, state="invalid", reason="missing_ciphertext", now=now)
             db.commit()

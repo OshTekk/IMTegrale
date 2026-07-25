@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import ipaddress
+import os
 import stat
 import sys
 from enum import StrEnum
@@ -196,12 +197,34 @@ class Settings(BaseSettings):
             raise RuntimeError("Unknown runtime role") from None
         if runtime_role is RuntimeRole.WEB:
             self.validate_learning_content_boundary()
-        if self.environment == "test":
-            return
+        if (
+            runtime_role is RuntimeRole.SYNC_MIGRATION
+            and self.sync_runtime_profile != "migration"
+        ):
+            raise RuntimeError(
+                "BOTNOTE_SYNC_RUNTIME_PROFILE=migration is required"
+            )
+        if (
+            runtime_role is RuntimeRole.SYNC
+            and self.sync_runtime_profile != "normal"
+        ):
+            raise RuntimeError("The normal sync worker requires its normal profile")
+        legacy_sync_environment_present = any(
+            name in os.environ
+            for name in (
+                "BOTNOTE_CREDENTIAL_KEY",
+                "BOTNOTE_CREDENTIAL_PREVIOUS_KEYS",
+            )
+        )
+        if runtime_role is RuntimeRole.SYNC and (
+            legacy_sync_environment_present
+            or self.credential_key
+            or self.credential_previous_keys
+        ):
+            raise RuntimeError("SYNC_LEGACY_CREDENTIAL_KEY_FORBIDDEN")
 
         needs_credential_key = runtime_role in {
             RuntimeRole.WEB,
-            RuntimeRole.SYNC,
             RuntimeRole.SYNC_MIGRATION,
             RuntimeRole.CALENDAR,
             RuntimeRole.OUTBOX,
@@ -218,18 +241,8 @@ class Settings(BaseSettings):
             raise RuntimeError("BOTNOTE_CREDENTIAL_KEY is required")
         if needs_token_pepper and not self.token_pepper:
             raise RuntimeError("BOTNOTE_TOKEN_PEPPER is required")
-        if (
-            runtime_role is RuntimeRole.SYNC_MIGRATION
-            and self.sync_runtime_profile != "migration"
-        ):
-            raise RuntimeError(
-                "BOTNOTE_SYNC_RUNTIME_PROFILE=migration is required"
-            )
-        if (
-            runtime_role is RuntimeRole.SYNC
-            and self.sync_runtime_profile != "normal"
-        ):
-            raise RuntimeError("The normal sync worker requires its normal profile")
+        if self.environment == "test":
+            return
 
         if self.environment == "production":
             if runtime_role is RuntimeRole.WEB:

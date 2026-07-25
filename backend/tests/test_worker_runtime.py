@@ -132,6 +132,7 @@ def test_sync_worker_requires_and_persists_the_isolated_profile(
     )
 
     assert heartbeats
+    assert all(item["details"] == worker_runtime.ISOLATED_SYNC_RUNTIME_DETAILS for item in heartbeats)
     assert all(
         all(item["details"][key] == value for key, value in expected.items())
         for item in heartbeats

@@ -181,7 +181,6 @@ def test_existing_imt_login_authenticates_without_fetching_notes(
         assert "encrypted_imt_password" not in Account.__table__.c
     stored = load_service_session(
         account_id,
-        sealer=pass_session_runtime.pass_session_sealer,
         opener=pass_session_runtime.pass_session_opener,
     )
     assert stored is not None

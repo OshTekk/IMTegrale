@@ -132,9 +132,10 @@ def test_production_readiness_requires_current_migration_and_fresh_workers() -> 
                 started_at=started,
                 details=(
                     {
-                        "runtime_profile": "isolated-sync-v1",
+                        "runtime_profile": "isolated-sync-v2",
                         "hpke_credentials_ready": True,
-                        "hpke_purposes": 2,
+                        "pass_session_storage": "hpke-v1",
+                        "legacy_decrypt_available": False,
                         "dedicated_identity": True,
                     }
                     if component == "sync"
