@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from alembic import command
 from alembic.config import Config
 from app.database import SessionLocal, engine
+from app.model_helpers import new_id
 from app.models import Account, Note, UeSetting
 from sqlalchemy import text
 
@@ -14,33 +16,46 @@ def test_float_data_is_rounded_deterministically_during_migration() -> None:
     engine.dispose()
     command.downgrade(config, "0022")
 
-    with SessionLocal() as session:
-        account = Account(imt_username="numeric-migration", display_name="Fictif")
-        session.add(account)
-        session.flush()
-        note = Note(
-            account_id=account.id,
-            source="pass",
-            source_key="numeric-migration-source",
-            ue_code="UE200",
-            raw_label="Évaluation fictive",
-            raw_score=Decimal("14.125"),
-            raw_coefficient=Decimal("1.2345"),
-        )
-        setting = UeSetting(
-            account_id=account.id,
-            code="UE200",
-            credits_ects=Decimal("6.005"),
-            earned_credits_ects=Decimal("5.995"),
-        )
-        session.add_all((note, setting))
-        session.commit()
-        account_id = account.id
-        note_id = note.id
-        setting_id = setting.id
-
-    engine.dispose()
-    command.upgrade(config, "head")
+    try:
+        with SessionLocal() as session:
+            account_id = new_id()
+            now = datetime.now(UTC)
+            session.execute(
+                text(
+                    "INSERT INTO accounts "
+                    "(id, imt_username, display_name, created_at, updated_at) "
+                    "VALUES (:id, :imt_username, :display_name, :created_at, :updated_at)"
+                ),
+                {
+                    "id": account_id,
+                    "imt_username": "numeric-migration",
+                    "display_name": "Fictif",
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+            note = Note(
+                account_id=account_id,
+                source="pass",
+                source_key="numeric-migration-source",
+                ue_code="UE200",
+                raw_label="Évaluation fictive",
+                raw_score=Decimal("14.125"),
+                raw_coefficient=Decimal("1.2345"),
+            )
+            setting = UeSetting(
+                account_id=account_id,
+                code="UE200",
+                credits_ects=Decimal("6.005"),
+                earned_credits_ects=Decimal("5.995"),
+            )
+            session.add_all((note, setting))
+            session.commit()
+            note_id = note.id
+            setting_id = setting.id
+    finally:
+        engine.dispose()
+        command.upgrade(config, "head")
 
     with SessionLocal() as session:
         stored_note = session.get(Note, note_id)
