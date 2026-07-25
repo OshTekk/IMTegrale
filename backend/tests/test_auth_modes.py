@@ -62,9 +62,36 @@ def test_first_imt_login_imports_then_security_setup_is_explicit(
     assert client.get("/api/v1/auth/session").json()["needs_security_setup"] is False
 
 
+def test_imt_login_fails_closed_when_the_public_session_sealer_is_unavailable(
+    client: TestClient,
+) -> None:
+    sealer = client.app.state.pass_session_sealer
+    del client.app.state.pass_session_sealer
+    try:
+        response = client.post(
+            "/api/v1/auth/login/imt",
+            json={
+                "username": "no-sealer@imt-atlantique.fr",
+                "password": "synthetic-password",
+            },
+        )
+    finally:
+        client.app.state.pass_session_sealer = sealer
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == {
+        "code": "PASS_SESSION_ENCRYPTION_UNAVAILABLE",
+        "message": "La session technique n'a pas pu être protégée.",
+    }
+    with SessionLocal() as db:
+        assert db.scalar(select(func.count(Account.id))) == 0
+        assert db.scalar(select(func.count(PassServiceSession.id))) == 0
+
+
 def test_existing_imt_login_authenticates_without_fetching_notes(
     client: TestClient,
     monkeypatch,
+    pass_session_runtime,
 ) -> None:
     with SessionLocal() as db:
         account = Account(
@@ -152,7 +179,11 @@ def test_existing_imt_login_authenticates_without_fetching_notes(
         assert account.academic_verified_at is not None
         assert account.student_status_verified_at is not None
         assert "encrypted_imt_password" not in Account.__table__.c
-    stored = load_service_session(account_id)
+    stored = load_service_session(
+        account_id,
+        sealer=pass_session_runtime.pass_session_sealer,
+        opener=pass_session_runtime.pass_session_opener,
+    )
     assert stored is not None
     restored = requests.Session()
     try:
@@ -314,11 +345,15 @@ def test_sync_setup_and_pass_reconnect_never_persist_password(
             select(PassServiceSession).where(
                 PassServiceSession.account_id == account.id,
                 PassServiceSession.state == "active",
-            )
-        ):
-            session.state = "expired"
-            session.encrypted_cookie_jar = None
-            session.end_reason = "test_expiry"
+                )
+            ):
+                session.state = "expired"
+                session.encrypted_cookie_jar = None
+                session.hpke_envelope = None
+                session.hpke_envelope_version = None
+                session.hpke_key_id = None
+                session.hpke_migrated_at = None
+                session.end_reason = "test_expiry"
         account.auto_sync_paused_reason = "reauth_required"
         account.auto_sync_paused_at = account.updated_at
         db.commit()

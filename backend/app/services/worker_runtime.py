@@ -6,7 +6,7 @@ import secrets
 import signal
 import threading
 from datetime import datetime, timedelta
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from app.config import get_settings
 from app.database import SessionLocal, utcnow
@@ -18,6 +18,9 @@ from app.services.jobs import (
     process_one,
 )
 from app.services.operations import record_runtime_heartbeat
+
+if TYPE_CHECKING:
+    from app.services.sync_worker_credentials import SyncRuntimeContext
 
 logger = logging.getLogger(__name__)
 WorkerKind = Literal["sync", "calendar", "outbox", "scheduler"]
@@ -80,9 +83,14 @@ def run_worker(
     kind: WorkerKind,
     *,
     runtime_details: dict[str, int | bool | str] | None = None,
+    sync_runtime: SyncRuntimeContext | None = None,
 ) -> None:
     if kind == "sync" and runtime_details != ISOLATED_SYNC_RUNTIME_DETAILS:
         raise RuntimeError("SYNC_WORKER_NOT_ISOLATED")
+    if kind == "sync" and sync_runtime is None:
+        raise RuntimeError("SYNC_WORKER_CRYPTO_UNAVAILABLE")
+    if kind != "sync" and sync_runtime is not None:
+        raise RuntimeError("SYNC_RUNTIME_CONTEXT_FORBIDDEN")
     base_details = dict(runtime_details or {})
     stop = threading.Event()
     instance_id = _runtime_instance_id(kind)
@@ -164,7 +172,11 @@ def run_worker(
 
         while not stop.is_set():
             try:
-                processed = process_one(kind)
+                processed = (
+                    process_one(kind, sync_runtime=sync_runtime)
+                    if kind == "sync"
+                    else process_one(kind)
+                )
             except Exception as exc:
                 heartbeat(
                     state="error",

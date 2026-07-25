@@ -6,7 +6,7 @@ import os
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
@@ -33,6 +33,9 @@ from app.security import cipher_for, ensure_utc
 from app.services.dashboard import calculate_ues
 from app.services.events import record_event
 from app.services.telegram import TelegramError, build_new_notes_message, send_telegram
+
+if TYPE_CHECKING:
+    from app.services.sync_worker_credentials import SyncRuntimeContext
 
 logger = logging.getLogger(__name__)
 
@@ -575,7 +578,7 @@ def _renew_sync_request(claim: JobClaim) -> SyncExecution | None:
         )
 
 
-def _process_sync_job(claim: JobClaim) -> None:
+def _process_sync_job(claim: JobClaim, sync_runtime: SyncRuntimeContext) -> None:
     target = _renew_sync_request(claim)
     if target is None:
         return
@@ -589,6 +592,7 @@ def _process_sync_job(claim: JobClaim) -> None:
             quota_bypass=target.quota_bypass,
             bypass_reason=target.bypass_reason,
             force_probe=target.force_probe,
+            sync_runtime=sync_runtime,
         )
     except AutomaticSyncNotAllowed:
         return
@@ -667,7 +671,11 @@ def _deliver_outbox(claim: OutboxClaim) -> None:
     send_telegram(token, chat_id, message)
 
 
-def process_one(kind: Literal["sync", "calendar", "outbox"]) -> bool:
+def process_one(
+    kind: Literal["sync", "calendar", "outbox"],
+    *,
+    sync_runtime: SyncRuntimeContext | None = None,
+) -> bool:
     if kind == "outbox":
         claim = claim_outbox()
         if claim is None:
@@ -709,7 +717,9 @@ def process_one(kind: Literal["sync", "calendar", "outbox"]) -> bool:
     with correlation_context(claim.correlation_id):
         try:
             if kind == "sync":
-                _process_sync_job(claim)
+                if sync_runtime is None:
+                    raise RuntimeError("SYNC_WORKER_CRYPTO_UNAVAILABLE")
+                _process_sync_job(claim, sync_runtime)
             else:
                 _process_calendar_job(claim)
         except Exception as exc:
@@ -763,4 +773,3 @@ def cleanup_durable_state(*, now: datetime | None = None) -> dict[str, int]:
         "delivered_messages": int(delivered.rowcount or 0),
         "dead_messages": int(dead_messages.rowcount or 0),
     }
-

@@ -22,8 +22,16 @@ os.environ["BOTNOTE_PASS_QUIET_PERIOD_SECONDS"] = "0"
 os.environ["BOTNOTE_PASS_HOURLY_QUOTA"] = "12"
 os.environ["BOTNOTE_PASS_DAILY_QUOTA"] = "48"
 
+from app.crypto import RecipientPrivateKey, RecipientPrivateKeyring  # noqa: E402
 from app.database import Base, engine  # noqa: E402
 from app.main import app  # noqa: E402
+from app.security import cipher_for  # noqa: E402
+from app.services.sync_worker_credentials import (  # noqa: E402
+    PurposeCredentials,
+    SyncRuntimeContext,
+    SyncWorkerCredentials,
+    build_sync_runtime_context,
+)
 
 
 def _loopback_or_local_socket(address: object) -> bool:
@@ -86,6 +94,27 @@ def fresh_database():
 def client() -> TestClient:
     with TestClient(app, base_url="https://testserver") as test_client:
         yield test_client
+
+
+@pytest.fixture
+def pass_session_runtime() -> SyncRuntimeContext:
+    private_key = RecipientPrivateKey.from_raw_bytes(b"\x42" * 32)
+    keyring = RecipientPrivateKeyring(
+        [(private_key.key_id, private_key)],
+        active_key_id=private_key.key_id,
+    )
+    purpose = PurposeCredentials(
+        public_key=private_key.public_key,
+        private_keyring=keyring,
+    )
+    credentials = SyncWorkerCredentials(
+        credential=purpose,
+        service_session=purpose,
+    )
+    return build_sync_runtime_context(
+        credentials,
+        legacy_session_cipher=cipher_for(),
+    )
 
 
 def csrf_headers(client: TestClient) -> dict[str, str]:

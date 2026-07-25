@@ -49,7 +49,17 @@ def test_web_can_share_only_the_account_lock_boundary() -> None:
     unit = WEB_UNIT.read_text()
     assert "SupplementaryGroups=botnote-sync-lock" in unit
     assert "ReadWritePaths=/run/botnote-sync-locks" in unit
-    assert "LoadCredential=" not in unit
+    assert unit.count("LoadCredential=") == 1
+    assert (
+        "LoadCredential=pass-service-session-public:"
+        "/etc/botnote/sync-hpke/pass-service-session-v1.public.raw"
+    ) in unit
+    for forbidden_name in (
+        "pass-service-session-private",
+        "imt-sync-credential-private",
+        "imt-sync-credential-public",
+    ):
+        assert forbidden_name not in unit
     assert "InaccessiblePaths=-/etc/botnote/sync-hpke" in unit
 
 
@@ -81,15 +91,22 @@ def test_sync_environment_example_contains_no_hpke_or_unrelated_secrets() -> Non
     assert "LEARNING_" not in example
 
 
-def test_g3_has_no_business_data_or_route_integration() -> None:
+def test_hpke_runtime_context_is_limited_to_the_explicit_sync_pipeline() -> None:
     application = ROOT / "backend" / "app"
     forbidden_import = "sync_worker_credentials"
     for path in (
         *sorted((application / "routers").glob("*.py")),
         application / "services" / "pass_sessions.py",
-        application / "services" / "pass_gateway.py",
     ):
         assert forbidden_import not in path.read_text()
+    for relative_path in (
+        "services/pass_gateway.py",
+        "services/sync.py",
+        "services/jobs.py",
+        "services/worker_runtime.py",
+    ):
+        source = (application / relative_path).read_text()
+        assert "SyncRuntimeContext" in source
     assert "app.crypto" not in (application / "services" / "pass_sessions.py").read_text()
     assert "ImtSyncCredential(" not in "\n".join(
         path.read_text()

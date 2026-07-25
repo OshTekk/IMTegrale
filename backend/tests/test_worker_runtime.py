@@ -110,17 +110,25 @@ def test_regular_worker_records_success_error_and_clean_shutdown(monkeypatch) ->
     assert error_heartbeats[1]["details"] == {"error_code": "RuntimeError"}
 
 
-def test_sync_worker_requires_and_persists_the_isolated_profile(monkeypatch) -> None:
+def test_sync_worker_requires_and_persists_the_isolated_profile(
+    monkeypatch,
+    pass_session_runtime,
+) -> None:
     with pytest.raises(RuntimeError, match="SYNC_WORKER_NOT_ISOLATED"):
         worker_runtime.run_worker("sync")
 
     event = OneCycleEvent()
     heartbeats = _isolate_runtime(monkeypatch, event)
-    monkeypatch.setattr(worker_runtime, "process_one", lambda _kind: False)
+    monkeypatch.setattr(
+        worker_runtime,
+        "process_one",
+        lambda _kind, *, sync_runtime: sync_runtime is not pass_session_runtime,
+    )
 
     worker_runtime.run_worker(
         "sync",
         runtime_details=worker_runtime.ISOLATED_SYNC_RUNTIME_DETAILS,
+        sync_runtime=pass_session_runtime,
     )
 
     assert heartbeats

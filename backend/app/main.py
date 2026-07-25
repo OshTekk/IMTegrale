@@ -44,9 +44,11 @@ from app.routers import (
 )
 from app.security import get_auth_context, require_action
 from app.services.operations import readiness_checks
+from app.services.pass_session_crypto import load_web_pass_session_sealer
 
 settings_config = get_settings()
 settings_config.validate_for_runtime(RuntimeRole.WEB)
+web_pass_session_sealer = load_web_pass_session_sealer()
 
 COMMON_API_ERROR_RESPONSES = {
     code: {"model": ApiErrorEnvelope, "description": description}
@@ -118,6 +120,7 @@ app = FastAPI(
     openapi_url="/api/openapi.json" if settings_config.environment != "production" else None,
     generate_unique_id_function=stable_operation_id,
 )
+app.state.pass_session_sealer = web_pass_session_sealer
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings_config.allowed_hosts)
 app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings_config.max_request_bytes)
 

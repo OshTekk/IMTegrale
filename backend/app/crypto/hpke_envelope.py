@@ -27,7 +27,11 @@ from app.crypto.hpke_context import (
     encode_hpke_info,
     validate_context_binding,
 )
-from app.crypto.secret_frames import IMT_PASSWORD_FRAME_SIZE
+from app.crypto.secret_frames import (
+    IMT_PASSWORD_FRAME_SIZE,
+    PASS_SERVICE_SESSION_FRAME_SIZE,
+)
+from app.pass_session_contract import PASS_SERVICE_SESSION_ENVELOPE_BYTES
 
 ENVELOPE_MAGIC = b"IMTHPKE\x00"
 ENVELOPE_VERSION = 1
@@ -41,15 +45,17 @@ KEY_ID_BYTES = 32
 KEY_ID_HEX_CHARACTERS = 64
 CHACHA20_POLY1305_TAG_BYTES = 16
 HPKE_FIXED_OVERHEAD = SUITE_KEM.enc_length() + CHACHA20_POLY1305_TAG_BYTES
-MAX_SERVICE_SESSION_PLAINTEXT_BYTES = 32 * 1_024
+MAX_SERVICE_SESSION_PLAINTEXT_BYTES = PASS_SERVICE_SESSION_FRAME_SIZE
 
 _HEADER = struct.Struct("!8sBBBBB32sI3s")
 HEADER_SIZE = _HEADER.size
 _RESERVED = b"\x00\x00\x00"
 _CREDENTIAL_HPKE_PAYLOAD_BYTES = IMT_PASSWORD_FRAME_SIZE + HPKE_FIXED_OVERHEAD
-_MAX_HPKE_PAYLOAD_BYTES = MAX_SERVICE_SESSION_PLAINTEXT_BYTES + HPKE_FIXED_OVERHEAD
-MAX_ENVELOPE_BYTES = HEADER_SIZE + _MAX_HPKE_PAYLOAD_BYTES
+_SESSION_HPKE_PAYLOAD_BYTES = PASS_SERVICE_SESSION_FRAME_SIZE + HPKE_FIXED_OVERHEAD
+MAX_ENVELOPE_BYTES = HEADER_SIZE + _SESSION_HPKE_PAYLOAD_BYTES
 IMT_PASSWORD_ENVELOPE_BYTES = HEADER_SIZE + _CREDENTIAL_HPKE_PAYLOAD_BYTES
+if PASS_SERVICE_SESSION_ENVELOPE_BYTES != MAX_ENVELOPE_BYTES:
+    raise RuntimeError("PASS service-session envelope contract is inconsistent")
 
 _KEY_ID_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _SUITE = Suite(SUITE_KEM, SUITE_KDF, SUITE_AEAD)
@@ -237,7 +243,7 @@ def _payload_length_is_valid(profile: PlaintextProfile, payload_length: int) -> 
     if profile is PlaintextProfile.IMT_PASSWORD_FRAME_V1:
         return payload_length == _CREDENTIAL_HPKE_PAYLOAD_BYTES
     if profile is PlaintextProfile.PASS_SERVICE_SESSION_V1:
-        return HPKE_FIXED_OVERHEAD < payload_length <= _MAX_HPKE_PAYLOAD_BYTES
+        return payload_length == _SESSION_HPKE_PAYLOAD_BYTES
     return False
 
 
@@ -300,7 +306,7 @@ def _plaintext_bytes(
     valid_size = (
         size == IMT_PASSWORD_FRAME_SIZE
         if profile is PlaintextProfile.IMT_PASSWORD_FRAME_V1
-        else 0 < size <= MAX_SERVICE_SESSION_PLAINTEXT_BYTES
+        else size == PASS_SERVICE_SESSION_FRAME_SIZE
     )
     if not valid_size:
         raise EnvelopeFormatError

@@ -184,7 +184,9 @@ def test_exhausted_job_dead_letters_domain_request_and_releases_account() -> Non
         assert account is not None and account.sync_active_request_id is None
 
 
-def test_job_recovers_when_domain_commit_happened_before_queue_ack() -> None:
+def test_job_recovers_when_domain_commit_happened_before_queue_ack(
+    pass_session_runtime,
+) -> None:
     account_id = create_account()
     reservation = reserve_sync_request(
         account_id,
@@ -210,7 +212,7 @@ def test_job_recovers_when_domain_commit_happened_before_queue_ack() -> None:
     assert claim_job("sync", now=recovered_at) is None
     recovered = claim_job("sync", now=recovered_at + timedelta(seconds=6))
     assert recovered is not None
-    assert jobs._process_sync_job(recovered) is None
+    assert jobs._process_sync_job(recovered, pass_session_runtime) is None
     assert finish_job(recovered, success=True) is True
     with SessionLocal() as db:
         request = db.get(SyncRequest, reservation.request_id)

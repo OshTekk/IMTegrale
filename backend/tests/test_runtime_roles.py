@@ -92,3 +92,17 @@ def test_sync_role_requires_exact_local_peer_database_url(tmp_path: Path) -> Non
         settings = _production_settings(tmp_path, database_url=database_url)
         with pytest.raises(RuntimeError, match="local peer"):
             settings.validate_for_runtime(RuntimeRole.SYNC)
+
+
+def test_g4a_legacy_key_is_available_only_under_explicit_runtime_profiles(
+    tmp_path: Path,
+) -> None:
+    normal = _production_settings(tmp_path, sync_runtime_profile="normal")
+    migration = _production_settings(tmp_path, sync_runtime_profile="migration")
+
+    normal.validate_for_runtime(RuntimeRole.SYNC)
+    with pytest.raises(RuntimeError, match="migration"):
+        normal.validate_for_runtime(RuntimeRole.SYNC_MIGRATION)
+    with pytest.raises(RuntimeError, match="normal profile"):
+        migration.validate_for_runtime(RuntimeRole.SYNC)
+    migration.validate_for_runtime(RuntimeRole.SYNC_MIGRATION)

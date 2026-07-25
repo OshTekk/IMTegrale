@@ -17,6 +17,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class RuntimeRole(StrEnum):
     WEB = "web"
     SYNC = "sync"
+    SYNC_MIGRATION = "sync-migration"
     CALENDAR = "calendar"
     OUTBOX = "outbox"
     SCHEDULER = "scheduler"
@@ -55,6 +56,7 @@ class Settings(BaseSettings):
     scheduler_poll_seconds: int = Field(default=60, ge=15, le=900)
     worker_heartbeat_ttl_seconds: int = Field(default=180, ge=60, le=900)
     autonomous_sync_enabled: bool = False
+    sync_runtime_profile: Literal["normal", "migration"] = "normal"
     sync_lock_dir: Path = Path("/run/botnote-sync-locks")
     trusted_proxy_ips: list[str] = Field(default_factory=lambda: ["127.0.0.1"])
     admin_allowed_identities: list[str] = Field(default_factory=list)
@@ -200,6 +202,7 @@ class Settings(BaseSettings):
         needs_credential_key = runtime_role in {
             RuntimeRole.WEB,
             RuntimeRole.SYNC,
+            RuntimeRole.SYNC_MIGRATION,
             RuntimeRole.CALENDAR,
             RuntimeRole.OUTBOX,
             RuntimeRole.CLI,
@@ -207,6 +210,7 @@ class Settings(BaseSettings):
         needs_token_pepper = runtime_role in {
             RuntimeRole.WEB,
             RuntimeRole.SYNC,
+            RuntimeRole.SYNC_MIGRATION,
             RuntimeRole.SCHEDULER,
             RuntimeRole.CLI,
         }
@@ -214,6 +218,18 @@ class Settings(BaseSettings):
             raise RuntimeError("BOTNOTE_CREDENTIAL_KEY is required")
         if needs_token_pepper and not self.token_pepper:
             raise RuntimeError("BOTNOTE_TOKEN_PEPPER is required")
+        if (
+            runtime_role is RuntimeRole.SYNC_MIGRATION
+            and self.sync_runtime_profile != "migration"
+        ):
+            raise RuntimeError(
+                "BOTNOTE_SYNC_RUNTIME_PROFILE=migration is required"
+            )
+        if (
+            runtime_role is RuntimeRole.SYNC
+            and self.sync_runtime_profile != "normal"
+        ):
+            raise RuntimeError("The normal sync worker requires its normal profile")
 
         if self.environment == "production":
             if runtime_role is RuntimeRole.WEB:

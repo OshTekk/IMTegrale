@@ -427,6 +427,7 @@ def test_legacy_settings_routes_mirror_the_new_mode(
 
 def test_injected_autonomous_mode_never_queues_or_reaches_pass(
     monkeypatch,
+    pass_session_runtime,
 ) -> None:
     now = datetime(2026, 7, 23, 10, 0, tzinfo=UTC)
     with SessionLocal() as db:
@@ -475,7 +476,11 @@ def test_injected_autonomous_mode_never_queues_or_reaches_pass(
         lambda **_kwargs: pytest.fail("PASS must not be reached"),
     )
     with pytest.raises(sync_service.AutomaticSyncNotAllowed):
-        sync_service.execute_sync_request(account_id, reservation.request_id)
+        sync_service.execute_sync_request(
+            account_id,
+            reservation.request_id,
+            sync_runtime=pass_session_runtime,
+        )
 
 
 def test_credential_relation_is_one_to_one_and_cascades() -> None:

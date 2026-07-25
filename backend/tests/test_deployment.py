@@ -151,6 +151,10 @@ def test_encrypted_backup_restore_is_isolated_and_never_writes_plaintext() -> No
     assert '| pg_restore --clean --if-exists --exit-on-error' in restore
     assert '.dump"' not in restore
     assert 'current --check-heads' in restore
+    assert "pass-sessions-revoke-all" in restore
+    assert "--reason database_restored" in restore
+    assert "--confirm REVOKE-ALL-PASS-SESSIONS" in restore
+    assert "REMAINING_SERVICE_SESSIONS" in restore
     assert 'User=botnote-restore' in service
     assert 'ReadWritePaths=/var/lib/botnote-restore' in service
     assert 'OnCalendar=monthly' in timer

@@ -14,18 +14,29 @@ Seule la branche `main` à jour est supportée. Les forks, déploiements modifi�
 
 ## Limites de confiance
 
-IMTégrale reçoit le mot de passe IMT pendant une authentification CAS, en mémoire et via HTTPS, mais ne l'écrit ni dans PostgreSQL ni dans les journaux. Après l'authentification, seuls les cookies `Secure` appartenant exactement aux domaines PASS et Hub autorisés peuvent être retenus. Ils sont filtrés, chiffrés en AES-256-GCM, révocables et supprimés au plus tard après 30 jours.
+IMTégrale reçoit le mot de passe IMT pendant une authentification CAS, en
+mémoire et via HTTPS, mais ne l'écrit ni dans PostgreSQL ni dans les journaux.
+Après l'authentification, seuls les cookies `Secure` appartenant exactement aux
+domaines PASS et Hub autorisés peuvent être retenus. Ils sont filtrés, placés
+dans un frame de taille fixe puis scellés par HPKE, révocables et supprimés au plus tard après 30 jours. Le web peut sceller avec une clé publique, mais seule
+l'identité système du worker sync reçoit la clé privée permettant de les ouvrir.
 
-Cette session technique reste une capacité d'accès : le serveur doit pouvoir la déchiffrer pour synchroniser. Une compromission simultanée de l'application et de sa clé maître pourrait donc permettre son utilisation jusqu'à son expiration ou sa révocation. PASS ne fournit pas ici de délégation OAuth, et le code source public ne prouve pas à lui seul quelle version est exécutée par une instance donnée.
+Cette session technique reste une capacité d'accès : le worker sync doit pouvoir
+la déchiffrer pour synchroniser. Une compromission de ce worker ou un accès root
+au conteneur pourrait donc permettre son utilisation jusqu'à son expiration ou
+sa révocation. La clé symétrique générale du web ne permet plus d'ouvrir ces
+enveloppes. PASS ne fournit pas ici de délégation OAuth, et le code source
+public ne prouve pas à lui seul quelle version est exécutée par une instance
+donnée.
 
 Une instance auto-hébergée peut réserver à son unique compte propriétaire un mot de passe local hors base, hors dépôt et lisible uniquement par l'utilisateur système du service. Cette exception est désactivée par défaut, ne doit jamais être proposée à un compte public et augmente explicitement le risque accepté par cet exploitant.
 
 La fondation de synchronisation autonome ajoute un mode de domaine, une table
 vide, une [primitive HPKE isolée](docs/security/hpke-envelope-format.md) et une
-[frontière worker dédiée](docs/security/sync-worker-isolation.md). Deux paires
-opérationnelles root-only alimentent uniquement les self-tests du worker sync ;
-aucune donnée utilisateur ne les utilise. `autonomous` reste indisponible, le feature flag
-associé est fermé et aucune route ne stocke de mot de passe. L'architecture
+[frontière worker dédiée](docs/security/sync-worker-isolation.md). La paire
+`pass-service-session` protège désormais les sessions PASS/HUB ; la paire
+credential reste sans donnée réelle. `autonomous` reste indisponible, le feature
+flag associé est fermé et aucune route ne stocke de mot de passe. L'architecture
 cible et son [modèle de menace](docs/security/autonomous-sync-threat-model.md)
 sont documentés séparément ; ils ne décrivent pas une protection déjà active.
 

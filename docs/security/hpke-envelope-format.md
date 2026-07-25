@@ -2,11 +2,13 @@
 
 ## Portée
 
-Le gate G2 fournit une primitive interne générique. G3 l'utilise uniquement
-pour vérifier au démarrage les deux paires opérationnelles du worker sync avec
-des round-trips synthétiques. Elle reste sans lien avec les comptes,
-PostgreSQL, les API ou les sessions réelles. Le module cryptographique lui-même
-ne lit toujours aucune configuration et ne charge aucun fichier de clé.
+Le gate G2 fournit la primitive interne générique et G3 isole les clés privées
+dans le worker sync. G4A branche le profil `pass-service-session-v1` sur les
+sessions techniques PASS/HUB : le web scelle avec la seule clé publique et le
+worker sync ouvre avec son keyring privé. Le profil credential IMT reste
+strictement fictif et `imt_sync_credentials` reste vide. Le module
+cryptographique lui-même ne lit toujours aucune configuration et ne charge
+aucun fichier de clé.
 
 Le module utilise directement
 [l'API one-shot HPKE de `cryptography 49`](https://cryptography.io/en/49.0.0/hazmat/primitives/hpke/)
@@ -62,8 +64,9 @@ envelope = seal_envelope(
 )
 ```
 
-Aucun routeur ou modèle persistant n'expose cet appel. Le smoke-test du wheel et
-le worker isolé réalisent le même type de round-trip uniquement en mémoire.
+Le profil credential de cet exemple n'est exposé par aucun routeur et n'est pas
+persisté. Les sessions techniques utilisent un adaptateur distinct qui ne
+transmet jamais d'enveloppe à une API.
 
 ## Enveloppe binaire v1
 
@@ -95,8 +98,17 @@ Pour le profil credential :
 - payload HPKE : 3 120 octets ;
 - enveloppe complète : **3 172 octets**, donc sous la borne SQL de 4 096.
 
-Le profil session accepte de 1 à 32 768 octets de plaintext. La borne globale
-d'une enveloppe v1 est 32 868 octets.
+Pour le profil session :
+
+- snapshot UTF-8 historique : de 1 à 65 536 octets ;
+- frame plaintext fixe : 65 552 octets ;
+- encapsulation X25519 et tag : 48 octets ;
+- payload HPKE fixe : 65 600 octets ;
+- enveloppe complète fixe : **65 652 octets**.
+
+La borne globale d'une enveloppe v1 est donc 65 652 octets, soit moins de
+70 Kio. Le parser exige cette taille exacte pour le profil session avant toute
+copie proportionnelle.
 
 ## `key_id`
 
@@ -160,6 +172,25 @@ fait toujours 3 072 octets : deux secrets de longueurs différentes produisent
 des enveloppes de même taille. Python ne garantit cependant pas une zéroisation
 parfaite de toutes les copies mémoire.
 
+## Frame session PASS/HUB v1
+
+Le codec préserve exactement le snapshot UTF-8 sérialisé. Il ne compresse pas,
+ne retire aucun caractère et ne reparse pas le JSON.
+
+| Offset | Taille | Champ |
+| ---: | ---: | --- |
+| 0 | 8 | Magic `IMTSESS\0` |
+| 8 | 1 | Version `1` |
+| 9 | 1 | Réservé, obligatoirement nul |
+| 10 | 4 | Longueur UTF-8 réelle sur `u32` |
+| 14 | 1 à 65 536 | Snapshot UTF-8 exact |
+| suivant | jusqu'à 65 552 | Padding aléatoire non interprété |
+
+Le frame fait toujours 65 552 octets et conserve au moins deux octets de
+padding au maximum historique. Un snapshot vide, trop grand, tronqué, allongé,
+non UTF-8 ou portant une version inconnue est refusé. Deux snapshots de tailles
+différentes produisent des enveloppes de même taille.
+
 ## Erreurs
 
 Le module expose des erreurs stables pour :
@@ -206,4 +237,5 @@ par leur `key_id`, sans devenir des clés actives d'écriture.
 Les exemples et tests emploient uniquement des identités, clés et secrets
 fictifs générés en mémoire. Les clés opérationnelles G3 sont provisionnées
 root-only hors Git et injectées par systemd ; aucune valeur n'est incluse dans
-le wheel, le SBOM ou l'artefact de release.
+le wheel, le SBOM ou l'artefact de release. La migration `0026` persiste
+uniquement l'enveloppe, sa version, son `key_id` complet et la date de migration.

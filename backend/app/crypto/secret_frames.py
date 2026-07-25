@@ -4,15 +4,23 @@ import os
 import struct
 
 from app.crypto.errors import SecretFrameError
+from app.pass_session_contract import (
+    PASS_SERVICE_SESSION_FRAME_SIZE,
+    PASS_SERVICE_SESSION_MAX_BYTES,
+)
 
 IMT_PASSWORD_FRAME_MAGIC = b"IMTPWD\x00\x00"
 IMT_PASSWORD_FRAME_VERSION = 1
 IMT_PASSWORD_MAX_CHARACTERS = 512
 IMT_PASSWORD_MAX_BYTES = IMT_PASSWORD_MAX_CHARACTERS * 4
 IMT_PASSWORD_FRAME_SIZE = 3_072
+PASS_SERVICE_SESSION_FRAME_MAGIC = b"IMTSESS\x00"
+PASS_SERVICE_SESSION_FRAME_VERSION = 1
 
 _FRAME_HEADER = struct.Struct("!8sBBH")
 _FRAME_RESERVED = 0
+_SESSION_FRAME_HEADER = struct.Struct("!8sBBI")
+_SESSION_FRAME_RESERVED = 0
 
 
 def encode_imt_password_frame(secret: str) -> bytes:
@@ -63,3 +71,49 @@ def decode_imt_password_frame(frame: bytes) -> str:
     if not 1 <= len(secret) <= IMT_PASSWORD_MAX_CHARACTERS:
         raise SecretFrameError
     return secret
+
+
+def encode_pass_service_session_frame(snapshot: str) -> bytes:
+    if not isinstance(snapshot, str):
+        raise SecretFrameError
+    try:
+        encoded_snapshot = snapshot.encode("utf-8")
+    except UnicodeEncodeError:
+        raise SecretFrameError from None
+    if not 1 <= len(encoded_snapshot) <= PASS_SERVICE_SESSION_MAX_BYTES:
+        raise SecretFrameError
+    padding_length = (
+        PASS_SERVICE_SESSION_FRAME_SIZE
+        - _SESSION_FRAME_HEADER.size
+        - len(encoded_snapshot)
+    )
+    return (
+        _SESSION_FRAME_HEADER.pack(
+            PASS_SERVICE_SESSION_FRAME_MAGIC,
+            PASS_SERVICE_SESSION_FRAME_VERSION,
+            _SESSION_FRAME_RESERVED,
+            len(encoded_snapshot),
+        )
+        + encoded_snapshot
+        + os.urandom(padding_length)
+    )
+
+
+def decode_pass_service_session_frame(frame: bytes) -> str:
+    if not isinstance(frame, bytes) or len(frame) != PASS_SERVICE_SESSION_FRAME_SIZE:
+        raise SecretFrameError
+    magic, version, reserved, snapshot_length = _SESSION_FRAME_HEADER.unpack_from(frame)
+    if (
+        magic != PASS_SERVICE_SESSION_FRAME_MAGIC
+        or version != PASS_SERVICE_SESSION_FRAME_VERSION
+        or reserved != _SESSION_FRAME_RESERVED
+        or not 1 <= snapshot_length <= PASS_SERVICE_SESSION_MAX_BYTES
+    ):
+        raise SecretFrameError
+    snapshot_bytes = frame[
+        _SESSION_FRAME_HEADER.size : _SESSION_FRAME_HEADER.size + snapshot_length
+    ]
+    try:
+        return snapshot_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        raise SecretFrameError from None

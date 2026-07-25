@@ -9,6 +9,7 @@ import re
 import stat
 from contextlib import contextmanager
 from datetime import timedelta
+from typing import TYPE_CHECKING
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
@@ -60,6 +61,9 @@ from app.services.sync_schedule import (
     update_adaptive_cadence,
 )
 from app.sync_modes import stored_sync_mode_is_supported
+
+if TYPE_CHECKING:
+    from app.services.sync_worker_credentials import SyncRuntimeContext
 
 logger = logging.getLogger(__name__)
 
@@ -567,6 +571,7 @@ def execute_sync_request(
     quota_bypass: bool = False,
     bypass_reason: str | None = None,
     force_probe: bool = False,
+    sync_runtime: SyncRuntimeContext,
 ) -> dict:
     try:
         with account_sync_lock(account_id), SessionLocal() as db:
@@ -629,6 +634,7 @@ def execute_sync_request(
                 quota_bypass=quota_bypass,
                 bypass_reason=bypass_reason,
                 force_probe=force_probe,
+                sync_runtime=sync_runtime,
             )
             result = apply_pass_entries(db, account, gateway.entries, actor=request.actor)
             apply_pass_profile(account, gateway.profile)
@@ -704,6 +710,7 @@ def sync_account(
     quota_bypass: bool = False,
     bypass_reason: str | None = None,
     force_probe: bool = False,
+    sync_runtime: SyncRuntimeContext,
 ) -> dict:
     now = utcnow()
     if actor == "automatic":
@@ -734,16 +741,23 @@ def sync_account(
         quota_bypass=quota_bypass,
         bypass_reason=bypass_reason,
         force_probe=force_probe,
+        sync_runtime=sync_runtime,
     )
 
 
-def sync_all_accounts() -> list[dict]:
+def sync_all_accounts(*, sync_runtime: SyncRuntimeContext) -> list[dict]:
     with SessionLocal() as db:
         account_ids = list(db.scalars(select(Account.id).order_by(Account.created_at)))
     results: list[dict] = []
     for account_id in account_ids:
         try:
-            results.append({"account_id": account_id, "ok": True, **sync_account(account_id)})
+            results.append(
+                {
+                    "account_id": account_id,
+                    "ok": True,
+                    **sync_account(account_id, sync_runtime=sync_runtime),
+                }
+            )
         except Exception as exc:  # CLI must continue syncing other tenants
             error_code, public_message = _sync_error(exc)
             logger.error(

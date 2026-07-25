@@ -63,11 +63,21 @@ La révision `0017` supprime physiquement les anciennes colonnes de mot de passe
    `BOTNOTE_AUTONOMOUS_SYNC_ENABLED` est absent ou vaut `false`. Une valeur
    `true` doit faire échouer la validation de configuration. Les clés G3 sont
    provisionnées hors Git et injectées uniquement par `LoadCredential`; elles
-   ne doivent jamais être ajoutées à un environnement.
+   ne doivent jamais être ajoutées à un environnement. Depuis G4A, le web reçoit
+   exactement `pass-service-session-public`, tandis que le worker reçoit les
+   quatre credentials. La procédure de migration et de contraction est décrite
+   dans
+   [`pass-session-hpke-migration.md`](../docs/security/pass-session-hpke-migration.md).
 5. Définir `BOTNOTE_ADMIN_ALLOWED_IDENTITIES` dans `/etc/botnote/botnote.env`. Une liste vide garde toutes les routes admin invisibles.
 6. Valider les unités avec `systemd-analyze verify`, nftables avec `nft -c -f`, puis exécuter `alembic upgrade head` sous l'utilisateur `botnote`.
 7. Suivre la procédure [d'isolation du worker sync](../docs/security/sync-worker-isolation.md) pour créer l'identité Unix, les groupes, les locks, le rôle PostgreSQL, les règles `pg_hba` bornées à la base `botnote`, les deux paires HPKE et le fichier sync privé. Vérifier `pg_hba_file_rules` avant le reload PostgreSQL. Installer `botnote-web.service`, `botnote-scheduler.service`, `botnote-sync-worker.service`, `botnote-job-worker@.service`, `botnote-operations-check.service`, `botnote-operations-check.timer` et le CLI, puis exécuter `systemctl daemon-reload`. Arrêter, désactiver et empêcher le redémarrage de `botnote-job-worker@sync.service`; le template et le CLI refusent désormais cette instance. Calendar et outbox conservent le template générique.
-8. Basculer `current` et `runtime`, puis redémarrer ensemble l'API, l'ordonnanceur, le worker sync dédié, calendar et outbox. Attendre leur premier heartbeat avant de tester `/health/ready`; ce healthcheck contrôle PostgreSQL, la révision Alembic, la fraîcheur interne et le profil `isolated-sync-v1`, sans appeler PASS. Charger nftables et redémarrer Nginx. Vérifier que les comptes automatiques sans session sont en pause `reauth_required` et que l'état PASS est disponible sans déclencher de synchronisation réelle. Le nouveau consentement leaderboard inclut la date de vérification et la fraîcheur publique ; les anciens participants doivent donc consentir de nouveau.
+8. Pour G4A, arrêter le scheduler et le worker sync, appliquer `0026`, basculer
+   le web avec sa clé publique, puis exécuter la migration HPKE d'abord en
+   dry-run et ensuite réellement. Ne redémarrer le worker qu'après
+   `remaining_legacy=0`, `failed=0` et un contrôle opérationnel sans mixed ni
+   métadonnée invalide. Redémarrer ensuite calendar, outbox et le scheduler dans
+   une fenêtre sans travail sync dû. Attendre leur premier heartbeat avant de
+   tester `/health/ready`; aucun de ces contrôles ne doit appeler PASS.
    Après la migration `0025`, contrôler uniquement des agrégats : le nombre de
    lignes `manual` doit correspondre aux comptes dont
    `auto_sync_enabled=false`, `session_only` à ceux dont le booléen vaut `true`,
@@ -177,7 +187,20 @@ Noter la cible exacte de `current` avant la bascule. En cas d'échec, créer un 
 
 Les releases Parcours, rapports de validation et métadonnées de droits sont des sauvegardes privées, distinctes des archives du dépôt public. Les conserver chiffrés avec une clé de restauration hors de l'hôte, en enregistrant l'ID actif et la cible précédente. La progression reste dans PostgreSQL et suit la procédure de dump chiffré existante. Tester périodiquement la restauration du bundle et de la base dans un environnement isolé ; ne jamais restaurer une archive Parcours dans un checkout public, un dossier statique Nginx ou un artefact Vite.
 
-Le test mensuel de base doit être installé sur un hôte de validation distinct, jamais sur le LXC ou le PVE de production. Créer l'utilisateur non privilégié `botnote-restore`, une base jetable portant exactement le nom `botnote_restore_test`, puis installer la clé privée age en `/etc/botnote-restore/age-identity` avec le mode `0400`. Le fichier `/etc/botnote-restore/restore-test.env`, également en `0400`, contient uniquement l'URL de cette base isolée et le chemin de la copie chiffrée. Installer `botnote-restore-test.service` et son timer sur cet hôte. Le script déchiffre directement vers `pg_restore`, refuse tout autre nom de base, vérifie que la révision restaurée est à la tête Alembic et ne crée jamais de dump en clair. Transférer préalablement la sauvegarde `.dump.age` vers cet hôte par le canal administratif ; la clé privée de restauration ne doit pas revenir en production.
+Le test mensuel de base doit être installé sur un hôte de validation distinct,
+jamais sur le LXC ou le PVE de production. Créer l'utilisateur non privilégié
+`botnote-restore`, une base jetable portant exactement le nom
+`botnote_restore_test`, puis installer la clé privée age en
+`/etc/botnote-restore/age-identity` avec le mode `0400`. Le fichier
+`/etc/botnote-restore/restore-test.env`, également en `0400`, contient
+uniquement l'URL de cette base isolée et le chemin de la copie chiffrée.
+Installer `botnote-restore-test.service` et son timer sur cet hôte. Le script
+déchiffre directement vers `pg_restore`, refuse tout autre nom de base, vérifie
+la tête Alembic, révoque toutes les sessions PASS/HUB restaurées puis exige un
+inventaire ciphertext à zéro. Il ne crée jamais de dump en clair et ne contacte
+aucun service externe. Transférer préalablement la sauvegarde `.dump.age` par le
+canal administratif ; la clé privée de restauration ne doit pas revenir en
+production.
 
 ## Vérifications
 
@@ -189,6 +212,10 @@ Le test mensuel de base doit être installé sur un hôte de validation distinct
 - Après `0025`, `accounts.auto_sync_mode` doit contenir uniquement `manual` ou
   `session_only` selon le booléen historique, et
   `imt_sync_credentials` doit être vide. Le flag autonome doit rester fermé.
+- Après `0026`, toute session active doit avoir exactement une enveloppe HPKE de
+  65 652 octets. Legacy, mixed et métadonnées invalides doivent être à zéro
+  avant G4B. Ni l'API ni l'administration ne doivent exposer le format, le
+  `key_id` ou l'enveloppe.
 - `systemctl --failed` doit être vide sur PVE et LXC.
 - Depuis le LAN, `/api/v1/admin/auth/session` doit répondre `404`. Depuis l'identité Tailscale autorisée, il doit répondre sans révéler de compte tant que l'authentification admin n'est pas faite.
 - Vérifier qu'une session admin obtenue par mot de passe seul ne peut pas ouvrir le portail après l'enrôlement initial, qu'une passkey est exigée et qu'une mutation sensible refuse un step-up vieux de plus de dix minutes avec `ADMIN_STEP_UP_REQUIRED`. Une lecture non destructive doit rester disponible après expiration du step-up.
@@ -207,4 +234,16 @@ Le test mensuel de base doit être installé sur un hôte de validation distinct
 
 ## Rollback
 
-Rebasculer ensemble `current` et `runtime` vers la version précédente, puis restaurer les unités compatibles avant de redémarrer l'API et Nginx. Pour une release antérieure à `0020`, arrêter d'abord `botnote-scheduler.service` et toutes les instances `botnote-job-worker@.service`; ne downgrader `0020` qu'après avoir vérifié qu'aucun job accepté n'est encore `queued` ou `running`. La révision `0003` ajoute les données de classement et d'administration ; la révision `0004` ajoute le consentement automatique ; la révision `0005` ajoute les réservations ; la révision `0006` ajoute les passkeys, promotions et protections PASS globales ; la révision `0007` ajoute l'identité officielle PASS et l'état des tests Telegram ; la révision `0008` introduit le verrouillage des ECTS ; la révision `0009` rend ce verrouillage automatique et supprime l'ancienne validation manuelle ; la révision `0010` ajoute l'import des métadonnées COMPETENCES ; la révision `0011` ajoute les détails académiques officiels et rétablit l'immutabilité des notes PASS ; la révision `0012` efface les anciens délais de réinscription au leaderboard ; la révision `0013` ajoute les scénarios GPA privés et leurs instantanés de référence ; la révision `0014` normalise les semestres ingénieur en `S5` à `S10` tout en conservant la valeur COMPETENCES brute ; la révision `0015` ajoute les scénarios privés de notes, leurs UE et leurs évaluations ; la révision `0016` ajoute les abonnements iCalendar chiffrés, les événements mis en cache et le suivi minimal des tentatives ; la révision `0017` supprime irréversiblement les mots de passe IMT stockés et ajoute les sessions PASS/HUB chiffrées limitées à 30 jours ; la révision `0020` ajoute les jobs durables, leurs options d'exécution et l'outbox Telegram ; la révision `0021` ajoute les passkeys administrateur et invalide volontairement les anciennes sessions admin sans preuve de mot de passe datée ; la révision `0022` ajoute les corrélations et heartbeats d'exploitation ; la révision `0023` convertit les quantités académiques en décimaux avec perte volontaire des décimales au-delà de la précision documentée ; la révision `0024` retire six index doublonnant exactement des contraintes uniques et les recrée au downgrade ; la révision `0025` ajoute le miroir de mode et une table de credentials vide sans changer l'autorité du booléen historique. Un rollback applicatif de `0025` vers l'ancienne release conserve la base migrée : ne pas exécuter de downgrade, car l'ancienne application peut continuer à écrire `auto_sync_enabled` et la nouvelle application redérive le mode effectif lors de son retour. Ne pas downgrader `0017` en production : restaurer intégralement la sauvegarde chiffrée pré-release. Un rollback applicatif antérieur à `0021` doit révoquer toutes les sessions administrateur ; un rollback vers `2.x` doit arrêter les workers durables avant de réactiver un éventuel timer historique.
+Rebasculer ensemble `current` et `runtime` vers la version précédente, puis
+restaurer les unités compatibles avant de redémarrer l'API et Nginx. Pour G4B,
+le rollback immédiat est exclusivement G4A : restaurer son fichier sync
+temporaire, conserver Alembic `0026` et ne jamais recréer de legacy. Un
+downgrade de `0026` est refusé dès qu'une enveloppe existe.
+
+Les migrations historiques restent additives sauf mention contraire. `0017`
+supprime irréversiblement les mots de passe stockés ; `0020` introduit les jobs
+durables ; `0021` le MFA admin ; `0022` l'observabilité ; `0023` les décimaux ;
+`0024` retire les index redondants ; `0025` ajoute le miroir de mode et la table
+credential vide ; `0026` ajoute le stockage HPKE des sessions. Un rollback
+applicatif conserve la base migrée. Ne pas downgrader `0017` en production et
+révoquer toutes les sessions avant tout retour antérieur à G4.

@@ -33,6 +33,7 @@ from app.models_operations import (
 from app.models_operations import (
     RuntimeHeartbeat as RuntimeHeartbeat,
 )
+from app.pass_session_contract import PASS_SERVICE_SESSION_ENVELOPE_BYTES
 from app.sync_modes import SYNC_MODE_VALUES
 
 
@@ -758,9 +759,44 @@ class PassServiceSession(Base):
         ),
         Index("ix_pass_service_sessions_established_at", "established_at"),
         Index("ix_pass_service_sessions_ended_at", "ended_at"),
+        Index("ix_pass_service_sessions_hpke_key_id", "hpke_key_id"),
         CheckConstraint(
             "state IN ('active', 'expired', 'revoked', 'invalid')",
             name="ck_pass_service_sessions_state",
+        ),
+        CheckConstraint(
+            "encrypted_cookie_jar IS NULL OR hpke_envelope IS NULL",
+            name="ck_pass_service_sessions_single_ciphertext",
+        ),
+        CheckConstraint(
+            "(hpke_envelope IS NULL AND hpke_envelope_version IS NULL "
+            "AND hpke_key_id IS NULL AND hpke_migrated_at IS NULL) OR "
+            "(hpke_envelope IS NOT NULL AND hpke_envelope_version IS NOT NULL "
+            "AND hpke_key_id IS NOT NULL)",
+            name="ck_pass_service_sessions_hpke_metadata",
+        ),
+        CheckConstraint(
+            "hpke_envelope_version IS NULL OR hpke_envelope_version > 0",
+            name="ck_pass_service_sessions_hpke_version",
+        ),
+        CheckConstraint(
+            "hpke_key_id IS NULL OR length(hpke_key_id) = 64",
+            name="ck_pass_service_sessions_hpke_key_id",
+        ),
+        CheckConstraint(
+            f"hpke_envelope IS NULL OR length(hpke_envelope) = "
+            f"{PASS_SERVICE_SESSION_ENVELOPE_BYTES}",
+            name="ck_pass_service_sessions_hpke_size",
+        ),
+        CheckConstraint(
+            "state != 'active' OR ("
+            "(encrypted_cookie_jar IS NOT NULL AND hpke_envelope IS NULL) OR "
+            "(encrypted_cookie_jar IS NULL AND hpke_envelope IS NOT NULL))",
+            name="ck_pass_service_sessions_active_ciphertext",
+        ),
+        CheckConstraint(
+            "state = 'active' OR (encrypted_cookie_jar IS NULL AND hpke_envelope IS NULL)",
+            name="ck_pass_service_sessions_inactive_no_ciphertext",
         ),
     )
 
@@ -769,6 +805,10 @@ class PassServiceSession(Base):
         ForeignKey("accounts.id", ondelete="CASCADE"), index=True
     )
     encrypted_cookie_jar: Mapped[str | None] = mapped_column(Text)
+    hpke_envelope: Mapped[bytes | None] = mapped_column(LargeBinary)
+    hpke_envelope_version: Mapped[int | None] = mapped_column(Integer)
+    hpke_key_id: Mapped[str | None] = mapped_column(String(64))
+    hpke_migrated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     state: Mapped[str] = mapped_column(String(16), default="active")
     established_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

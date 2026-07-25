@@ -1,15 +1,16 @@
 # Isolation du worker de synchronisation
 
-## Portée G3
+## Portée G3 et G4A
 
-G3 crée une frontière d'exécution dédiée pour le worker sync. Elle ne branche
-aucune donnée utilisateur sur HPKE :
+G3 crée la frontière d'exécution dédiée. G4A y branche uniquement les sessions
+techniques PASS/HUB :
 
-- les cookies PASS/HUB restent sous le chiffrement symétrique historique ;
+- toute nouvelle session PASS/HUB est scellée en HPKE ;
+- les anciennes sessions sont migrées hors réseau ;
 - aucun mot de passe multi-compte n'est conservé ;
 - `imt_sync_credentials` reste vide ;
 - `autonomous` reste indisponible ;
-- les clés G3 servent uniquement aux deux self-tests synthétiques de démarrage.
+- la paire credential reste limitée au self-test synthétique.
 
 ## Identités et accès
 
@@ -24,9 +25,10 @@ L'utilisateur n'appartient pas au groupe privé général `botnote`. Il ne peut
 donc pas lire directement `/etc/botnote/botnote.env`, les clés TLS, Parcours,
 les secrets d'administration ou les sauvegardes. Le fichier privé
 `/etc/botnote/botnote-sync.env` est `root:root 0600` et est lu par systemd avant
-la baisse de privilèges. Il contient temporairement les secrets symétriques
-nécessaires aux cookies existants et le pepper requis par le flux sync, mais
-aucune clé HPKE, donnée Telegram ou configuration Parcours.
+la baisse de privilèges. Pendant G4A, il contient temporairement la clé
+symétrique nécessaire à la lecture legacy et le pepper requis par le flux sync,
+mais aucune clé HPKE, donnée Telegram ou configuration Parcours. G4B retire la
+clé symétrique du profil normal.
 
 Le rôle PostgreSQL `botnote-sync` utilise le socket Unix local et
 l'authentification `peer`. Son nom correspond exactement à l'identité Unix :
@@ -96,10 +98,10 @@ incorrectes et paires incohérentes. `verify` n'affiche que le nombre de purpose
 et le fait que les paires sont distinctes, jamais une clé ou un ciphertext.
 
 Ces fichiers ne font partie ni du dépôt, ni du wheel, ni de l'artefact CI, ni du
-SBOM, ni des sauvegardes PostgreSQL. Comme aucune donnée ne les utilise encore,
-leur perte pendant G3 impose seulement un reprovisionnement. Avant G4/G5,
-l'exploitant devra choisir une sauvegarde hors machine ou accepter la révocation
-et le réenrôlement en cas de perte.
+SBOM, ni des sauvegardes PostgreSQL. Les sessions PASS/HUB utilisent désormais
+la paire session. Sa perte exige soit une restauration hors machine, soit la
+révocation confirmée de toutes les sessions et une reconnexion ; aucune note
+n'est perdue.
 
 ## Credentials systemd
 
@@ -109,6 +111,11 @@ L'unité dédiée utilise `LoadCredential=` avec exactement quatre noms logiques
 - `imt-sync-credential-public` ;
 - `pass-service-session-private` ;
 - `pass-service-session-public`.
+
+L'unité web reçoit séparément et exclusivement
+`pass-service-session-public`. Elle ne reçoit ni clé privée ni paire credential.
+Le loader web refuse tout autre nom et réalise un scellement synthétique avant
+l'écoute.
 
 Le code lit uniquement le dossier absolu indiqué par
 `CREDENTIALS_DIRECTORY`. Il n'accepte aucun chemin de clé, fallback cwd, home,
@@ -158,7 +165,7 @@ Les self-tests restent en mémoire et n'ouvrent ni base, ni job, ni réseau. Une
 clé absente, invalide, incohérente ou un self-test échoué termine le processus
 avec un code stable et sans secret.
 
-Le heartbeat sync contient uniquement :
+Le heartbeat G4A conserve temporairement :
 
 ```text
 runtime_profile=isolated-sync-v1
@@ -193,7 +200,7 @@ systemctl show botnote-sync-worker.service \
 Les résultats doivent être lus sans afficher les environnements ou le contenu
 de `CREDENTIALS_DIRECTORY`.
 
-## Cutover sans appel PASS
+## Migration G4A sans appel PASS
 
 1. Vérifier l'artefact CI retéléchargé et son manifeste.
 2. Tester la sauvegarde PostgreSQL dans une base isolée.
@@ -204,34 +211,35 @@ de `CREDENTIALS_DIRECTORY`.
    systemd.
 6. Arrêter le scheduler et attendre tous les leases.
 7. Arrêter et désactiver `botnote-job-worker@sync.service`.
-8. Basculer atomiquement release et runtime.
-9. Démarrer `botnote-sync-worker.service` et vérifier UID, self-tests et
+8. Appliquer `0026`, basculer G4A et démarrer le web avec la seule clé publique.
+9. Exécuter `pass-sessions-migrate-hpke --dry-run`, puis la migration réelle ;
+   legacy, mixed et échecs doivent être à zéro.
+10. Démarrer `botnote-sync-worker.service` et vérifier UID, self-tests et
    heartbeat, sans ajouter de job.
-10. Démarrer calendar et outbox, puis le scheduler uniquement dans une fenêtre
+11. Démarrer calendar et outbox, puis le scheduler uniquement dans une fenêtre
     sans synchronisation immédiatement échue.
-11. Vérifier live, ready, operations-check, zéro appel PASS/HUB/COMPETENCES,
+12. Vérifier live, ready, operations-check, zéro appel PASS/HUB/COMPETENCES,
     zéro notification, zéro credential et zéro compte autonome.
 
-## Rollback G2
+## Rollback G4A pendant la contraction G4B
 
 1. Arrêter le scheduler et attendre les leases.
-2. Arrêter l'unité sync dédiée.
-3. Rebasculer ensemble `current` et `runtime` vers G2.
-4. Réactiver `botnote-job-worker@sync.service`.
-5. Redémarrer calendar, outbox et scheduler.
-6. Vérifier les heartbeats G2 et Alembic `0025`.
+2. Arrêter l'unité sync G4B.
+3. Restaurer le fichier privé G4A contenant temporairement la clé legacy.
+4. Rebasculer ensemble `current` et `runtime` vers G4A.
+5. Démarrer le worker G4A puis le scheduler.
+6. Vérifier les enveloppes et Alembic `0026`.
 
-Ne pas downgrader la base, supprimer les clés, l'identité Unix ou le rôle
-PostgreSQL. Le fichier propriétaire historique reste lisible par G2 pendant
-cette fenêtre.
+Ne pas downgrader la base et ne jamais réécrire une enveloppe HPKE en legacy.
 
 ## Risques résiduels
 
-- Le web peut encore déchiffrer les cookies PASS/HUB jusqu'à G4.
-- Le worker sync charge encore temporairement la clé symétrique générale.
+- Le worker sync G4A charge encore temporairement la clé symétrique générale ;
+  G4B doit la retirer.
+- Le web peut sceller une session mais ne peut pas l'ouvrir.
 - L'exception propriétaire historique reste compatible avec l'ancien runtime.
 - Root dans le LXC compromet toutes les clés.
 - Une RCE dans le worker sync compromet les futures clés privées.
-- Aucune donnée utilisateur n'est encore protégée par HPKE.
+- Les sessions PASS/HUB sont protégées par HPKE ; aucun mot de passe ne l'est.
 - Rotation et sauvegarde hors machine des clés ne sont pas encore livrées.
 - `autonomous` reste indisponible.

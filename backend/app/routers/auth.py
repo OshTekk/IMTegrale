@@ -55,7 +55,9 @@ from app.services.pass_gateway import (
     attach_operation_account,
     perform_login_operation,
 )
+from app.services.pass_session_crypto import PassSessionSealer
 from app.services.pass_sessions import (
+    PassSessionStorageUnavailable,
     service_session_view,
     store_service_session_if_reusable,
 )
@@ -73,6 +75,19 @@ from app.services.sync_control import set_login_sync_cooldown
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 _LOGIN_LIMITS_LOCK = threading.Lock()
 _GENERIC_IMT_LOGIN_ERROR = "Connexion IMT impossible avec ces informations."
+
+
+def _pass_session_sealer(request: Request) -> PassSessionSealer:
+    sealer = getattr(request.app.state, "pass_session_sealer", None)
+    if not isinstance(sealer, PassSessionSealer):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "PASS_SESSION_ENCRYPTION_UNAVAILABLE",
+                "message": "La session technique n'a pas pu être protégée.",
+            },
+        )
+    return sealer
 
 
 def _session_payload(
@@ -137,6 +152,7 @@ async def login_imt(
     request: Request,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
+    pass_session_sealer: PassSessionSealer = Depends(_pass_session_sealer),
 ) -> Response:
     limiter_key, _ = _check_login_limits(request, "imt", payload.username, settings)
     account = db.scalar(select(Account).where(Account.imt_username == payload.username))
@@ -208,13 +224,21 @@ async def login_imt(
         )
         apply_competency_ues(db, account, gateway.competency_ues, actor="owner")
     apply_pass_profile(account, gateway.profile)
-    stored_session = store_service_session_if_reusable(
-        db,
-        account,
-        gateway.session_snapshot,
-        hub_attempted=gateway.hub_attempted,
-        hub_succeeded=gateway.hub_succeeded,
-    )
+    try:
+        stored_session = store_service_session_if_reusable(
+            db,
+            account,
+            gateway.session_snapshot,
+            sealer=pass_session_sealer,
+            hub_attempted=gateway.hub_attempted,
+            hub_succeeded=gateway.hub_succeeded,
+        )
+    except PassSessionStorageUnavailable as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
     if stored_session is None and account.auto_sync_enabled:
         account.auto_sync_paused_reason = "reauth_required"
         account.auto_sync_paused_at = now
@@ -255,6 +279,7 @@ async def reconnect_pass(
     auth: AuthContext = Depends(require_primary_owner_action),
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
+    pass_session_sealer: PassSessionSealer = Depends(_pass_session_sealer),
 ) -> dict:
     limiter_key, _ = _check_login_limits(
         request,
@@ -296,13 +321,21 @@ async def reconnect_pass(
 
     apply_pass_profile(auth.account, gateway.profile)
     auth.account.student_status_verified_at = utcnow()
-    stored_session = store_service_session_if_reusable(
-        db,
-        auth.account,
-        gateway.session_snapshot,
-        hub_attempted=gateway.hub_attempted,
-        hub_succeeded=gateway.hub_succeeded,
-    )
+    try:
+        stored_session = store_service_session_if_reusable(
+            db,
+            auth.account,
+            gateway.session_snapshot,
+            sealer=pass_session_sealer,
+            hub_attempted=gateway.hub_attempted,
+            hub_succeeded=gateway.hub_succeeded,
+        )
+    except PassSessionStorageUnavailable as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
     if stored_session is None and auth.account.auto_sync_enabled:
         auth.account.auto_sync_paused_reason = "reauth_required"
         auth.account.auto_sync_paused_at = utcnow()

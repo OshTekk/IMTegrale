@@ -10,17 +10,20 @@ from sqlalchemy.orm import Session
 from app.config import Settings
 from app.database import utcnow
 from app.models import (
+    Account,
     CalendarFetchAttempt,
     DurableJob,
     NotificationOutbox,
     PassOperation,
+    PassServiceSession,
     PassSystemState,
     RuntimeHeartbeat,
 )
 from app.observability import runtime_metrics
+from app.pass_session_contract import PASS_SERVICE_SESSION_ENVELOPE_BYTES
 from app.security import ensure_utc
 
-EXPECTED_DATABASE_REVISION = "0025"
+EXPECTED_DATABASE_REVISION = "0026"
 REQUIRED_RUNTIME_COMPONENTS = ("scheduler", "sync", "calendar", "outbox")
 ISOLATED_SYNC_PROFILE = {
     "runtime_profile": "isolated-sync-v1",
@@ -253,6 +256,42 @@ def operational_alert_codes(db: Session, settings: Settings) -> list[str]:
         "hpke_credentials_ready", False
     ):
         alerts.add("SYNC_HPKE_KEYS_NOT_READY")
+    if (
+        sync_heartbeat is not None
+        and sync_heartbeat.details.get("error_code")
+        == "PASS_SESSION_HPKE_KEY_UNAVAILABLE"
+    ):
+        alerts.add("PASS_SESSION_HPKE_KEY_UNAVAILABLE")
+    if db.scalar(
+        select(func.count(Account.id)).where(
+            Account.auto_sync_paused_reason == "key_unavailable"
+        )
+    ):
+        alerts.add("PASS_SESSION_HPKE_KEY_UNAVAILABLE")
+    for row in db.scalars(select(PassServiceSession)):
+        has_legacy = bool(row.encrypted_cookie_jar)
+        has_hpke = bool(row.hpke_envelope)
+        if has_legacy:
+            alerts.add("PASS_SESSION_LEGACY_CIPHERTEXT_PRESENT")
+        if has_legacy and has_hpke:
+            alerts.add("PASS_SESSION_MIXED_CIPHERTEXT")
+        metadata_valid = (
+            has_hpke
+            and isinstance(row.hpke_envelope_version, int)
+            and row.hpke_envelope_version > 0
+            and isinstance(row.hpke_key_id, str)
+            and len(row.hpke_key_id) == 64
+            and len(row.hpke_envelope or b"")
+            == PASS_SERVICE_SESSION_ENVELOPE_BYTES
+        )
+        if (
+            has_hpke != bool(row.hpke_envelope_version and row.hpke_key_id)
+            or (has_hpke and not metadata_valid)
+            or (row.hpke_migrated_at is not None and not has_hpke)
+            or (row.state == "active" and has_legacy == has_hpke)
+            or (row.state != "active" and (has_legacy or has_hpke))
+        ):
+            alerts.add("PASS_SESSION_HPKE_METADATA_INVALID")
     for queue in metrics["queues"]:
         name = str(queue["name"]).upper()
         if queue["dead_letter"]:

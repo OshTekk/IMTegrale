@@ -19,6 +19,7 @@ from app.config import RuntimeRole, get_settings
 from app.database import Base, SessionLocal, engine
 from app.models import AdminUser
 from app.observability import configure_json_logging
+from app.security import cipher_for
 from app.services.key_rotation import reencrypt_stored_secrets
 from app.services.operations import operational_alert_codes
 from app.services.sync import sync_account, sync_all_accounts, sync_due_accounts
@@ -28,16 +29,19 @@ from app.services.worker_runtime import ISOLATED_SYNC_RUNTIME_DETAILS, run_worke
 def _runtime_role(command: str, worker_kind: str | None = None) -> RuntimeRole:
     if command == "serve":
         return RuntimeRole.WEB
-    if command == "sync-worker":
+    if command in {"sync", "sync-all", "sync-worker"}:
         return RuntimeRole.SYNC
+    if command == "pass-sessions-migrate-hpke":
+        return RuntimeRole.SYNC_MIGRATION
     if command == "worker":
         return RuntimeRole(worker_kind or "")
     return RuntimeRole.CLI
 
 
-def _run_isolated_sync_worker() -> None:
+def _load_sync_runtime_context():  # noqa: ANN202
     from app.services.sync_worker_credentials import (
         SyncWorkerCredentialError,
+        build_sync_runtime_context,
         load_sync_worker_credentials,
         self_test_sync_worker_credentials,
     )
@@ -55,7 +59,18 @@ def _run_isolated_sync_worker() -> None:
         self_test_sync_worker_credentials(credentials)
     except SyncWorkerCredentialError as exc:
         raise SystemExit(exc.code) from None
-    run_worker("sync", runtime_details=ISOLATED_SYNC_RUNTIME_DETAILS)
+    return build_sync_runtime_context(
+        credentials,
+        legacy_session_cipher=cipher_for(settings),
+    )
+
+
+def _run_isolated_sync_worker() -> None:
+    run_worker(
+        "sync",
+        runtime_details=ISOLATED_SYNC_RUNTIME_DETAILS,
+        sync_runtime=_load_sync_runtime_context(),
+    )
 
 
 def main() -> None:
@@ -83,6 +98,22 @@ def main() -> None:
     key_rotation.add_argument("--dry-run", action="store_true")
     key_rotation.add_argument("--limit", type=int)
     subparsers.add_parser("operations-check")
+    session_migration = subparsers.add_parser("pass-sessions-migrate-hpke")
+    session_migration.add_argument("--dry-run", action="store_true")
+    session_migration.add_argument("--verify-only", action="store_true")
+    session_migration.add_argument("--batch-size", type=int, default=50)
+    session_migration.add_argument("--limit", type=int)
+    revoke_sessions = subparsers.add_parser("pass-sessions-revoke-all")
+    revoke_sessions.add_argument(
+        "--reason",
+        choices=("database_restored", "key_lost"),
+        required=True,
+    )
+    revoke_sessions.add_argument("--dry-run", action="store_true")
+    revoke_sessions.add_argument(
+        "--confirm",
+        choices=("REVOKE-ALL-PASS-SESSIONS",),
+    )
 
     args = parser.parse_args()
     configure_json_logging()
@@ -108,9 +139,17 @@ def main() -> None:
             timeout_graceful_shutdown=10,
         )
     elif args.command == "sync":
-        print(json.dumps(sync_account(args.account), ensure_ascii=False))
+        print(
+            json.dumps(
+                sync_account(
+                    args.account,
+                    sync_runtime=_load_sync_runtime_context(),
+                ),
+                ensure_ascii=False,
+            )
+        )
     elif args.command == "sync-all":
-        results = sync_all_accounts()
+        results = sync_all_accounts(sync_runtime=_load_sync_runtime_context())
         print(json.dumps(results, ensure_ascii=False))
         if any(not item["ok"] for item in results):
             raise SystemExit(1)
@@ -159,6 +198,40 @@ def main() -> None:
         print(json.dumps({"ok": not alerts, "alerts": alerts}, sort_keys=True))
         if alerts:
             raise SystemExit(1)
+    elif args.command == "pass-sessions-migrate-hpke":
+        from app.services.legacy_pass_session_migration import (
+            migrate_legacy_service_sessions,
+        )
+
+        runtime = _load_sync_runtime_context()
+        if runtime.legacy_session_cipher is None:
+            raise SystemExit("PASS_SESSION_LEGACY_DECRYPTION_UNAVAILABLE")
+        result = migrate_legacy_service_sessions(
+            sealer=runtime.pass_session_sealer,
+            opener=runtime.pass_session_opener,
+            cipher=runtime.legacy_session_cipher,
+            dry_run=args.dry_run,
+            verify_only=args.verify_only,
+            batch_size=args.batch_size,
+            limit=args.limit,
+        )
+        print(json.dumps(result, sort_keys=True))
+        if result["failed"]:
+            raise SystemExit(1)
+    elif args.command == "pass-sessions-revoke-all":
+        from app.services.legacy_pass_session_migration import (
+            revoke_all_service_sessions,
+        )
+
+        try:
+            result = revoke_all_service_sessions(
+                reason=args.reason,
+                dry_run=args.dry_run,
+                confirmed=args.confirm == "REVOKE-ALL-PASS-SESSIONS",
+            )
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        print(json.dumps(result, sort_keys=True))
 
 
 if __name__ == "__main__":

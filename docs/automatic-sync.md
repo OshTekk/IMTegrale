@@ -18,11 +18,10 @@ effectif est donc dérivé du booléen jusqu'à la fermeture documentée de la
 fenêtre de rollback.
 
 La migration crée également `imt_sync_credentials`, mais cette table reste vide
-et aucune route ne peut y écrire. G2 fournit désormais une
-[primitive HPKE générique](security/hpke-envelope-format.md), testée uniquement
-avec des clés et secrets fictifs en mémoire. G3 isole désormais le worker sync
-et lui injecte deux paires opérationnelles uniquement pour ses self-tests. Elle
-n'est branchée ni à cette table, ni aux API, ni aux données PASS/HUB. Aucun mot
+et aucune route ne peut y écrire. G2 fournit la
+[primitive HPKE générique](security/hpke-envelope-format.md), G3 isole le worker
+sync et G4A migre les seules sessions PASS/HUB vers ce worker. Cette protection
+n'est branchée ni à la table credential, ni à une API de mot de passe. Aucun mot
 de passe ou fallback autonome n'est implémenté. Le détail des gates se trouve dans
 [`security/autonomous-sync-architecture.md`](security/autonomous-sync-architecture.md).
 
@@ -40,7 +39,18 @@ Les connexions explicitement déclenchées par une connexion IMT, le bouton de s
 
 ## Session technique bêta
 
-Le mot de passe IMT n'est jamais conservé. Après une authentification réussie, seuls les cookies appartenant exactement à PASS et au Hub COMPETENCES sont retenus. PASS pouvant encore émettre un cookie historique sans attribut `Secure`, IMTégrale ne le réutilise que vers les origines HTTPS autorisées et le normalise systématiquement avec `Secure` avant sa persistance. Leur instantané est chiffré en AES-256-GCM avec un contexte lié à la session, ne contient aucun cookie CAS ou tiers et expire localement au plus tard après 30 jours. Si PASS ne fournit aucune session réutilisable, la connexion reste valide mais l'actualisation automatique demeure en attente d'une reconnexion au lieu de provoquer une erreur serveur.
+Le mot de passe IMT n'est jamais conservé. Après une authentification réussie,
+seuls les cookies appartenant exactement à PASS et au Hub COMPETENCES sont
+retenus. PASS pouvant encore émettre un cookie historique sans attribut
+`Secure`, IMTégrale ne le réutilise que vers les origines HTTPS autorisées et le
+normalise systématiquement avec `Secure` avant sa persistance. Leur instantané
+est placé dans un frame fixe de 65 552 octets puis scellé par HPKE avec un
+contexte lié au compte, au login et à la session. Le web ne possède que la clé
+publique ; seul le worker sync isolé possède la clé privée. L'instantané ne
+contient aucun cookie CAS ou tiers et expire localement au plus tard après
+30 jours. Si PASS ne fournit aucune session réutilisable, la connexion reste
+valide mais l'actualisation automatique demeure en attente d'une reconnexion au
+lieu de provoquer une erreur serveur.
 
 Cette durée est une borne d'observation, pas une promesse de PASS. Le service distant peut fermer la session plus tôt. Dans ce cas, IMTégrale détruit immédiatement l'instantané chiffré, marque l'automatisation `reauth_required` et n'effectue aucun nouvel appel planifié avant une reconnexion explicite. La reconnexion renouvelle la session mais ne synchronise pas les notes.
 
@@ -67,7 +77,19 @@ Toute réservation automatique actualise aussi le délai de fraîcheur manuel de
 
 ## Exploitation
 
-Après la migration `0017`, tous les anciens mots de passe chiffrés sont supprimés de façon irréversible. Les consentements automatiques restent enregistrés, mais les comptes concernés sont mis en pause jusqu'à leur prochaine authentification IMT. Depuis G3, vérifier que `botnote-scheduler.service`, `botnote-sync-worker.service` et les instances `botnote-job-worker@calendar.service` et `botnote-job-worker@outbox.service` sont actives, et que `botnote-worker.timer` demeure désactivé. La commande de diagnostic `botnote sync-due` ne contacte plus PASS : elle réserve le prochain compte échu dans la file durable.
+Après la migration `0017`, tous les anciens mots de passe chiffrés sont
+supprimés de façon irréversible. La migration `0026` ajoute le stockage HPKE des
+sessions sans déchiffrer de ligne. G4A utilise
+`botnote pass-sessions-migrate-hpke` hors réseau pour convertir les anciens
+ciphertexts. Pendant cette étape intermédiaire, le worker sync G4A reçoit aussi
+temporairement la clé historique afin de migrer une ligne avant tout usage ; le
+profil explicite `migration` est réservé à la commande hors réseau. G4B retire
+la clé du worker normal. Les consentements automatiques restent
+enregistrés, mais les comptes sans session exploitable sont mis en pause jusqu'à
+leur prochaine authentification IMT. Vérifier que `botnote-scheduler.service`,
+`botnote-sync-worker.service` et les instances calendar/outbox sont actives, et
+que `botnote-worker.timer` demeure désactivé. La commande `botnote sync-due` ne
+contacte pas PASS : elle réserve le prochain compte échu dans la file durable.
 
 Les jobs réussis sont conservés 7 jours, les notifications livrées 30 jours et les états `dead_letter` 90 jours. La maintenance horaire applique ces rétentions ainsi que celles des métriques PASS et calendrier. Une notification Telegram est livrée au moins une fois : un crash après acceptation par Telegram mais avant l'acquittement PostgreSQL peut produire un doublon, car Telegram ne fournit pas de clé d'idempotence exploitable.
 

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Account, CalendarSubscription, PassServiceSession
+from app.models import Account, CalendarSubscription
 from app.security import CredentialCipher, cipher_for, secure_compare, token_digest
 
 
@@ -36,12 +36,6 @@ SECRET_FIELDS = (
         CalendarSubscription,
         "encrypted_url",
         lambda row: f"calendar-feed:{row.account_id}",
-    ),
-    SecretField(
-        "pass_cookie_jar",
-        PassServiceSession,
-        "encrypted_cookie_jar",
-        lambda row: f"pass-service-session:{row.id}",
     ),
 )
 

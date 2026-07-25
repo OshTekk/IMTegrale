@@ -2,12 +2,11 @@
 
 ## Portée
 
-Ce document distingue la fondation livrée par G1, la primitive HPKE isolée
-livrée par G2, la frontière worker livrée par G3 et l'architecture autonome
-future. Aucun mot de passe IMT n'est
-conservé et la table de credentials reste vide. Les seules capacités distantes
-actives restent les cookies PASS/HUB chiffrés décrits dans la politique
-actuelle.
+Ce document distingue la fondation G1, la primitive HPKE G2, la frontière
+worker G3, la migration de sessions G4 et l'architecture autonome future. Aucun
+mot de passe IMT n'est conservé et la table de credentials reste vide. Les
+seules capacités distantes actives restent les cookies PASS/HUB protégés par
+HPKE et décrits dans la politique actuelle.
 
 Les actifs futurs à protéger seront :
 
@@ -22,10 +21,10 @@ Les actifs futurs à protéger seront :
 | Composant | G3 | Cible autonome |
 | --- | --- | --- |
 | Navigateur | Transmet le mot de passe uniquement à l'authentification | Saisie distincte et consentie lors de l'enrôlement |
-| API web | Ne reçoit aucune clé HPKE et ne persiste aucun mot de passe | Chiffre avec une clé publique, sans capacité de lecture |
-| PostgreSQL | Sessions chiffrées et table credential vide | Enveloppes uniquement, jamais de clé privée |
+| API web | Reçoit uniquement la clé publique des sessions et ne persiste aucun mot de passe | Chiffre avec une clé publique, sans capacité de lecture |
+| PostgreSQL | Enveloppes de sessions et table credential vide | Enveloppes uniquement, jamais de clé privée |
 | Scheduler | Planifie `session_only` depuis le booléen historique | Ne reçoit aucune clé privée |
-| Worker sync | Identité dédiée, clés privées limitées aux self-tests | Seul processus autorisé à ouvrir une enveloppe métier |
+| Worker sync | Identité dédiée, ouvre les sessions PASS/HUB | Seul processus autorisé à ouvrir une enveloppe métier |
 | Workers calendar/outbox | Aucun accès au mot de passe | Aucun accès à la clé privée |
 | systemd | Credentials privés limités à l'unité sync | Même frontière avec rotation |
 
@@ -33,21 +32,21 @@ Les actifs futurs à protéger seront :
 
 | Incident | Effet dans G1 | Contrôle G1 | Exigence avant autonomie |
 | --- | --- | --- | --- |
-| Lecture de PostgreSQL ou fuite d'un dump | Aucun mot de passe présent | Table vide, aucune route d'écriture, primitive HPKE non branchée | Enveloppe standard inutilisable sans clé privée |
-| RCE dans le web | Accès possible aux secrets symétriques actuels, pas à un mot de passe stocké | Mode autonome inexécutable | Web limité à la clé publique |
+| Lecture de PostgreSQL ou fuite d'un dump | Aucun mot de passe présent ; sessions sous enveloppes | Clé privée absente de PostgreSQL et table credential vide | Enveloppe inutilisable sans clé privée |
+| RCE dans le web | Peut voir un mot de passe pendant une connexion directe et sceller une session, mais ne peut pas ouvrir une session persistée | Web limité à la clé publique session ; mode autonome inexécutable | Même séparation pour les futurs credentials |
 | RCE scheduler/calendar/outbox | Aucun mot de passe stocké | Aucun chemin de lecture | Clé privée absente de leurs unités |
 | RCE worker sync | Cookies actuels accessibles selon l'environnement | Aucun credential autonome | Risque résiduel accepté et fortement isolé |
 | Token `owner` volé | Ne peut pas changer le mode via la nouvelle route | Propriétaire primaire requis | Enrôlement et suppression sous le même garde |
 | Session web primaire volée | Peut choisir `manual` ou `session_only` | Origin, CSRF et révocation existants | Saisie et vérification IMT obligatoires pour enrôler |
 | Compte administrateur compromis | Ne peut pas créer de credential | Aucune route admin | L'admin futur ne voit que des états agrégés |
 | Accès root au LXC | Contrôle total du runtime et de la mémoire | Hors protection applicative | Risque résiduel non supprimable, durcissement hôte requis |
-| Fuite de `/etc/botnote` | Expose les secrets actuels selon les fichiers obtenus | Permissions et fichiers hors Git | Clé privée séparée des secrets généraux |
+| Fuite de `/etc/botnote` | Dépend des fichiers obtenus | Clés privées root-only et injectées uniquement au worker | Clé privée credential séparée des secrets généraux |
 | Logs, traceback ou télémétrie | Aucun secret autonome à fuiter | Paramètres SQL masqués, payloads sûrs | Corps sensibles jamais journalisés |
 | Inspection `/proc`, core dump ou swap | Aucun secret autonome durable | Aucun mot de passe en argument ou environnement | `LoadCredential`, `LimitCORE=0`, durée mémoire minimale |
 | Substitution entre comptes | Sans objet dans G1 | FK et relation one-to-one | Liaison cryptographique au compte et à la génération |
-| Changement du login IMT | Sans objet dans G1 | Aucun credential | Ancienne enveloppe invalide, réenrôlement requis |
-| Rollback d'une sauvegarde | Peut désynchroniser le miroir du mode | Mode effectif dérivé du booléen | Génération et consentement vérifiés avant déchiffrement |
-| Perte de clé privée | Aucun impact G1 | Aucune clé créée | Réenrôlement, aucune perte de note |
+| Changement du login IMT | Invalide la session HPKE liée à l'ancien login | Ciphertext effacé et reconnexion requise | Ancien credential invalide, réenrôlement requis |
+| Rollback d'une sauvegarde | Peut ressusciter une session révoquée | Révocation globale obligatoire avant remise en service | Génération et consentement vérifiés avant déchiffrement |
+| Perte de clé privée | Sessions préservées mais worker fermé | Alerte agrégée, restauration de clé ou révocation humaine | Réenrôlement, aucune perte de note |
 | Rotation incomplète | Aucun impact G1 | Aucune clé créée | Inventaire par `key_id`, anciennes clés de lecture bornées |
 | Révocation pendant un job | Le worker revérifie le booléen et le consentement | Garde avant appel | Nouvelle vérification génération/mode juste avant ouverture |
 
@@ -88,11 +87,24 @@ Les actifs futurs à protéger seront :
 - un heartbeat ancien ne satisfait plus la readiness de production ;
 - aucune donnée utilisateur, session réelle ou table credential n'utilise HPKE.
 
+## Invariants G4A
+
+- le web possède seulement la clé publique des sessions ;
+- toute nouvelle session est écrite uniquement en HPKE ;
+- le contexte lie compte, login et identifiant de session ;
+- révocation, expiration et invalidation effacent les deux formats ;
+- la migration legacy est hors réseau, reprenable et ne produit que des
+  agrégats ;
+- le fallback legacy temporaire n'existe que dans le worker sync G4A et la
+  commande au profil explicite `migration`, avec la clé historique ;
+- G4B doit encore supprimer ce fallback du runtime normal.
+
 ## Risques résiduels
 
-G3 ne supprime pas la capacité déjà détenue par les processus qui chargent la clé
-symétrique générale : ils peuvent encore déchiffrer les cookies PASS/HUB selon
-leur périmètre actuel. Ce risque est antérieur et doit être traité par G4.
+Pendant G4A, le worker sync conserve temporairement la clé symétrique générale
+pour migrer les anciennes sessions. G4B doit la retirer après inventaire legacy
+à zéro. Le web conserve cette clé pour d'autres secrets, mais elle ne permet pas
+d'ouvrir les sessions PASS/HUB HPKE.
 L'exception locale `owner_managed`, lorsqu'un exploitant l'a volontairement
 configurée pour son compte unique, reste également hors du modèle multi-compte
 et hors de G1.

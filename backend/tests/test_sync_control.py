@@ -51,6 +51,7 @@ def clear_cooldown(account_id: str) -> None:
 def test_manual_sync_uses_server_cooldown_retry_after_and_idempotency(
     client: TestClient,
     monkeypatch,
+    pass_session_runtime,
 ) -> None:
     calls = 0
 
@@ -88,7 +89,7 @@ def test_manual_sync_uses_server_cooldown_retry_after_and_idempotency(
         headers={**csrf_headers(client), "Idempotency-Key": key},
     )
     assert accepted.status_code == 202
-    assert process_one("sync") is True
+    assert process_one("sync", sync_runtime=pass_session_runtime) is True
     replay = client.post(
         "/api/v1/sync",
         json={},
@@ -213,6 +214,7 @@ def test_timeout_is_sanitized_keeps_cooldown_and_replay_does_not_restart(
     client: TestClient,
     monkeypatch,
     caplog,
+    pass_session_runtime,
 ) -> None:
     monkeypatch.setattr(ImtPassClient, "fetch_entries", successful_notes)
     account_id = login_owner(client, "timeout@imt-atlantique.fr")
@@ -237,7 +239,7 @@ def test_timeout_is_sanitized_keeps_cooldown_and_replay_does_not_restart(
         headers={**csrf_headers(client), "Idempotency-Key": key},
     )
     assert accepted.status_code == 202
-    assert process_one("sync") is True
+    assert process_one("sync", sync_runtime=pass_session_runtime) is True
     replay = client.post(
         "/api/v1/sync",
         json={},
@@ -271,6 +273,7 @@ def test_timeout_is_sanitized_keeps_cooldown_and_replay_does_not_restart(
 def test_invalid_partial_pass_response_does_not_write_partial_notes(
     client: TestClient,
     monkeypatch,
+    pass_session_runtime,
 ) -> None:
     monkeypatch.setattr(ImtPassClient, "fetch_entries", successful_notes)
     account_id = login_owner(client, "partial@imt-atlantique.fr")
@@ -295,7 +298,7 @@ def test_invalid_partial_pass_response_does_not_write_partial_notes(
         headers={**csrf_headers(client), "Idempotency-Key": "partial-response-key-001"},
     )
     assert accepted.status_code == 202
-    assert process_one("sync") is True
+    assert process_one("sync", sync_runtime=pass_session_runtime) is True
     with SessionLocal() as db:
         final_notes = list(db.scalars(select(Note).where(Note.account_id == account_id)))
         request = db.get(SyncRequest, accepted.json()["request_id"])
@@ -352,6 +355,7 @@ def test_expired_worker_lease_is_recovered_without_permanent_lock(
 def test_automatic_sync_sets_freshness_and_admin_can_bypass_cooldown(
     client: TestClient,
     monkeypatch,
+    pass_session_runtime,
 ) -> None:
     monkeypatch.setattr(ImtPassClient, "fetch_entries", successful_notes)
     account_id = login_owner(client, "automatic-budget@imt-atlantique.fr")
@@ -366,7 +370,11 @@ def test_automatic_sync_sets_freshness_and_admin_can_bypass_cooldown(
         db.commit()
     monkeypatch.setattr(sync_service, "utcnow", lambda: current)
 
-    result = sync_service.sync_account(account_id, actor="automatic")
+    result = sync_service.sync_account(
+        account_id,
+        actor="automatic",
+        sync_runtime=pass_session_runtime,
+    )
     assert result["total"] == 1
     with pytest.raises(SyncCooldownActive):
         reserve_sync_request(

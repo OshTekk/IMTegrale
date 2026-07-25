@@ -2,15 +2,18 @@
 
 ## État de cette release
 
-Cette release termine les gates **G1**, **G2** et **G3**. G1 introduit le vocabulaire de
+Cette release G4A termine les gates **G1**, **G2** et **G3**, puis réalise
+l'expansion et la migration du gate **G4**. G1 introduit le vocabulaire de
 domaine, le schéma additif et les gardes. G2 ajoute un
 [format d'enveloppe HPKE](hpke-envelope-format.md) générique, versionné et
 entièrement isolé. G3 ajoute la
 [frontière système du worker sync](sync-worker-isolation.md), ses clés
-opérationnelles hors Git et ses self-tests synthétiques. HPKE n'est relié ni aux
-comptes, ni à la table de credentials, ni aux API, ni aux données PASS/HUB.
-La release ne conserve toujours aucun mot de passe
-IMT et ne permet aucune reconnexion autonome.
+opérationnelles hors Git et ses self-tests synthétiques. G4A ajoute la migration
+`0026`, le framing fixe et la protection HPKE des sessions PASS/HUB. Le web ne
+reçoit que leur clé publique ; le worker sync isolé reçoit le keyring privé.
+HPKE reste sans lien avec la table de credentials et aucune enveloppe n'est
+exposée par une API. La release ne conserve toujours aucun mot de passe IMT et
+ne permet aucune reconnexion autonome.
 
 Les modes cibles sont :
 
@@ -137,7 +140,7 @@ Si une modification SQL manuelle injecte ce mode :
 Le système ne convertit pas silencieusement cette incohérence en
 `session_only`.
 
-## Primitive G2 isolée
+## Primitive G2 et branchement G4A
 
 Le paquet `app.crypto` utilise directement l'API one-shot HPKE de
 `cryptography 49` avec X25519, HKDF-SHA-256 et ChaCha20-Poly1305. Il fournit :
@@ -147,12 +150,15 @@ Le paquet `app.crypto` utilise directement l'API one-shot HPKE de
 - une enveloppe binaire v1 fermée ;
 - un `key_id` SHA-256 complet ;
 - un keyring préparé pour la rotation ;
-- un frame credential fixe de 3 072 octets.
+- un frame credential fixe de 3 072 octets ;
+- un frame session fixe de 65 552 octets pour préserver la limite historique
+  de 64 Kio ;
+- une enveloppe session de taille exacte 65 652 octets.
 
 Les tests emploient uniquement des clés et secrets fictifs en mémoire. Le
 smoke-test du wheel et le démarrage du worker sync effectuent des round-trips
-isolés, sans persistance ni appel réseau. Le seul chemin applicatif chargeant
-les clés privées est `sync-worker -> loader -> self-tests`.
+isolés, sans appel réseau. Le seul chemin applicatif chargeant les clés privées
+est `sync-worker -> loader -> SyncRuntimeContext`.
 
 ## Frontière G3 livrée
 
@@ -160,7 +166,8 @@ Deux paires X25519 distinctes existent hors Git sous un répertoire root-only.
 systemd les copie sous quatre noms fixes uniquement dans
 `CREDENTIALS_DIRECTORY` de l'unité `botnote-sync-worker.service`. Le worker
 possède une identité Unix, un environnement et un rôle PostgreSQL dédiés.
-Le web, scheduler, calendar et outbox ne reçoivent aucune clé privée.
+Le web reçoit uniquement `pass-service-session-public`. Scheduler, calendar,
+outbox et le web ne reçoivent aucune clé privée.
 
 La séparation cible devra garantir :
 
@@ -172,8 +179,10 @@ La séparation cible devra garantir :
 - démarrage fermé du worker lorsque sa configuration est requise mais invalide ;
 - aucun mot de passe dans les jobs, événements, métriques ou journaux.
 
-Les cookies PASS/HUB restent pour l'instant protégés par le mécanisme symétrique
-actuel. Leur isolation worker-only relève du gate G4.
+G4A écrit toute nouvelle session PASS/HUB uniquement en HPKE. Le profil
+`sync-migration` et le worker G4A conservent temporairement une lecture legacy
+isolée afin de migrer une ligne avant son usage. La contraction G4B retire ce
+fallback et la clé symétrique du worker normal après inventaire legacy à zéro.
 
 L'exception locale historique `owner_managed` reste un secret hors base limité à
 l'unique compte propriétaire d'une instance auto-hébergée. G1 ne la modifie pas,
@@ -187,7 +196,7 @@ ne la transforme pas en credential et ne l'associe pas au mode
 | G1 | Schéma, modes, API compatible et gardes fermés | Terminé |
 | G2 | Module HPKE versionné avec clés entièrement fictives | Terminé |
 | G3 | Worker sync dédié et clé privée isolée | Terminé |
-| G4 | Cookies PASS/HUB migrés vers l'isolation worker-only | Non terminé |
+| G4 | Cookies PASS/HUB migrés vers l'isolation worker-only | G4A terminé, contraction G4B requise |
 | G5 | API d'enrôlement, renouvellement et suppression | Non terminé |
 | G6 | Fallback autonome, révocation et rotation | Non terminé |
 | G7 | UX, consentement distinct et activation canary | Non terminé |

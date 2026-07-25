@@ -9,6 +9,7 @@ import threading
 from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 import requests
 from sqlalchemy import and_, delete, func, or_, select
@@ -53,6 +54,9 @@ from app.services.pass_sessions import (
 _COORDINATOR_LOCK = threading.RLock()
 _METRICS_RETENTION = timedelta(days=30)
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from app.services.sync_worker_credentials import SyncRuntimeContext
 
 
 def ensure_utc(value: datetime | None) -> datetime | None:
@@ -712,12 +716,18 @@ def perform_sync_operation(
     quota_bypass: bool = False,
     bypass_reason: str | None = None,
     force_probe: bool = False,
+    sync_runtime: SyncRuntimeContext,
 ) -> GatewayResult:
     now = utcnow()
     target_ref = target_reference(account.imt_username)
     profile_due = _profile_refresh_due(account, now)
     metadata_due = _ue_metadata_refresh_due(account, now)
-    stored = load_service_session(account.id)
+    stored = load_service_session(
+        account.id,
+        sealer=sync_runtime.pass_session_sealer,
+        opener=sync_runtime.pass_session_opener,
+        legacy_cipher=sync_runtime.legacy_session_cipher,
+    )
     owner_password = owner_password_for(account)
     if stored is None and owner_password is None:
         raise PassSessionRequired()
@@ -793,6 +803,8 @@ def perform_sync_operation(
                 refresh_service_session(
                     stored.id,
                     session_snapshot,
+                    sealer=sync_runtime.pass_session_sealer,
+                    opener=sync_runtime.pass_session_opener,
                     hub_attempted=hub_attempted,
                     hub_succeeded=hub_succeeded,
                 )
@@ -810,6 +822,7 @@ def perform_sync_operation(
                 db,
                 account,
                 session_snapshot,
+                sealer=sync_runtime.pass_session_sealer,
                 hub_attempted=hub_attempted,
                 hub_succeeded=hub_succeeded,
             )

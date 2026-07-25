@@ -24,6 +24,7 @@ from app.services.pass_sessions import (
     serialize_service_cookies,
     store_service_session,
 )
+from app.services.sync_worker_credentials import SyncRuntimeContext
 from sqlalchemy import func, select
 
 
@@ -280,7 +281,10 @@ class FakePassClient:
         return [PassEntry("SIT130", "Examen", 15, 1, False)]
 
 
-def seed_service_session(account: Account) -> None:
+def seed_service_session(
+    account: Account,
+    pass_session_runtime: SyncRuntimeContext,
+) -> None:
     source = requests.Session()
     source.cookies.set(
         "ASP.NET_SessionId",
@@ -300,28 +304,42 @@ def seed_service_session(account: Account) -> None:
             db,
             managed,
             snapshot,
+            sealer=pass_session_runtime.pass_session_sealer,
             hub_attempted=True,
             hub_succeeded=True,
         )
         db.commit()
 
 
-def test_sync_reuses_encrypted_session_across_clients(monkeypatch) -> None:
+def test_sync_reuses_encrypted_session_across_clients(
+    monkeypatch,
+    pass_session_runtime: SyncRuntimeContext,
+) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "environment", "production")
     monkeypatch.setattr(pass_gateway, "ImtPassClient", FakePassClient)
     FakePassClient.instances.clear()
     account = create_account("reuse@imt-atlantique.fr")
-    seed_service_session(account)
+    seed_service_session(account, pass_session_runtime)
 
     with SessionLocal() as db:
         managed = db.get(Account, account.id)
         assert managed is not None
-        first = pass_gateway.perform_sync_operation(db=db, account=managed, actor="owner")
+        first = pass_gateway.perform_sync_operation(
+            db=db,
+            account=managed,
+            actor="owner",
+            sync_runtime=pass_session_runtime,
+        )
     with SessionLocal() as db:
         managed = db.get(Account, account.id)
         assert managed is not None
-        second = pass_gateway.perform_sync_operation(db=db, account=managed, actor="owner")
+        second = pass_gateway.perform_sync_operation(
+            db=db,
+            account=managed,
+            actor="owner",
+            sync_runtime=pass_session_runtime,
+        )
 
     assert first.session_reused is True
     assert first.full_sso_performed is False
@@ -337,16 +355,21 @@ def test_sync_reuses_encrypted_session_across_clients(monkeypatch) -> None:
         )
         assert stored is not None
         assert stored.reuse_count == 2
-        assert "opaque-session-value" not in (stored.encrypted_cookie_jar or "")
+        assert stored.encrypted_cookie_jar is None
+        assert stored.hpke_envelope is not None
+        assert b"opaque-session-value" not in stored.hpke_envelope
 
 
-def test_rejected_session_requires_reauthentication_without_password_fallback(monkeypatch) -> None:
+def test_rejected_session_requires_reauthentication_without_password_fallback(
+    monkeypatch,
+    pass_session_runtime: SyncRuntimeContext,
+) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "environment", "production")
     monkeypatch.setattr(pass_gateway, "ImtPassClient", FakePassClient)
     FakePassClient.instances.clear()
     account = create_account("fallback@imt-atlantique.fr")
-    seed_service_session(account)
+    seed_service_session(account, pass_session_runtime)
 
     def expired(
         self: FakePassClient,
@@ -367,7 +390,12 @@ def test_rejected_session_requires_reauthentication_without_password_fallback(mo
         managed = db.get(Account, account.id)
         assert managed is not None
         with pytest.raises(PassSessionRequired):
-            pass_gateway.perform_sync_operation(db=db, account=managed, actor="owner")
+            pass_gateway.perform_sync_operation(
+                db=db,
+                account=managed,
+                actor="owner",
+                sync_runtime=pass_session_runtime,
+            )
 
     assert len(FakePassClient.instances) == 1
     with SessionLocal() as db:
@@ -378,6 +406,7 @@ def test_rejected_session_requires_reauthentication_without_password_fallback(mo
         assert stored.state == "expired"
         assert stored.end_reason == "upstream_expired"
         assert stored.encrypted_cookie_jar is None
+        assert stored.hpke_envelope is None
 
 
 def test_metrics_are_aggregate_and_do_not_expose_raw_identity() -> None:

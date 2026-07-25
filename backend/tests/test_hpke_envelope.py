@@ -18,6 +18,8 @@ from app.crypto import (
     KEY_ID_HEX_CHARACTERS,
     MAX_ENVELOPE_BYTES,
     MAX_SERVICE_SESSION_PLAINTEXT_BYTES,
+    PASS_SERVICE_SESSION_FRAME_SIZE,
+    PASS_SERVICE_SESSION_MAX_BYTES,
     SUITE_AEAD,
     SUITE_ID,
     SUITE_KDF,
@@ -39,8 +41,10 @@ from app.crypto import (
     SecretFrameError,
     UnsupportedEnvelopeError,
     decode_imt_password_frame,
+    decode_pass_service_session_frame,
     encode_hpke_info,
     encode_imt_password_frame,
+    encode_pass_service_session_frame,
     key_id_for_public_key,
     normalize_imt_login,
     open_envelope,
@@ -121,6 +125,10 @@ def _credential_envelope(
         context=context or _credential_context(),
         plaintext=frame,
     )
+
+
+def _session_frame(snapshot: str = '{"cookies":[],"version":1}') -> bytes:
+    return encode_pass_service_session_frame(snapshot)
 
 
 def _replace_byte(encoded: bytes, offset: int, value: int) -> bytes:
@@ -221,7 +229,8 @@ def test_credential_roundtrip_is_randomized_and_fixed_size() -> None:
 def test_service_session_profile_roundtrip() -> None:
     key = _private_key()
     context = _session_context()
-    payload = b'{"cookies":[{"name":"fictional","secure":true}]}'
+    snapshot = '{"cookies":[{"name":"fictional","secure":true}]}'
+    payload = encode_pass_service_session_frame(snapshot)
     envelope = seal_envelope(
         key.public_key,
         purpose=EnvelopePurpose.PASS_SERVICE_SESSION,
@@ -229,13 +238,18 @@ def test_service_session_profile_roundtrip() -> None:
         context=context,
         plaintext=memoryview(payload),
     )
-    assert open_envelope(
-        envelope.to_bytes(),
-        _keyring(key),
-        purpose=EnvelopePurpose.PASS_SERVICE_SESSION,
-        profile=PlaintextProfile.PASS_SERVICE_SESSION_V1,
-        context=context,
-    ) == payload
+    assert (
+        decode_pass_service_session_frame(
+            open_envelope(
+                envelope.to_bytes(),
+                _keyring(key),
+                purpose=EnvelopePurpose.PASS_SERVICE_SESSION,
+                profile=PlaintextProfile.PASS_SERVICE_SESSION_V1,
+                context=context,
+            )
+        )
+        == snapshot
+    )
 
 
 def test_key_ids_are_complete_stable_and_public_only() -> None:
@@ -537,6 +551,72 @@ def test_secret_frames_randomize_padding_and_hide_length() -> None:
     assert len(short_envelope) == len(long_envelope) == IMT_PASSWORD_ENVELOPE_BYTES
 
 
+@pytest.mark.parametrize(
+    "snapshot",
+    [
+        "{}",
+        '{"cookies":[],"version":1}',
+        '{"unicode":"Élève-秘密-🔐"}',
+        " leading and trailing ",
+        "x" * PASS_SERVICE_SESSION_MAX_BYTES,
+    ],
+)
+def test_service_session_frame_preserves_exact_snapshot(snapshot: str) -> None:
+    frame = encode_pass_service_session_frame(snapshot)
+    assert len(frame) == PASS_SERVICE_SESSION_FRAME_SIZE
+    assert decode_pass_service_session_frame(frame) == snapshot
+
+
+def test_service_session_frame_hides_length_and_rejects_invalid_values() -> None:
+    short = encode_pass_service_session_frame("a")
+    long = encode_pass_service_session_frame(
+        "z" * PASS_SERVICE_SESSION_MAX_BYTES
+    )
+    repeat = encode_pass_service_session_frame("a")
+    assert len(short) == len(long) == len(repeat)
+    assert short != repeat
+    for snapshot in ("", "x" * (PASS_SERVICE_SESSION_MAX_BYTES + 1), "\ud800"):
+        with pytest.raises(SecretFrameError):
+            encode_pass_service_session_frame(snapshot)
+    for frame in (
+        b"",
+        short[:-1],
+        short + b"x",
+        _replace_byte(short, 0, ord("X")),
+        _replace_byte(short, 8, 2),
+        _replace_byte(short, 9, 1),
+        _replace_slice(short, 10, b"\x00\x00\x00\x00"),
+        _replace_slice(
+            short,
+            10,
+            (PASS_SERVICE_SESSION_MAX_BYTES + 1).to_bytes(4, "big"),
+        ),
+    ):
+        with pytest.raises(SecretFrameError):
+            decode_pass_service_session_frame(frame)
+
+
+def test_service_session_envelopes_have_one_exact_size() -> None:
+    key = _private_key()
+    short = seal_envelope(
+        key.public_key,
+        purpose=EnvelopePurpose.PASS_SERVICE_SESSION,
+        profile=PlaintextProfile.PASS_SERVICE_SESSION_V1,
+        context=_session_context(),
+        plaintext=encode_pass_service_session_frame("a"),
+    )
+    long = seal_envelope(
+        key.public_key,
+        purpose=EnvelopePurpose.PASS_SERVICE_SESSION,
+        profile=PlaintextProfile.PASS_SERVICE_SESSION_V1,
+        context=_session_context(),
+        plaintext=encode_pass_service_session_frame(
+            "z" * PASS_SERVICE_SESSION_MAX_BYTES
+        ),
+    )
+    assert len(short) == len(long) == MAX_ENVELOPE_BYTES
+
+
 @pytest.mark.parametrize("secret", ["", "x" * 513, "\ud800"])
 def test_secret_frame_rejects_invalid_secrets(secret: str) -> None:
     with pytest.raises(SecretFrameError, match="Invalid secret frame"):
@@ -650,7 +730,7 @@ def test_parser_rejects_invalid_or_unsupported_headers() -> None:
 def test_parser_rejects_profile_specific_length_mismatches() -> None:
     key = _private_key()
     credential = _credential_envelope(key).to_bytes()
-    session_payload = b"x"
+    session_payload = _session_frame()
     session = seal_envelope(
         key.public_key,
         purpose=EnvelopePurpose.PASS_SERVICE_SESSION,
@@ -717,6 +797,7 @@ def test_plaintext_input_contract_and_limits_are_strict() -> None:
             context=_session_context(),
             plaintext=released,
         )
+    assert len(_session_frame()) == PASS_SERVICE_SESSION_FRAME_SIZE
     with pytest.raises(KeyMaterialError):
         seal_envelope(
             key.public_key.to_raw_bytes(),  # type: ignore[arg-type]
@@ -758,7 +839,7 @@ def test_service_session_context_is_cryptographically_authenticated() -> None:
         purpose=EnvelopePurpose.PASS_SERVICE_SESSION,
         profile=PlaintextProfile.PASS_SERVICE_SESSION_V1,
         context=_session_context(),
-        plaintext=b"fictional-session",
+        plaintext=_session_frame(),
     )
     for context in (
         _session_context(account_id=OTHER_ACCOUNT_ID),
@@ -798,7 +879,7 @@ def test_purpose_and_profile_are_cryptographically_separated() -> None:
         _OFFSET_PROFILE,
         PlaintextProfile.PASS_SERVICE_SESSION_V1,
     )
-    with pytest.raises(EnvelopeAuthenticationError):
+    with pytest.raises((EnvelopeAuthenticationError, EnvelopeFormatError)):
         open_envelope(
             mutated,
             _keyring(key),

@@ -294,7 +294,10 @@ def test_scheduler_rotates_between_due_accounts(monkeypatch) -> None:
         assert queued_accounts == {first_id, second_id}
 
 
-def test_automatic_sync_rechecks_consent_after_worker_selection(monkeypatch) -> None:
+def test_automatic_sync_rechecks_consent_after_worker_selection(
+    monkeypatch,
+    pass_session_runtime,
+) -> None:
     now = datetime(2026, 7, 16, 10, 0, tzinfo=UTC)
     with SessionLocal() as db:
         account = account_for_schedule(
@@ -310,4 +313,8 @@ def test_automatic_sync_rechecks_consent_after_worker_selection(monkeypatch) -> 
 
     monkeypatch.setattr(sync_service, "utcnow", lambda: now)
     with pytest.raises(sync_service.AutomaticSyncNotAllowed):
-        sync_service.sync_account(account_id, actor="automatic")
+        sync_service.sync_account(
+            account_id,
+            actor="automatic",
+            sync_runtime=pass_session_runtime,
+        )

@@ -8,23 +8,31 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import requests
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.database import SessionLocal, utcnow
 from app.models import Account, PassServiceSession, new_id
-from app.security import cipher_for
+from app.pass_session_contract import PASS_SERVICE_SESSION_MAX_BYTES
+from app.services.pass_session_crypto import (
+    PassSessionEncryptionUnavailable,
+    PassSessionEnvelopeInvalid,
+    PassSessionEnvelopeMetadata,
+    PassSessionKeyUnavailable,
+    PassSessionOpener,
+    PassSessionSealer,
+)
 
 _COOKIE_HOSTS = frozenset({"pass.imt-atlantique.fr", "hub.imt-atlantique.fr"})
 _MAX_COOKIE_COUNT = 64
 _MAX_COOKIE_NAME = 128
 _MAX_COOKIE_VALUE = 8_192
 _MAX_COOKIE_PATH = 256
-_MAX_SNAPSHOT_BYTES = 64 * 1024
+_MAX_SNAPSHOT_BYTES = PASS_SERVICE_SESSION_MAX_BYTES
 _HISTORY_RETENTION = timedelta(days=30)
 
 
@@ -34,6 +42,25 @@ class PassSessionRequired(RuntimeError):
 
     def __init__(self, message: str | None = None) -> None:
         super().__init__(message or self.message)
+
+
+class PassSessionStorageUnavailable(PassSessionRequired):
+    code = "PASS_SESSION_ENCRYPTION_UNAVAILABLE"
+    message = "La session technique n'a pas pu être protégée."
+
+
+class PassSessionDecryptionKeyUnavailable(PassSessionRequired):
+    code = "PASS_SESSION_HPKE_KEY_UNAVAILABLE"
+    message = "La synchronisation est temporairement indisponible."
+
+
+class PassSessionLegacyCiphertextPresent(PassSessionRequired):
+    code = "PASS_SESSION_LEGACY_CIPHERTEXT_PRESENT"
+    message = "Une reconnexion IMT est requise pour renouveler la session."
+
+
+class LegacySessionCipher(Protocol):
+    def decrypt(self, envelope: str, *, context: str) -> str: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,7 +217,38 @@ def _end_session(
     row.end_reason = reason[:32]
     row.ended_at = current
     row.encrypted_cookie_jar = None
+    row.hpke_envelope = None
+    row.hpke_envelope_version = None
+    row.hpke_key_id = None
+    row.hpke_migrated_at = None
     row.updated_at = current
+
+
+def _envelope_metadata(row: PassServiceSession) -> PassSessionEnvelopeMetadata:
+    if (
+        not isinstance(row.hpke_envelope, bytes)
+        or not isinstance(row.hpke_envelope_version, int)
+        or not isinstance(row.hpke_key_id, str)
+    ):
+        raise PassSessionEnvelopeInvalid
+    return PassSessionEnvelopeMetadata(
+        envelope=row.hpke_envelope,
+        version=row.hpke_envelope_version,
+        key_id=row.hpke_key_id,
+    )
+
+
+def _write_hpke_metadata(
+    row: PassServiceSession,
+    metadata: PassSessionEnvelopeMetadata,
+    *,
+    migrated_at: datetime | None,
+) -> None:
+    row.encrypted_cookie_jar = None
+    row.hpke_envelope = metadata.envelope
+    row.hpke_envelope_version = metadata.version
+    row.hpke_key_id = metadata.key_id
+    row.hpke_migrated_at = migrated_at
 
 
 def store_service_session(
@@ -198,33 +256,43 @@ def store_service_session(
     account: Account,
     snapshot: str,
     *,
+    sealer: PassSessionSealer,
     hub_attempted: bool,
     hub_succeeded: bool,
     now: datetime | None = None,
 ) -> PassServiceSession:
-    # Validate before encryption so malformed data never reaches persistent storage.
     _validate_service_snapshot(snapshot)
     current = ensure_utc(now or utcnow())
+    row_id = new_id()
+    try:
+        metadata = sealer.seal(
+            snapshot,
+            account_id=account.id,
+            imt_login=account.imt_username,
+            service_session_id=row_id,
+        )
+    except PassSessionEncryptionUnavailable:
+        raise PassSessionStorageUnavailable from None
     active_rows = list(
         db.scalars(
             select(PassServiceSession).where(
                 PassServiceSession.account_id == account.id,
                 PassServiceSession.state == "active",
-            )
+            ).with_for_update()
         )
     )
     for existing in active_rows:
         _end_session(existing, state="revoked", reason="replaced", now=current)
     if active_rows:
         db.flush()
-    row_id = new_id()
     row = PassServiceSession(
         id=row_id,
         account_id=account.id,
-        encrypted_cookie_jar=cipher_for().encrypt(
-            snapshot,
-            context=f"pass-service-session:{row_id}",
-        ),
+        encrypted_cookie_jar=None,
+        hpke_envelope=metadata.envelope,
+        hpke_envelope_version=metadata.version,
+        hpke_key_id=metadata.key_id,
+        hpke_migrated_at=None,
         state="active",
         established_at=current,
         expires_at=current + timedelta(days=get_settings().pass_session_max_days),
@@ -245,6 +313,7 @@ def store_service_session_if_reusable(
     account: Account,
     snapshot: str,
     *,
+    sealer: PassSessionSealer,
     hub_attempted: bool,
     hub_succeeded: bool,
     now: datetime | None = None,
@@ -255,14 +324,20 @@ def store_service_session_if_reusable(
         db,
         account,
         snapshot,
+        sealer=sealer,
         hub_attempted=hub_attempted,
         hub_succeeded=hub_succeeded,
         now=now,
     )
 
 
-def _active_row(db: Session, account_id: str) -> PassServiceSession | None:
-    return db.scalar(
+def _active_row(
+    db: Session,
+    account_id: str,
+    *,
+    for_update: bool = False,
+) -> PassServiceSession | None:
+    statement = (
         select(PassServiceSession)
         .where(
             PassServiceSession.account_id == account_id,
@@ -271,30 +346,93 @@ def _active_row(db: Session, account_id: str) -> PassServiceSession | None:
         .order_by(PassServiceSession.established_at.desc())
         .limit(1)
     )
+    if for_update:
+        statement = statement.with_for_update()
+    return db.scalar(statement)
 
 
-def load_service_session(account_id: str) -> StoredPassSession | None:
+def load_service_session(
+    account_id: str,
+    *,
+    sealer: PassSessionSealer,
+    opener: PassSessionOpener,
+    legacy_cipher: LegacySessionCipher | None = None,
+) -> StoredPassSession | None:
     now = utcnow()
     with SessionLocal() as db:
-        row = _active_row(db, account_id)
+        account = db.get(Account, account_id)
+        if account is None or account.is_disabled:
+            return None
+        row = _active_row(db, account_id, for_update=True)
         if row is None:
             return None
         if ensure_utc(row.expires_at) <= now:
             _end_session(row, state="expired", reason="local_expiry", now=now)
             db.commit()
             return None
-        if not row.encrypted_cookie_jar:
-            _end_session(row, state="invalid", reason="missing_ciphertext", now=now)
+        if row.encrypted_cookie_jar and row.hpke_envelope:
+            _end_session(row, state="invalid", reason="mixed_ciphertext", now=now)
             db.commit()
             return None
-        try:
-            snapshot = cipher_for().decrypt(
-                row.encrypted_cookie_jar,
-                context=f"pass-service-session:{row.id}",
+        if row.hpke_envelope:
+            try:
+                snapshot = opener.open(
+                    _envelope_metadata(row),
+                    account_id=account.id,
+                    imt_login=account.imt_username,
+                    service_session_id=row.id,
+                )
+                _validate_service_snapshot(snapshot)
+            except PassSessionKeyUnavailable:
+                account.auto_sync_paused_reason = "key_unavailable"
+                account.auto_sync_paused_at = now
+                account.auto_sync_next_at = None
+                db.commit()
+                raise PassSessionDecryptionKeyUnavailable from None
+            except (PassSessionEnvelopeInvalid, RuntimeError):
+                _end_session(row, state="invalid", reason="decrypt_failed", now=now)
+                db.commit()
+                return None
+        elif row.encrypted_cookie_jar:
+            if legacy_cipher is None:
+                raise PassSessionLegacyCiphertextPresent
+            from app.services.legacy_pass_session_migration import (
+                decrypt_legacy_service_session,
             )
-            _validate_service_snapshot(snapshot)
-        except RuntimeError:
-            _end_session(row, state="invalid", reason="decrypt_failed", now=now)
+
+            try:
+                snapshot = decrypt_legacy_service_session(row, legacy_cipher)
+                _validate_service_snapshot(snapshot)
+                metadata = sealer.seal(
+                    snapshot,
+                    account_id=account.id,
+                    imt_login=account.imt_username,
+                    service_session_id=row.id,
+                )
+                if (
+                    opener.open(
+                        metadata,
+                        account_id=account.id,
+                        imt_login=account.imt_username,
+                        service_session_id=row.id,
+                    )
+                    != snapshot
+                ):
+                    raise PassSessionEnvelopeInvalid
+                _write_hpke_metadata(row, metadata, migrated_at=now)
+                row.updated_at = now
+                db.commit()
+            except PassSessionKeyUnavailable:
+                db.rollback()
+                raise PassSessionDecryptionKeyUnavailable from None
+            except PassSessionEncryptionUnavailable:
+                db.rollback()
+                raise PassSessionStorageUnavailable from None
+            except RuntimeError:
+                db.rollback()
+                return None
+        else:
+            _end_session(row, state="invalid", reason="missing_ciphertext", now=now)
             db.commit()
             return None
         return StoredPassSession(
@@ -310,19 +448,47 @@ def refresh_service_session(
     session_id: str,
     snapshot: str,
     *,
+    sealer: PassSessionSealer,
+    opener: PassSessionOpener,
     hub_attempted: bool,
     hub_succeeded: bool,
 ) -> None:
     _validate_service_snapshot(snapshot)
     now = utcnow()
     with SessionLocal() as db:
-        row = db.get(PassServiceSession, session_id)
-        if row is None or row.state != "active" or ensure_utc(row.expires_at) <= now:
+        row = db.get(PassServiceSession, session_id, with_for_update=True)
+        if row is None or row.state != "active":
             return
-        row.encrypted_cookie_jar = cipher_for().encrypt(
-            snapshot,
-            context=f"pass-service-session:{row.id}",
-        )
+        if ensure_utc(row.expires_at) <= now:
+            _end_session(row, state="expired", reason="local_expiry", now=now)
+            db.commit()
+            return
+        account = db.get(Account, row.account_id)
+        if account is None or account.is_disabled:
+            return
+        try:
+            metadata = sealer.seal(
+                snapshot,
+                account_id=account.id,
+                imt_login=account.imt_username,
+                service_session_id=row.id,
+            )
+        except PassSessionEncryptionUnavailable:
+            raise PassSessionStorageUnavailable from None
+        try:
+            opened = opener.open(
+                metadata,
+                account_id=account.id,
+                imt_login=account.imt_username,
+                service_session_id=row.id,
+            )
+            if opened != snapshot:
+                raise PassSessionEnvelopeInvalid
+        except PassSessionKeyUnavailable:
+            raise PassSessionDecryptionKeyUnavailable from None
+        except PassSessionEnvelopeInvalid:
+            raise PassSessionStorageUnavailable from None
+        _write_hpke_metadata(row, metadata, migrated_at=row.hpke_migrated_at)
         row.last_used_at = now
         row.pass_last_success_at = now
         if hub_attempted:
@@ -341,7 +507,7 @@ def invalidate_service_session(
     reason: str = "upstream_rejected",
 ) -> None:
     with SessionLocal() as db:
-        row = db.get(PassServiceSession, session_id)
+        row = db.get(PassServiceSession, session_id, with_for_update=True)
         if row is not None and row.state == "active":
             _end_session(row, state=state, reason=reason)
             db.commit()
@@ -358,7 +524,7 @@ def purge_account_service_sessions(
             select(PassServiceSession).where(
                 PassServiceSession.account_id == account_id,
                 PassServiceSession.state == "active",
-            )
+            ).with_for_update()
         )
     )
     for row in rows:
@@ -411,7 +577,7 @@ def service_session_view(db: Session, account: Account) -> dict:
     row = _active_row(db, account.id)
     active = bool(
         row
-        and row.encrypted_cookie_jar
+        and bool(row.encrypted_cookie_jar) != bool(row.hpke_envelope)
         and ensure_utc(row.expires_at) > now
     )
     owner_managed = owner_autonomous_sync_available(account)
@@ -461,7 +627,10 @@ def service_session_metrics(db: Session, *, hours: int) -> dict:
             select(PassServiceSession).where(
                 PassServiceSession.state == "active",
                 PassServiceSession.expires_at > now,
-                PassServiceSession.encrypted_cookie_jar.is_not(None),
+                or_(
+                    PassServiceSession.encrypted_cookie_jar.is_not(None),
+                    PassServiceSession.hpke_envelope.is_not(None),
+                ),
             )
         )
     )
@@ -557,7 +726,7 @@ def cleanup_service_session_history() -> None:
             select(PassServiceSession).where(
                 PassServiceSession.state == "active",
                 PassServiceSession.expires_at <= now,
-            )
+            ).with_for_update()
         ):
             _end_session(row, state="expired", reason="local_expiry", now=now)
         db.execute(

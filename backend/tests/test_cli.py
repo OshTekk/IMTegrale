@@ -110,13 +110,26 @@ def test_isolated_sync_worker_rejects_a_non_dedicated_production_identity(
 
 
 def test_sync_commands_report_results_and_fail_on_partial_error(monkeypatch, capsys) -> None:  # noqa: ANN001
+    runtime = object()
     monkeypatch.setattr(cli, "get_settings", StubSettings)
-    monkeypatch.setattr(cli, "sync_account", lambda account: {"ok": True, "account": account})
+    monkeypatch.setattr(cli, "_load_sync_runtime_context", lambda: runtime)
+    monkeypatch.setattr(
+        cli,
+        "sync_account",
+        lambda account, *, sync_runtime: {
+            "ok": sync_runtime is runtime,
+            "account": account,
+        },
+    )
     monkeypatch.setattr("sys.argv", ["botnote", "sync", "--account", "fictitious-account"])
     cli.main()
     assert '"account": "fictitious-account"' in capsys.readouterr().out
 
-    monkeypatch.setattr(cli, "sync_all_accounts", lambda: [{"ok": True}])
+    monkeypatch.setattr(
+        cli,
+        "sync_all_accounts",
+        lambda *, sync_runtime: [{"ok": sync_runtime is runtime}],
+    )
     monkeypatch.setattr("sys.argv", ["botnote", "sync-all"])
     cli.main()
     assert '"ok": true' in capsys.readouterr().out
@@ -159,3 +172,83 @@ def test_schema_rotation_and_operations_commands_are_dispatchable(monkeypatch, c
     with pytest.raises(SystemExit, match="1"):
         cli.main()
     assert "TEST_ALERT" in capsys.readouterr().out
+
+
+def test_pass_session_migration_and_restore_revocation_commands_are_dispatchable(
+    monkeypatch,
+    capsys,
+) -> None:  # noqa: ANN001
+    from app.services import legacy_pass_session_migration
+
+    runtime = SimpleNamespace(
+        pass_session_sealer=object(),
+        pass_session_opener=object(),
+        legacy_session_cipher=object(),
+    )
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(cli, "get_settings", StubSettings)
+    monkeypatch.setattr(cli, "_load_sync_runtime_context", lambda: runtime)
+    monkeypatch.setattr(
+        legacy_pass_session_migration,
+        "migrate_legacy_service_sessions",
+        lambda **options: captured.update(options)
+        or {
+            "failed": 0,
+            "migrated": 2,
+            "remaining_legacy": 0,
+        },
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "botnote",
+            "pass-sessions-migrate-hpke",
+            "--dry-run",
+            "--batch-size",
+            "7",
+            "--limit",
+            "9",
+        ],
+    )
+
+    cli.main()
+
+    assert StubSettings.validated_roles[-1] is RuntimeRole.SYNC_MIGRATION
+    assert captured == {
+        "sealer": runtime.pass_session_sealer,
+        "opener": runtime.pass_session_opener,
+        "cipher": runtime.legacy_session_cipher,
+        "dry_run": True,
+        "verify_only": False,
+        "batch_size": 7,
+        "limit": 9,
+    }
+    assert '"remaining_legacy": 0' in capsys.readouterr().out
+
+    revoked: dict[str, object] = {}
+    monkeypatch.setattr(
+        legacy_pass_session_migration,
+        "revoke_all_service_sessions",
+        lambda **options: revoked.update(options)
+        or {"sessions_cleared": 3, "dry_run": False},
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "botnote",
+            "pass-sessions-revoke-all",
+            "--reason",
+            "database_restored",
+            "--confirm",
+            "REVOKE-ALL-PASS-SESSIONS",
+        ],
+    )
+
+    cli.main()
+
+    assert revoked == {
+        "reason": "database_restored",
+        "dry_run": False,
+        "confirmed": True,
+    }
+    assert '"sessions_cleared": 3' in capsys.readouterr().out

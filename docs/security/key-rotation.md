@@ -14,7 +14,25 @@ Procédure :
 6. exécuter une seconde fois la commande : `reencrypted`, `remaining` et `calendar_digests_remaining` doivent valoir zéro, avec `complete: true` ;
 7. après sauvegarde post-rotation et validation applicative, retirer les anciennes clés puis redémarrer les services.
 
-La commande couvre les tokens et Chat IDs Telegram, les URL INPASS et les cookies PASS/HUB. Le contexte AES reste lié au type de secret et à l'identifiant du compte ou de la session. Aucun plaintext n'est écrit dans la sortie.
+La commande couvre les tokens et Chat IDs Telegram ainsi que les URL INPASS.
+Depuis G4A, elle ne traite plus les sessions PASS/HUB : celles-ci utilisent une
+enveloppe HPKE liée au compte, au login et à l'identifiant de session. Leur
+migration legacy possède une commande séparée et le worker normal cessera de
+charger la clé symétrique lors de la contraction G4B. Aucun plaintext n'est
+écrit dans les sorties.
+
+## Clé HPKE des sessions PASS/HUB
+
+Les nouvelles sessions sont scellées avec la clé publique active. Le worker
+ouvre uniquement le `key_id` déclaré avec son keyring privé et rechiffre avec la
+clé publique active lors d'un refresh. G4 ne crée pas de seconde clé
+opérationnelle. Une rotation future doit inventorier les lignes par
+`hpke_key_id`, conserver les anciennes clés privées de lecture jusqu'à un
+inventaire à zéro et ne jamais essayer toutes les clés.
+
+La perte de la clé privée ne détruit pas automatiquement les enveloppes. Le
+worker échoue fermé et l'exploitation décide soit de restaurer la clé, soit
+d'exécuter la révocation globale confirmée qui impose une reconnexion.
 
 En cas d'échec, conserver la nouvelle clé active et toutes les anciennes clés de lecture, corriger la cause, puis relancer. Ne jamais retirer une ancienne clé pour forcer la fin d'une rotation.
 
