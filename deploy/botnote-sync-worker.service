@@ -1,0 +1,64 @@
+[Unit]
+Description=IMTégrale isolated synchronization worker
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=botnote-sync
+Group=botnote-sync
+SupplementaryGroups=botnote-runtime botnote-sync-lock
+WorkingDirectory=/opt/botnote/current
+EnvironmentFile=/etc/botnote/botnote-runtime.env
+EnvironmentFile=/etc/botnote/botnote-sync.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+LoadCredential=imt-sync-credential-private:/etc/botnote/sync-hpke/imt-sync-credential-v1.private.raw
+LoadCredential=imt-sync-credential-public:/etc/botnote/sync-hpke/imt-sync-credential-v1.public.raw
+LoadCredential=pass-service-session-private:/etc/botnote/sync-hpke/pass-service-session-v1.private.raw
+LoadCredential=pass-service-session-public:/etc/botnote/sync-hpke/pass-service-session-v1.public.raw
+ExecStart=/opt/botnote/runtime/bin/botnote sync-worker
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+MemoryMax=384M
+MemorySwapMax=0
+TasksMax=64
+LimitCORE=0
+UMask=0077
+
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+PrivateMounts=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+ProtectProc=invisible
+ProcSubset=pid
+ReadOnlyPaths=/opt/botnote/current /opt/botnote/runtime
+ReadWritePaths=/run/botnote-sync-locks
+InaccessiblePaths=-/etc/botnote/botnote.env
+InaccessiblePaths=-/etc/botnote/sync-hpke
+InaccessiblePaths=-/etc/botnote/mtls
+InaccessiblePaths=-/opt/botnote-learning
+InaccessiblePaths=-/var/lib/botnote-admin
+InaccessiblePaths=-/var/backups/botnote
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

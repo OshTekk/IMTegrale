@@ -1,0 +1,157 @@
+from __future__ import annotations
+
+import os
+import runpy
+import subprocess
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[2]
+SYNC_UNIT = ROOT / "deploy" / "botnote-sync-worker.service"
+GENERIC_UNIT = ROOT / "deploy" / "botnote-job-worker@.service"
+WEB_UNIT = ROOT / "deploy" / "botnote-web.service"
+SCHEDULER_UNIT = ROOT / "deploy" / "botnote-scheduler.service"
+PROVISIONER = ROOT / "deploy" / "security" / "provision-sync-hpke-keys"
+PG_HBA_RULES = ROOT / "deploy" / "security" / "botnote-sync.pg-hba.conf"
+
+
+def test_dedicated_unit_has_fixed_credentials_and_hardening() -> None:
+    unit = SYNC_UNIT.read_text()
+    assert "User=botnote-sync" in unit
+    assert "Group=botnote-sync" in unit
+    assert "ExecStart=/opt/botnote/runtime/bin/botnote sync-worker" in unit
+    assert "EnvironmentFile=/etc/botnote/botnote.env" not in unit
+    assert unit.count("LoadCredential=") == 4
+    for logical_name in (
+        "imt-sync-credential-private",
+        "imt-sync-credential-public",
+        "pass-service-session-private",
+        "pass-service-session-public",
+    ):
+        assert f"LoadCredential={logical_name}:" in unit
+        assert f"Environment={logical_name}" not in unit
+    for directive in (
+        "PrivateMounts=true",
+        "ProtectProc=invisible",
+        "ProcSubset=pid",
+        "MemorySwapMax=0",
+        "LimitCORE=0",
+        "CapabilityBoundingSet=",
+        "InaccessiblePaths=-/etc/botnote/sync-hpke",
+        "ReadWritePaths=/run/botnote-sync-locks",
+    ):
+        assert directive in unit
+    assert "ExecCondition=/usr/bin/test %i != sync" in GENERIC_UNIT.read_text()
+
+
+def test_web_can_share_only_the_account_lock_boundary() -> None:
+    unit = WEB_UNIT.read_text()
+    assert "SupplementaryGroups=botnote-sync-lock" in unit
+    assert "ReadWritePaths=/run/botnote-sync-locks" in unit
+    assert "LoadCredential=" not in unit
+    assert "InaccessiblePaths=-/etc/botnote/sync-hpke" in unit
+
+
+def test_other_runtime_units_mask_hpke_sources_and_receive_no_credentials() -> None:
+    for path in (GENERIC_UNIT, SCHEDULER_UNIT):
+        unit = path.read_text()
+        assert "InaccessiblePaths=-/etc/botnote/sync-hpke" in unit
+        assert "LoadCredential=" not in unit
+
+
+def test_postgres_peer_identity_is_limited_to_the_application_database() -> None:
+    rules = [
+        line.split()
+        for line in PG_HBA_RULES.read_text().splitlines()
+        if line and not line.startswith("#")
+    ]
+    assert rules == [
+        ["local", "botnote", "botnote-sync", "peer"],
+        ["local", "all", "botnote-sync", "reject"],
+    ]
+
+
+def test_sync_environment_example_contains_no_hpke_or_unrelated_secrets() -> None:
+    example = (ROOT / "deploy" / "botnote-sync.env.example").read_text()
+    assert "BOTNOTE_AUTONOMOUS_SYNC_ENABLED=false" in example
+    assert "PRIVATE" not in example
+    assert "TELEGRAM" not in example
+    assert "ADMIN_" not in example
+    assert "LEARNING_" not in example
+
+
+def test_g3_has_no_business_data_or_route_integration() -> None:
+    application = ROOT / "backend" / "app"
+    forbidden_import = "sync_worker_credentials"
+    for path in (
+        *sorted((application / "routers").glob("*.py")),
+        application / "services" / "pass_sessions.py",
+        application / "services" / "pass_gateway.py",
+    ):
+        assert forbidden_import not in path.read_text()
+    assert "app.crypto" not in (application / "services" / "pass_sessions.py").read_text()
+    assert "ImtSyncCredential(" not in "\n".join(
+        path.read_text()
+        for path in sorted((application / "services").glob("*.py"))
+    )
+    tracked = subprocess.check_output(
+        ["git", "ls-files"],
+        cwd=ROOT,
+        text=True,
+    ).splitlines()
+    assert not any(Path(path).suffix in {".raw", ".key", ".pem"} for path in tracked)
+
+
+def test_provisioner_is_atomic_idempotent_and_verifiable(tmp_path: Path) -> None:
+    namespace = runpy.run_path(str(PROVISIONER))
+    provision = namespace["provision"]
+    verify = namespace["verify"]
+    provision_error = namespace["ProvisionError"]
+    target = tmp_path / "sync-hpke"
+
+    provision(target, require_root=False)
+    verify(target, require_root=False)
+
+    assert target.stat().st_mode & 0o777 == 0o700
+    assert {path.name for path in target.iterdir()} == namespace["EXPECTED_FILES"]
+    assert all(path.stat().st_mode & 0o777 == 0o400 for path in target.iterdir())
+    with pytest.raises(provision_error, match="SYNC_HPKE_TARGET_EXISTS"):
+        provision(target, require_root=False)
+
+
+def test_provisioner_detects_tampering_without_printing_keys(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    namespace = runpy.run_path(str(PROVISIONER))
+    target = tmp_path / "sync-hpke"
+    namespace["provision"](target, require_root=False)
+    private_path = target / "imt-sync-credential-v1.private.raw"
+    private_path.chmod(0o440)
+
+    with pytest.raises(namespace["ProvisionError"], match="SYNC_HPKE_VERIFY_FAILED"):
+        namespace["verify"](target, require_root=False)
+    assert capsys.readouterr().out == ""
+
+
+def test_provisioner_rejects_hardlinked_or_replaced_key_material(tmp_path: Path) -> None:
+    namespace = runpy.run_path(str(PROVISIONER))
+
+    hardlink_target = tmp_path / "hardlink-keyset"
+    namespace["provision"](hardlink_target, require_root=False)
+    source = hardlink_target / "pass-service-session-v1.public.raw"
+    source.chmod(0o600)
+    os.link(source, tmp_path / "public-copy")
+    source.chmod(0o400)
+    with pytest.raises(namespace["ProvisionError"], match="SYNC_HPKE_VERIFY_FAILED"):
+        namespace["verify"](hardlink_target, require_root=False)
+
+    symlink_target = tmp_path / "symlink-keyset"
+    namespace["provision"](symlink_target, require_root=False)
+    public_path = symlink_target / "imt-sync-credential-v1.public.raw"
+    public_path.chmod(0o600)
+    public_path.unlink()
+    public_path.symlink_to(tmp_path / "public-copy")
+    with pytest.raises(namespace["ProvisionError"], match="SYNC_HPKE_VERIFY_FAILED"):
+        namespace["verify"](symlink_target, require_root=False)

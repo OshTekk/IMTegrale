@@ -20,9 +20,10 @@ fenêtre de rollback.
 La migration crée également `imt_sync_credentials`, mais cette table reste vide
 et aucune route ne peut y écrire. G2 fournit désormais une
 [primitive HPKE générique](security/hpke-envelope-format.md), testée uniquement
-avec des clés et secrets fictifs en mémoire. Elle n'est branchée ni à cette
-table, ni aux API, ni aux workers. Aucun mot de passe ou fallback autonome n'est
-implémenté. Le détail des gates se trouve dans
+avec des clés et secrets fictifs en mémoire. G3 isole désormais le worker sync
+et lui injecte deux paires opérationnelles uniquement pour ses self-tests. Elle
+n'est branchée ni à cette table, ni aux API, ni aux données PASS/HUB. Aucun mot
+de passe ou fallback autonome n'est implémenté. Le détail des gates se trouve dans
 [`security/autonomous-sync-architecture.md`](security/autonomous-sync-architecture.md).
 
 ## Consentement
@@ -54,7 +55,7 @@ Les fréquences de base proposées sont `2`, `4`, `6`, `8`, `12` ou `24` heures.
 - selon le fuseau horaire du compte ;
 - lorsque l'intervalle choisi est écoulé depuis la dernière tentative, manuelle ou automatique.
 
-Le service systemd `botnote-scheduler.service`, séparé de l'API, examine les échéances toutes les 60 secondes. Ce réveil n'est pas une connexion à PASS : il sélectionne au plus un compte consentant, actif, échu et dans sa fenêtre ouvrée, puis écrit une demande et un job PostgreSQL dans la même transaction. `botnote-job-worker@sync.service` réclame ensuite le travail avec `FOR UPDATE SKIP LOCKED`. L'ancien `botnote-worker.timer` reste désactivé afin qu'un seul ordonnanceur possède cette responsabilité.
+Le service systemd `botnote-scheduler.service`, séparé de l'API, examine les échéances toutes les 60 secondes. Ce réveil n'est pas une connexion à PASS : il sélectionne au plus un compte consentant, actif, échu et dans sa fenêtre ouvrée, puis écrit une demande et un job PostgreSQL dans la même transaction. `botnote-sync-worker.service` réclame ensuite le travail avec `FOR UPDATE SKIP LOCKED`. L'ancien `botnote-worker.timer` reste désactivé afin qu'un seul ordonnanceur possède cette responsabilité.
 
 Une demande HTTP acceptée répond immédiatement `202` et reste consultable dans l'état de synchronisation. Elle ne dépend plus de la durée de vie du processus API. Chaque job possède une clé d'idempotence, un bail de 15 minutes, trois tentatives bornées avec backoff et un état `dead_letter`. Un worker interrompu avant acquittement laisse donc le job récupérable après expiration du bail. Les mutations académiques et la création d'une notification Telegram sont commitées ensemble ; le worker `outbox` ne déchiffre le token et le chat Telegram qu'au moment de l'envoi.
 
@@ -66,7 +67,7 @@ Toute réservation automatique actualise aussi le délai de fraîcheur manuel de
 
 ## Exploitation
 
-Après la migration `0017`, tous les anciens mots de passe chiffrés sont supprimés de façon irréversible. Les consentements automatiques restent enregistrés, mais les comptes concernés sont mis en pause jusqu'à leur prochaine authentification IMT. Depuis la migration additive `0020`, vérifier que `botnote-scheduler.service` et les instances `botnote-job-worker@sync.service`, `botnote-job-worker@calendar.service` et `botnote-job-worker@outbox.service` sont actives, et que `botnote-worker.timer` demeure désactivé. La commande de diagnostic `botnote sync-due` ne contacte plus PASS : elle réserve le prochain compte échu dans la file durable.
+Après la migration `0017`, tous les anciens mots de passe chiffrés sont supprimés de façon irréversible. Les consentements automatiques restent enregistrés, mais les comptes concernés sont mis en pause jusqu'à leur prochaine authentification IMT. Depuis G3, vérifier que `botnote-scheduler.service`, `botnote-sync-worker.service` et les instances `botnote-job-worker@calendar.service` et `botnote-job-worker@outbox.service` sont actives, et que `botnote-worker.timer` demeure désactivé. La commande de diagnostic `botnote sync-due` ne contacte plus PASS : elle réserve le prochain compte échu dans la file durable.
 
 Les jobs réussis sont conservés 7 jours, les notifications livrées 30 jours et les états `dead_letter` 90 jours. La maintenance horaire applique ces rétentions ainsi que celles des métriques PASS et calendrier. Une notification Telegram est livrée au moins une fois : un crash après acceptation par Telegram mais avant l'acquittement PostgreSQL peut produire un doublon, car Telegram ne fournit pas de clé d'idempotence exploitable.
 

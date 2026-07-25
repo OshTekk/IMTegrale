@@ -21,9 +21,10 @@ Cette session technique reste une capacité d'accès : le serveur doit pouvoir l
 Une instance auto-hébergée peut réserver à son unique compte propriétaire un mot de passe local hors base, hors dépôt et lisible uniquement par l'utilisateur système du service. Cette exception est désactivée par défaut, ne doit jamais être proposée à un compte public et augmente explicitement le risque accepté par cet exploitant.
 
 La fondation de synchronisation autonome ajoute un mode de domaine, une table
-vide et une [primitive HPKE isolée](docs/security/hpke-envelope-format.md).
-Cette primitive n'est importée par aucun chemin applicatif et aucune clé n'est
-configurée ou persistée. `autonomous` reste indisponible, le feature flag
+vide, une [primitive HPKE isolée](docs/security/hpke-envelope-format.md) et une
+[frontière worker dédiée](docs/security/sync-worker-isolation.md). Deux paires
+opérationnelles root-only alimentent uniquement les self-tests du worker sync ;
+aucune donnée utilisateur ne les utilise. `autonomous` reste indisponible, le feature flag
 associé est fermé et aucune route ne stocke de mot de passe. L'architecture
 cible et son [modèle de menace](docs/security/autonomous-sync-threat-model.md)
 sont documentés séparément ; ils ne décrivent pas une protection déjà active.

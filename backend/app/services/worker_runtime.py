@@ -21,6 +21,12 @@ from app.services.operations import record_runtime_heartbeat
 
 logger = logging.getLogger(__name__)
 WorkerKind = Literal["sync", "calendar", "outbox", "scheduler"]
+ISOLATED_SYNC_RUNTIME_DETAILS: dict[str, int | bool | str] = {
+    "runtime_profile": "isolated-sync-v1",
+    "hpke_credentials_ready": True,
+    "hpke_purposes": 2,
+    "dedicated_identity": True,
+}
 WORKER_POLL_SECONDS = 2
 HEARTBEAT_INTERVAL = timedelta(seconds=30)
 MAINTENANCE_INTERVAL = timedelta(hours=1)
@@ -70,7 +76,14 @@ def maintenance_cycle() -> None:
     cleanup_durable_state()
 
 
-def run_worker(kind: WorkerKind) -> None:
+def run_worker(
+    kind: WorkerKind,
+    *,
+    runtime_details: dict[str, int | bool | str] | None = None,
+) -> None:
+    if kind == "sync" and runtime_details != ISOLATED_SYNC_RUNTIME_DETAILS:
+        raise RuntimeError("SYNC_WORKER_NOT_ISOLATED")
+    base_details = dict(runtime_details or {})
     stop = threading.Event()
     instance_id = _runtime_instance_id(kind)
     started_at = utcnow()
@@ -86,12 +99,13 @@ def run_worker(kind: WorkerKind) -> None:
         current = utcnow()
         if not force and last_heartbeat_at and current - last_heartbeat_at < HEARTBEAT_INTERVAL:
             return
+        combined_details = base_details | (details or {})
         _write_worker_heartbeat(
             kind,
             instance_id,
             started_at,
             state=state,
-            details=details,
+            details=combined_details,
         )
         last_heartbeat_at = current
 

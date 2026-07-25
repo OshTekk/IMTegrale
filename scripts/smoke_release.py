@@ -102,6 +102,41 @@ def _hpke_wheel_roundtrip() -> None:
     del opened, keyring, envelope, frame, secret, context, recipient, native_key
 
 
+def _isolated_sync_credentials_roundtrip() -> None:
+    from app.crypto import RecipientPrivateKey
+    from app.services.sync_worker_credentials import (
+        CREDENTIAL_PRIVATE,
+        CREDENTIAL_PUBLIC,
+        SESSION_PRIVATE,
+        SESSION_PUBLIC,
+        load_sync_worker_credentials,
+        self_test_sync_worker_credentials,
+    )
+    from cryptography.hazmat.primitives.asymmetric import x25519
+
+    def pair() -> tuple[bytes, bytes]:
+        native = x25519.X25519PrivateKey.generate()
+        private = RecipientPrivateKey.from_raw_bytes(native.private_bytes_raw())
+        return native.private_bytes_raw(), private.public_key.to_raw_bytes()
+
+    with tempfile.TemporaryDirectory(prefix="imtegrale-sync-credentials-") as temporary:
+        directory = Path(temporary)
+        credential_private, credential_public = pair()
+        session_private, session_public = pair()
+        for name, value in {
+            CREDENTIAL_PRIVATE: credential_private,
+            CREDENTIAL_PUBLIC: credential_public,
+            SESSION_PRIVATE: session_private,
+            SESSION_PUBLIC: session_public,
+        }.items():
+            path = directory / name
+            path.write_bytes(value)
+            path.chmod(0o400)
+        credentials = load_sync_worker_credentials(directory)
+        self_test_sync_worker_credentials(credentials)
+        del credentials, credential_private, credential_public, session_private, session_public
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--wheel", type=Path, required=True)
@@ -120,11 +155,21 @@ def main() -> None:
     )
     with tempfile.TemporaryDirectory(prefix="imtegrale-wheel-") as temporary:
         with zipfile.ZipFile(args.wheel) as archive:
+            forbidden_key_names = {
+                "imt-sync-credential-v1.private.raw",
+                "imt-sync-credential-v1.public.raw",
+                "pass-service-session-v1.private.raw",
+                "pass-service-session-v1.public.raw",
+                "keyset.json",
+            }
+            if any(Path(name).name in forbidden_key_names for name in archive.namelist()):
+                raise SystemExit("release-smoke: operational key material is forbidden")
             archive.extractall(temporary)
         sys.path.insert(0, temporary)
         from app.main import app
 
         _hpke_wheel_roundtrip()
+        _isolated_sync_credentials_roundtrip()
         live_status, live_body = asyncio.run(_asgi_get(app, "/health/live"))
         root_status, root_body = asyncio.run(_asgi_get(app, "/"))
         if live_status != 200 or json.loads(live_body).get("status") != "ok":

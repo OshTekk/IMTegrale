@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import pwd
 import ssl
 
 import uvicorn
@@ -13,14 +15,47 @@ from app.admin_security import (
     normalize_admin_username,
     write_initial_credentials,
 )
-from app.config import get_settings
+from app.config import RuntimeRole, get_settings
 from app.database import Base, SessionLocal, engine
 from app.models import AdminUser
 from app.observability import configure_json_logging
 from app.services.key_rotation import reencrypt_stored_secrets
 from app.services.operations import operational_alert_codes
 from app.services.sync import sync_account, sync_all_accounts, sync_due_accounts
-from app.services.worker_runtime import run_worker
+from app.services.worker_runtime import ISOLATED_SYNC_RUNTIME_DETAILS, run_worker
+
+
+def _runtime_role(command: str, worker_kind: str | None = None) -> RuntimeRole:
+    if command == "serve":
+        return RuntimeRole.WEB
+    if command == "sync-worker":
+        return RuntimeRole.SYNC
+    if command == "worker":
+        return RuntimeRole(worker_kind or "")
+    return RuntimeRole.CLI
+
+
+def _run_isolated_sync_worker() -> None:
+    from app.services.sync_worker_credentials import (
+        SyncWorkerCredentialError,
+        load_sync_worker_credentials,
+        self_test_sync_worker_credentials,
+    )
+
+    settings = get_settings()
+    if settings.environment == "production":
+        try:
+            runtime_username = pwd.getpwuid(os.geteuid()).pw_name
+        except KeyError:
+            raise SystemExit("SYNC_WORKER_IDENTITY_INVALID") from None
+        if runtime_username != "botnote-sync":
+            raise SystemExit("SYNC_WORKER_IDENTITY_INVALID")
+    try:
+        credentials = load_sync_worker_credentials()
+        self_test_sync_worker_credentials(credentials)
+    except SyncWorkerCredentialError as exc:
+        raise SystemExit(exc.code) from None
+    run_worker("sync", runtime_details=ISOLATED_SYNC_RUNTIME_DETAILS)
 
 
 def main() -> None:
@@ -36,8 +71,9 @@ def main() -> None:
 
     subparsers.add_parser("sync-all")
     subparsers.add_parser("sync-due")
+    subparsers.add_parser("sync-worker")
     worker = subparsers.add_parser("worker")
-    worker.add_argument("kind", choices=("sync", "calendar", "outbox", "scheduler"))
+    worker.add_argument("kind", choices=("calendar", "outbox", "scheduler"))
     subparsers.add_parser("create-schema")
     admin_bootstrap = subparsers.add_parser("admin-bootstrap")
     admin_bootstrap.add_argument("--username", required=True)
@@ -50,7 +86,8 @@ def main() -> None:
 
     args = parser.parse_args()
     configure_json_logging()
-    get_settings().validate_secrets()
+    settings = get_settings()
+    settings.validate_for_runtime(_runtime_role(args.command, getattr(args, "kind", None)))
 
     if args.command == "serve":
         uvicorn.run(
@@ -64,9 +101,9 @@ def main() -> None:
             # formatter includes request paths, which may contain private content IDs.
             access_log=False,
             log_config=None,
-            ssl_certfile=str(get_settings().backend_tls_cert),
-            ssl_keyfile=str(get_settings().backend_tls_key),
-            ssl_ca_certs=str(get_settings().backend_tls_ca),
+            ssl_certfile=str(settings.backend_tls_cert),
+            ssl_keyfile=str(settings.backend_tls_key),
+            ssl_ca_certs=str(settings.backend_tls_ca),
             ssl_cert_reqs=ssl.CERT_REQUIRED,
             timeout_graceful_shutdown=10,
         )
@@ -82,6 +119,8 @@ def main() -> None:
         print(json.dumps(results, ensure_ascii=False))
         if any(not item["ok"] for item in results):
             raise SystemExit(1)
+    elif args.command == "sync-worker":
+        _run_isolated_sync_worker()
     elif args.command == "worker":
         run_worker(args.kind)
     elif args.command == "create-schema":
@@ -116,7 +155,7 @@ def main() -> None:
         print(json.dumps(result, sort_keys=True))
     elif args.command == "operations-check":
         with SessionLocal() as db:
-            alerts = operational_alert_codes(db, get_settings())
+            alerts = operational_alert_codes(db, settings)
         print(json.dumps({"ok": not alerts, "alerts": alerts}, sort_keys=True))
         if alerts:
             raise SystemExit(1)

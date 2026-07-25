@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from app.database import SessionLocal, utcnow
 from app.models import RuntimeHeartbeat
 from app.services import (
@@ -107,6 +108,27 @@ def test_regular_worker_records_success_error_and_clean_shutdown(monkeypatch) ->
 
     assert [item["state"] for item in error_heartbeats] == ["starting", "error", "stopping"]
     assert error_heartbeats[1]["details"] == {"error_code": "RuntimeError"}
+
+
+def test_sync_worker_requires_and_persists_the_isolated_profile(monkeypatch) -> None:
+    with pytest.raises(RuntimeError, match="SYNC_WORKER_NOT_ISOLATED"):
+        worker_runtime.run_worker("sync")
+
+    event = OneCycleEvent()
+    heartbeats = _isolate_runtime(monkeypatch, event)
+    monkeypatch.setattr(worker_runtime, "process_one", lambda _kind: False)
+
+    worker_runtime.run_worker(
+        "sync",
+        runtime_details=worker_runtime.ISOLATED_SYNC_RUNTIME_DETAILS,
+    )
+
+    assert heartbeats
+    assert all(
+        all(item["details"][key] == value for key, value in expected.items())
+        for item in heartbeats
+        for expected in (worker_runtime.ISOLATED_SYNC_RUNTIME_DETAILS,)
+    )
 
 
 def test_scheduler_worker_reports_cycle_and_maintenance_failures(monkeypatch) -> None:  # noqa: ANN001

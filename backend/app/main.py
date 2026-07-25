@@ -17,7 +17,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from app import __version__
 from app.admin_security import require_admin_network
 from app.api_models import ApiErrorEnvelope
-from app.config import get_settings
+from app.config import RuntimeRole, get_settings
 from app.database import SessionLocal
 from app.errors import api_error_response, validation_error_response
 from app.learning.access import (
@@ -46,6 +46,7 @@ from app.security import get_auth_context, require_action
 from app.services.operations import readiness_checks
 
 settings_config = get_settings()
+settings_config.validate_for_runtime(RuntimeRole.WEB)
 
 COMMON_API_ERROR_RESPONSES = {
     code: {"model": ApiErrorEnvelope, "description": description}

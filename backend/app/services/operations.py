@@ -22,6 +22,19 @@ from app.security import ensure_utc
 
 EXPECTED_DATABASE_REVISION = "0025"
 REQUIRED_RUNTIME_COMPONENTS = ("scheduler", "sync", "calendar", "outbox")
+ISOLATED_SYNC_PROFILE = {
+    "runtime_profile": "isolated-sync-v1",
+    "hpke_credentials_ready": True,
+    "hpke_purposes": 2,
+    "dedicated_identity": True,
+}
+_SAFE_HEARTBEAT_DETAIL_KEYS = {
+    "processed",
+    "queued",
+    "recovered",
+    "error_code",
+    *ISOLATED_SYNC_PROFILE,
+}
 
 
 def record_runtime_heartbeat(
@@ -37,7 +50,7 @@ def record_runtime_heartbeat(
     safe_details = {
         key: value
         for key, value in (details or {}).items()
-        if key in {"processed", "queued", "recovered", "error_code"}
+        if key in _SAFE_HEARTBEAT_DETAIL_KEYS
         and isinstance(value, (int, bool, str))
     }
     values = {
@@ -81,16 +94,29 @@ def readiness_checks(db: Session, settings: Settings) -> dict[str, bool]:
     checks["migration"] = revision == EXPECTED_DATABASE_REVISION
     current = utcnow()
     cutoff = current - timedelta(seconds=settings.worker_heartbeat_ttl_seconds)
-    fresh = set(
+    fresh_heartbeats = list(
         db.scalars(
-            select(RuntimeHeartbeat.component).where(
+            select(RuntimeHeartbeat).where(
                 RuntimeHeartbeat.component.in_(REQUIRED_RUNTIME_COMPONENTS),
                 RuntimeHeartbeat.state.in_({"starting", "ok"}),
                 RuntimeHeartbeat.seen_at >= cutoff,
             )
         )
     )
+    fresh = {heartbeat.component for heartbeat in fresh_heartbeats}
     checks["workers"] = fresh == set(REQUIRED_RUNTIME_COMPONENTS)
+    sync_heartbeat = next(
+        (heartbeat for heartbeat in fresh_heartbeats if heartbeat.component == "sync"),
+        None,
+    )
+    checks["sync_isolated"] = bool(
+        sync_heartbeat
+        and all(
+            sync_heartbeat.details.get(key) == value
+            for key, value in ISOLATED_SYNC_PROFILE.items()
+        )
+    )
+    checks["workers"] = checks["workers"] and checks["sync_isolated"]
     return checks
 
 
@@ -217,6 +243,16 @@ def operational_alert_codes(db: Session, settings: Settings) -> list[str]:
         alerts.add("DATABASE_MIGRATION_MISMATCH")
     if not checks["workers"]:
         alerts.add("WORKER_HEARTBEAT_STALE")
+    sync_heartbeat = db.get(RuntimeHeartbeat, "sync")
+    if sync_heartbeat is not None and any(
+        sync_heartbeat.details.get(key) != value
+        for key, value in ISOLATED_SYNC_PROFILE.items()
+    ):
+        alerts.add("SYNC_WORKER_NOT_ISOLATED")
+    if sync_heartbeat is not None and not sync_heartbeat.details.get(
+        "hpke_credentials_ready", False
+    ):
+        alerts.add("SYNC_HPKE_KEYS_NOT_READY")
     for queue in metrics["queues"]:
         name = str(queue["name"]).upper()
         if queue["dead_letter"]:

@@ -4,10 +4,11 @@ import fcntl
 import hashlib
 import logging
 import math
+import os
 import re
+import stat
 from contextlib import contextmanager
 from datetime import timedelta
-from pathlib import Path
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
@@ -105,10 +106,38 @@ def validate_pass_entries(entries: list[PassEntry]) -> None:
 
 @contextmanager
 def account_sync_lock(account_id: str):
-    directory = get_settings().sync_lock_dir
-    directory.mkdir(parents=True, exist_ok=True)
-    lock_path = Path(directory) / f"sync-{account_id}.lock"
-    with lock_path.open("w") as handle:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", account_id):
+        raise ValueError("Invalid account identifier for synchronization lock")
+    settings = get_settings()
+    directory = settings.sync_lock_dir
+    if settings.environment == "production":
+        if not directory.is_dir():
+            raise RuntimeError("Synchronization lock directory is unavailable")
+    else:
+        directory.mkdir(parents=True, exist_ok=True)
+    directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    filename = f"sync-{account_id}.lock"
+    try:
+        directory_metadata = os.fstat(directory_fd)
+        if (
+            not stat.S_ISDIR(directory_metadata.st_mode)
+            or directory_metadata.st_mode & stat.S_IWOTH
+            or (
+                settings.environment == "production"
+                and stat.S_IMODE(directory_metadata.st_mode) != 0o2770
+            )
+        ):
+            raise RuntimeError("Synchronization lock directory permissions are invalid")
+        creation_fd = _open_shared_lock_file(directory_fd, ".creation.lock")
+        try:
+            fcntl.flock(creation_fd, fcntl.LOCK_EX)
+            lock_fd = _open_shared_lock_file(directory_fd, filename)
+        finally:
+            fcntl.flock(creation_fd, fcntl.LOCK_UN)
+            os.close(creation_fd)
+    finally:
+        os.close(directory_fd)
+    with os.fdopen(lock_fd, "r+") as handle:
         try:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
@@ -117,6 +146,35 @@ def account_sync_lock(account_id: str):
             yield
         finally:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _open_shared_lock_file(directory_fd: int, filename: str) -> int:
+    flags = os.O_RDWR | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    created = False
+    try:
+        descriptor = os.open(
+            filename,
+            flags | os.O_CREAT | os.O_EXCL,
+            0o660,
+            dir_fd=directory_fd,
+        )
+        created = True
+    except FileExistsError:
+        descriptor = os.open(filename, flags, dir_fd=directory_fd)
+    try:
+        if created:
+            os.fchmod(descriptor, 0o660)
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or stat.S_IMODE(metadata.st_mode) != 0o660
+        ):
+            raise OSError("Synchronization lock file permissions are invalid")
+        return descriptor
+    except Exception:
+        os.close(descriptor)
+        raise
 
 
 def apply_pass_entries(

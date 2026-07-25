@@ -130,12 +130,23 @@ def test_production_readiness_requires_current_migration_and_fresh_workers() -> 
                 instance_id=f"{component}:fictif",
                 state="ok",
                 started_at=started,
+                details=(
+                    {
+                        "runtime_profile": "isolated-sync-v1",
+                        "hpke_credentials_ready": True,
+                        "hpke_purposes": 2,
+                        "dedicated_identity": True,
+                    }
+                    if component == "sync"
+                    else None
+                ),
             )
         db.commit()
         assert readiness_checks(db, settings) == {
             "database": True,
             "migration": True,
             "workers": True,
+            "sync_isolated": True,
         }
 
         stale = db.get(RuntimeHeartbeat, "scheduler")
@@ -155,6 +166,36 @@ def test_non_production_readiness_does_not_depend_on_workers() -> None:
             "migration": True,
             "workers": True,
         }
+
+
+def test_legacy_sync_heartbeat_is_not_considered_ready() -> None:
+    settings = Settings.model_construct(
+        environment="production",
+        worker_heartbeat_ttl_seconds=180,
+    )
+    started = utcnow()
+    with SessionLocal() as db:
+        db.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+        db.execute(
+            text("INSERT INTO alembic_version (version_num) VALUES (:revision)"),
+            {"revision": EXPECTED_DATABASE_REVISION},
+        )
+        for component in REQUIRED_RUNTIME_COMPONENTS:
+            record_runtime_heartbeat(
+                db,
+                component=component,
+                instance_id=f"{component}:legacy-fixture",
+                state="ok",
+                started_at=started,
+            )
+        db.commit()
+
+        checks = readiness_checks(db, settings)
+        assert checks["workers"] is False
+        assert checks["sync_isolated"] is False
+        assert "SYNC_WORKER_NOT_ISOLATED" in operations.operational_alert_codes(db, settings)
+        db.execute(text("DROP TABLE alembic_version"))
+        db.commit()
 
 
 def test_operational_alerts_are_aggregate_and_stable(monkeypatch) -> None:  # noqa: ANN001

@@ -2,11 +2,14 @@
 
 ## État de cette release
 
-Cette release termine les gates **G1** et **G2**. G1 introduit le vocabulaire de
+Cette release termine les gates **G1**, **G2** et **G3**. G1 introduit le vocabulaire de
 domaine, le schéma additif et les gardes. G2 ajoute un
 [format d'enveloppe HPKE](hpke-envelope-format.md) générique, versionné et
-entièrement isolé. Il n'est relié ni aux comptes, ni à la table de credentials,
-ni aux API, ni aux workers. La release ne conserve toujours aucun mot de passe
+entièrement isolé. G3 ajoute la
+[frontière système du worker sync](sync-worker-isolation.md), ses clés
+opérationnelles hors Git et ses self-tests synthétiques. HPKE n'est relié ni aux
+comptes, ni à la table de credentials, ni aux API, ni aux données PASS/HUB.
+La release ne conserve toujours aucun mot de passe
 IMT et ne permet aucune reconnexion autonome.
 
 Les modes cibles sont :
@@ -147,16 +150,17 @@ Le paquet `app.crypto` utilise directement l'API one-shot HPKE de
 - un frame credential fixe de 3 072 octets.
 
 Les tests emploient uniquement des clés et secrets fictifs en mémoire. Le
-smoke-test du wheel effectue un round-trip isolé, sans persistance ni appel
-réseau. Aucun chemin applicatif n'importe ce paquet dans G2.
+smoke-test du wheel et le démarrage du worker sync effectuent des round-trips
+isolés, sans persistance ni appel réseau. Le seul chemin applicatif chargeant
+les clés privées est `sync-worker -> loader -> self-tests`.
 
-## Architecture cible, encore non implémentée
+## Frontière G3 livrée
 
-La cible envisagée est une enveloppe asymétrique standard, chiffrable par le
-web avec une clé publique et déchiffrable uniquement par le worker sync. La
-primitive est désormais validée par G2. Les clés opérationnelles, leur
-chargement et la séparation des processus relèvent de G3 et ne sont pas
-présents ici.
+Deux paires X25519 distinctes existent hors Git sous un répertoire root-only.
+systemd les copie sous quatre noms fixes uniquement dans
+`CREDENTIALS_DIRECTORY` de l'unité `botnote-sync-worker.service`. Le worker
+possède une identité Unix, un environnement et un rôle PostgreSQL dédiés.
+Le web, scheduler, calendar et outbox ne reçoivent aucune clé privée.
 
 La séparation cible devra garantir :
 
@@ -182,12 +186,12 @@ ne la transforme pas en credential et ne l'associe pas au mode
 | --- | --- | --- |
 | G1 | Schéma, modes, API compatible et gardes fermés | Terminé |
 | G2 | Module HPKE versionné avec clés entièrement fictives | Terminé |
-| G3 | Worker sync dédié et clé privée isolée | Non terminé |
+| G3 | Worker sync dédié et clé privée isolée | Terminé |
 | G4 | Cookies PASS/HUB migrés vers l'isolation worker-only | Non terminé |
 | G5 | API d'enrôlement, renouvellement et suppression | Non terminé |
 | G6 | Fallback autonome, révocation et rotation | Non terminé |
 | G7 | UX, consentement distinct et activation canary | Non terminé |
 
-`autonomous` reste indisponible tant que G3 à G7 ne sont pas validés. Chaque
+`autonomous` reste indisponible tant que G4 à G7 ne sont pas validés. Chaque
 gate doit conserver un rollback documenté et employer uniquement des secrets
 fictifs en test.

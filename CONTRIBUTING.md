@@ -59,5 +59,9 @@ remplacement.
 - Signalez explicitement toute migration, nouvelle dépendance, donnée persistée ou modification du modèle de menace.
 - Vérifiez le lint, les tests, le build, le scan de secrets et les audits de dépendances avant ouverture.
 - Toute modification de la chaîne de release doit conserver le SBOM CycloneDX, le manifeste SHA-256, l'audit des frontières wheel/frontend et le smoke-test de l'artefact retéléchargé depuis GitHub. Aucun fichier ne peut être reconstruit, restauré ou remplacé entre le téléchargement, la vérification et l'installation.
+- Le worker sync est une frontière de secrets : aucune clé HPKE raw ne doit
+  entrer dans Git, un environnement, un argument, PostgreSQL, un log, une
+  fixture persistée ou un artefact. Les tests créent deux paires éphémères et
+  vérifient le loader uniquement dans des répertoires temporaires.
 
 Les vulnérabilités ne doivent pas être proposées par pull request publique. Utilisez la procédure de [`SECURITY.md`](SECURITY.md).

@@ -2,9 +2,11 @@
 
 ## Portée
 
-Le gate G2 fournit une primitive interne générique. Elle n'est reliée ni aux
-comptes, ni à PostgreSQL, ni aux API, ni aux sessions réelles, ni aux workers.
-Elle ne lit aucune configuration et ne charge aucun fichier de clé.
+Le gate G2 fournit une primitive interne générique. G3 l'utilise uniquement
+pour vérifier au démarrage les deux paires opérationnelles du worker sync avec
+des round-trips synthétiques. Elle reste sans lien avec les comptes,
+PostgreSQL, les API ou les sessions réelles. Le module cryptographique lui-même
+ne lit toujours aucune configuration et ne charge aucun fichier de clé.
 
 Le module utilise directement
 [l'API one-shot HPKE de `cryptography 49`](https://cryptography.io/en/49.0.0/hazmat/primitives/hpke/)
@@ -60,8 +62,8 @@ envelope = seal_envelope(
 )
 ```
 
-G2 n'expose cet appel depuis aucun routeur, worker ou modèle persistant. Le
-smoke-test du wheel réalise le même type de round-trip uniquement en mémoire.
+Aucun routeur ou modèle persistant n'expose cet appel. Le smoke-test du wheel et
+le worker isolé réalisent le même type de round-trip uniquement en mémoire.
 
 ## Enveloppe binaire v1
 
@@ -202,5 +204,6 @@ privées pourront rester temporairement dans le keyring de lecture, sélectionn�
 par leur `key_id`, sans devenir des clés actives d'écriture.
 
 Les exemples et tests emploient uniquement des identités, clés et secrets
-fictifs générés en mémoire. Aucune valeur opérationnelle n'est incluse dans le
-wheel ou l'artefact de release.
+fictifs générés en mémoire. Les clés opérationnelles G3 sont provisionnées
+root-only hors Git et injectées par systemd ; aucune valeur n'est incluse dans
+le wheel, le SBOM ou l'artefact de release.

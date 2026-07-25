@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import ipaddress
 import stat
+import sys
+from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -10,6 +12,15 @@ from urllib.parse import urlsplit
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class RuntimeRole(StrEnum):
+    WEB = "web"
+    SYNC = "sync"
+    CALENDAR = "calendar"
+    OUTBOX = "outbox"
+    SCHEDULER = "scheduler"
+    CLI = "cli"
 
 
 class Settings(BaseSettings):
@@ -44,7 +55,7 @@ class Settings(BaseSettings):
     scheduler_poll_seconds: int = Field(default=60, ge=15, le=900)
     worker_heartbeat_ttl_seconds: int = Field(default=180, ge=60, le=900)
     autonomous_sync_enabled: bool = False
-    sync_lock_dir: Path = Path("/run/botnote")
+    sync_lock_dir: Path = Path("/run/botnote-sync-locks")
     trusted_proxy_ips: list[str] = Field(default_factory=lambda: ["127.0.0.1"])
     admin_allowed_identities: list[str] = Field(default_factory=list)
     admin_session_ttl_hours: int = Field(default=8, ge=1, le=24)
@@ -176,19 +187,106 @@ class Settings(BaseSettings):
             )
         return self
 
-    def validate_secrets(self) -> None:
-        self.validate_learning_content_boundary()
+    def validate_for_runtime(self, role: RuntimeRole | str) -> None:
+        try:
+            runtime_role = RuntimeRole(role)
+        except (TypeError, ValueError):
+            raise RuntimeError("Unknown runtime role") from None
+        if runtime_role is RuntimeRole.WEB:
+            self.validate_learning_content_boundary()
         if self.environment == "test":
             return
+
+        needs_credential_key = runtime_role in {
+            RuntimeRole.WEB,
+            RuntimeRole.SYNC,
+            RuntimeRole.CALENDAR,
+            RuntimeRole.OUTBOX,
+            RuntimeRole.CLI,
+        }
+        needs_token_pepper = runtime_role in {
+            RuntimeRole.WEB,
+            RuntimeRole.SYNC,
+            RuntimeRole.SCHEDULER,
+            RuntimeRole.CLI,
+        }
+        if needs_credential_key and not self.credential_key:
+            raise RuntimeError("BOTNOTE_CREDENTIAL_KEY is required")
+        if needs_token_pepper and not self.token_pepper:
+            raise RuntimeError("BOTNOTE_TOKEN_PEPPER is required")
+
+        if self.environment == "production":
+            if runtime_role is RuntimeRole.WEB:
+                for path in (self.backend_tls_cert, self.backend_tls_key, self.backend_tls_ca):
+                    if not path.is_file():
+                        raise RuntimeError(f"Required backend mTLS file is missing: {path}")
+                self.validate_production_invariants()
+            else:
+                if not self.database_url.startswith("postgresql+psycopg:"):
+                    raise RuntimeError("Production requires PostgreSQL through psycopg")
+                if runtime_role is RuntimeRole.SYNC:
+                    database_target = urlsplit(self.database_url)
+                    if (
+                        database_target.scheme != "postgresql+psycopg"
+                        or database_target.netloc
+                        or database_target.path != "/botnote"
+                        or database_target.query
+                        or database_target.fragment
+                    ):
+                        raise RuntimeError(
+                            "Sync production requires local peer PostgreSQL access "
+                            "to the botnote database"
+                        )
+                    if not self.sync_lock_dir.is_absolute():
+                        raise RuntimeError("BOTNOTE_SYNC_LOCK_DIR must be an absolute path")
+                    try:
+                        lock_metadata = self.sync_lock_dir.lstat()
+                    except OSError:
+                        raise RuntimeError(
+                            "BOTNOTE_SYNC_LOCK_DIR must be provisioned before startup"
+                        ) from None
+                    if (
+                        stat.S_ISLNK(lock_metadata.st_mode)
+                        or not stat.S_ISDIR(lock_metadata.st_mode)
+                    ):
+                        raise RuntimeError("BOTNOTE_SYNC_LOCK_DIR must be a real directory")
+                    expected_lock_mode = 0o2770 if sys.platform.startswith("linux") else 0o770
+                    if stat.S_IMODE(lock_metadata.st_mode) != expected_lock_mode:
+                        raise RuntimeError("BOTNOTE_SYNC_LOCK_DIR must use mode 2770")
+                if needs_credential_key:
+                    self._validate_credential_keyring()
+                if needs_token_pepper:
+                    self._validate_token_peppers()
+
+    def validate_secrets(self) -> None:
+        """Backward-compatible full web validation for existing callers."""
+
+        self.validate_for_runtime(RuntimeRole.WEB)
+
+    def _validate_credential_keyring(self) -> None:
         if not self.credential_key:
             raise RuntimeError("BOTNOTE_CREDENTIAL_KEY is required")
+        keyring = (self.credential_key, *self.credential_previous_keys)
+        decoded_keys: list[bytes] = []
+        for encoded_key in keyring:
+            try:
+                decoded = base64.urlsafe_b64decode(encoded_key + "=" * (-len(encoded_key) % 4))
+            except Exception as exc:
+                raise RuntimeError("Credential keys must be URL-safe base64") from exc
+            if len(decoded) != 32:
+                raise RuntimeError("Credential keys must decode to exactly 32 bytes")
+            decoded_keys.append(decoded)
+        if len(set(decoded_keys)) != len(decoded_keys):
+            raise RuntimeError("Credential keyring entries must be unique")
+
+    def _validate_token_peppers(self) -> None:
         if not self.token_pepper:
             raise RuntimeError("BOTNOTE_TOKEN_PEPPER is required")
-        if self.environment == "production":
-            for path in (self.backend_tls_cert, self.backend_tls_key, self.backend_tls_ca):
-                if not path.is_file():
-                    raise RuntimeError(f"Required backend mTLS file is missing: {path}")
-            self.validate_production_invariants()
+        peppers = (self.token_pepper, *self.token_previous_peppers)
+        if any(len(pepper.encode("utf-8")) < 32 for pepper in peppers):
+            raise RuntimeError("Token peppers must contain at least 32 bytes")
+        if len(set(peppers)) != len(peppers):
+            raise RuntimeError("Token peppers must be unique")
 
     def validate_production_invariants(self) -> None:
         parsed_origin = urlsplit(self.public_origin)
@@ -206,7 +304,6 @@ class Settings(BaseSettings):
             raise RuntimeError("BOTNOTE_SECURE_COOKIES must remain enabled in production")
         if not self.database_url.startswith("postgresql+psycopg:"):
             raise RuntimeError("Production requires PostgreSQL through psycopg")
-
         normalized_hosts = {host.strip().casefold() for host in self.allowed_hosts}
         if not normalized_hosts or "*" in normalized_hosts:
             raise RuntimeError("BOTNOTE_ALLOWED_HOSTS must contain exact hostnames")
@@ -227,24 +324,12 @@ class Settings(BaseSettings):
         ):
             raise RuntimeError("BOTNOTE_ADMIN_ALLOWED_IDENTITIES must be a private exact allowlist")
 
-        keyring = (self.credential_key, *self.credential_previous_keys)
-        decoded_keys: list[bytes] = []
-        for encoded_key in keyring:
-            try:
-                decoded = base64.urlsafe_b64decode(encoded_key + "=" * (-len(encoded_key) % 4))
-            except Exception as exc:
-                raise RuntimeError("Credential keys must be URL-safe base64") from exc
-            if len(decoded) != 32:
-                raise RuntimeError("Credential keys must decode to exactly 32 bytes")
-            decoded_keys.append(decoded)
-        if len(set(decoded_keys)) != len(decoded_keys):
-            raise RuntimeError("Credential keyring entries must be unique")
-
-        peppers = (self.token_pepper, *self.token_previous_peppers)
-        if any(len(pepper.encode("utf-8")) < 32 for pepper in peppers):
-            raise RuntimeError("Token peppers must contain at least 32 bytes")
-        if len(set(peppers)) != len(peppers):
-            raise RuntimeError("Token peppers must be unique")
+        self._validate_credential_keyring()
+        self._validate_token_peppers()
+        decoded_keys = [
+            base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+            for value in (self.credential_key, *self.credential_previous_keys)
+        ]
         if self.token_pepper.encode("utf-8") in decoded_keys:
             raise RuntimeError("Credential encryption and token hashing must use different secrets")
 
@@ -274,6 +359,4 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    settings = Settings()
-    settings.validate_secrets()
-    return settings
+    return Settings()

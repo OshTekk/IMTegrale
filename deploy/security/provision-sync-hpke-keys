@@ -1,0 +1,315 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import secrets
+import shutil
+import stat
+from datetime import UTC, datetime
+from pathlib import Path
+
+from app.crypto import SUITE_ID, HpkeEnvelopeError, RecipientPrivateKey, RecipientPublicKey
+from cryptography.hazmat.primitives.asymmetric import x25519
+
+KEYSET_VERSION = 1
+DEFAULT_DIRECTORY = Path("/etc/botnote/sync-hpke")
+KEYSET_FILE = "keyset.json"
+PURPOSES = {
+    "imt-sync-credential": (
+        "imt-sync-credential-v1.private.raw",
+        "imt-sync-credential-v1.public.raw",
+    ),
+    "pass-service-session": (
+        "pass-service-session-v1.private.raw",
+        "pass-service-session-v1.public.raw",
+    ),
+}
+EXPECTED_FILES = {
+    KEYSET_FILE,
+    *(filename for filenames in PURPOSES.values() for filename in filenames),
+}
+RAW_KEY_BYTES = 32
+MAX_KEYSET_BYTES = 16_384
+
+
+class ProvisionError(RuntimeError):
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
+
+def _require_safe_parent(target: Path, *, require_root: bool) -> int:
+    if not target.is_absolute() or target.name in {"", ".", ".."}:
+        raise ProvisionError("SYNC_HPKE_PATH_INVALID")
+    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    try:
+        parent_fd = os.open(target.parent, flags)
+    except OSError:
+        raise ProvisionError("SYNC_HPKE_PATH_INVALID") from None
+    metadata = os.fstat(parent_fd)
+    if require_root and (metadata.st_uid != 0 or stat.S_IMODE(metadata.st_mode) & 0o022):
+        os.close(parent_fd)
+        raise ProvisionError("SYNC_HPKE_PATH_INVALID")
+    return parent_fd
+
+
+def _write_exclusive(directory_fd: int, name: str, value: bytes) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    file_fd = os.open(name, flags, 0o400, dir_fd=directory_fd)
+    try:
+        view = memoryview(value)
+        while view:
+            written = os.write(file_fd, view)
+            if written <= 0:
+                raise ProvisionError("SYNC_HPKE_WRITE_FAILED")
+            view = view[written:]
+        os.fchmod(file_fd, 0o400)
+        os.fsync(file_fd)
+    finally:
+        os.close(file_fd)
+
+
+def _new_pair() -> tuple[bytes, bytes, str]:
+    native = x25519.X25519PrivateKey.generate()
+    private_raw = native.private_bytes_raw()
+    private_key = RecipientPrivateKey.from_raw_bytes(private_raw)
+    public_raw = private_key.public_key.to_raw_bytes()
+    return private_raw, public_raw, private_key.key_id
+
+
+def provision(target: Path = DEFAULT_DIRECTORY, *, require_root: bool = True) -> None:
+    if require_root and os.geteuid() != 0:
+        raise ProvisionError("SYNC_HPKE_ROOT_REQUIRED")
+    previous_umask = os.umask(0o077)
+    try:
+        parent_fd = _require_safe_parent(target, require_root=require_root)
+        temporary_name = f".{target.name}.provision-{secrets.token_hex(8)}"
+        temporary = target.parent / temporary_name
+        try:
+            try:
+                os.stat(target.name, dir_fd=parent_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            else:
+                raise ProvisionError("SYNC_HPKE_TARGET_EXISTS")
+            try:
+                os.mkdir(temporary_name, 0o700, dir_fd=parent_fd)
+            except FileExistsError:
+                raise ProvisionError("SYNC_HPKE_TARGET_EXISTS") from None
+            temporary_fd = os.open(
+                temporary_name,
+                os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=parent_fd,
+            )
+            try:
+                entries: list[dict[str, object]] = []
+                key_ids: set[str] = set()
+                created_at = datetime.now(UTC).isoformat()
+                for purpose, (private_name, public_name) in PURPOSES.items():
+                    private_raw, public_raw, key_id = _new_pair()
+                    if key_id in key_ids:
+                        raise ProvisionError("SYNC_HPKE_KEYS_NOT_DISTINCT")
+                    key_ids.add(key_id)
+                    _write_exclusive(temporary_fd, private_name, private_raw)
+                    _write_exclusive(temporary_fd, public_name, public_raw)
+                    entries.append(
+                        {
+                            "purpose": purpose,
+                            "key_id": key_id,
+                            "private_file": private_name,
+                            "public_file": public_name,
+                            "created_at": created_at,
+                        }
+                    )
+                    del private_raw, public_raw
+                manifest = json.dumps(
+                    {
+                        "version": KEYSET_VERSION,
+                        "suite_id": SUITE_ID,
+                        "keys": entries,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+                _write_exclusive(temporary_fd, KEYSET_FILE, manifest)
+                os.fsync(temporary_fd)
+            finally:
+                os.close(temporary_fd)
+            try:
+                os.rename(
+                    temporary_name,
+                    target.name,
+                    src_dir_fd=parent_fd,
+                    dst_dir_fd=parent_fd,
+                )
+            except FileExistsError:
+                raise ProvisionError("SYNC_HPKE_TARGET_EXISTS") from None
+            os.fsync(parent_fd)
+        except Exception:
+            if temporary.exists() and not temporary.is_symlink():
+                shutil.rmtree(temporary)
+            raise
+        finally:
+            os.close(parent_fd)
+    finally:
+        os.umask(previous_umask)
+
+
+def _read_checked_file(
+    directory_fd: int,
+    name: str,
+    *,
+    expected_size: int | None,
+    require_root: bool,
+) -> bytes:
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+    try:
+        file_fd = os.open(name, flags, dir_fd=directory_fd)
+    except OSError:
+        raise ProvisionError("SYNC_HPKE_VERIFY_FAILED") from None
+    try:
+        metadata = os.fstat(file_fd)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or stat.S_IMODE(metadata.st_mode) != 0o400
+            or (require_root and (metadata.st_uid != 0 or metadata.st_gid != 0))
+        ):
+            raise ProvisionError("SYNC_HPKE_VERIFY_FAILED")
+        limit = expected_size if expected_size is not None else MAX_KEYSET_BYTES
+        value = os.read(file_fd, limit + 1)
+        if expected_size is not None and len(value) != expected_size:
+            raise ProvisionError("SYNC_HPKE_VERIFY_FAILED")
+        if expected_size is None and (not value or len(value) > limit):
+            raise ProvisionError("SYNC_HPKE_VERIFY_FAILED")
+        return value
+    finally:
+        os.close(file_fd)
+
+
+def verify(target: Path = DEFAULT_DIRECTORY, *, require_root: bool = True) -> None:
+    if require_root and os.geteuid() != 0:
+        raise ProvisionError("SYNC_HPKE_ROOT_REQUIRED")
+    parent_fd = _require_safe_parent(target, require_root=require_root)
+    try:
+        flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        try:
+            directory_fd = os.open(target.name, flags, dir_fd=parent_fd)
+        except OSError:
+            raise ProvisionError("SYNC_HPKE_VERIFY_FAILED") from None
+        try:
+            metadata = os.fstat(directory_fd)
+            if (
+                not stat.S_ISDIR(metadata.st_mode)
+                or stat.S_IMODE(metadata.st_mode) != 0o700
+                or (require_root and (metadata.st_uid != 0 or metadata.st_gid != 0))
+                or set(os.listdir(directory_fd)) != EXPECTED_FILES
+            ):
+                raise ProvisionError("SYNC_HPKE_VERIFY_FAILED")
+            manifest_raw = _read_checked_file(
+                directory_fd,
+                KEYSET_FILE,
+                expected_size=None,
+                require_root=require_root,
+            )
+            try:
+                manifest = json.loads(manifest_raw)
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                raise ProvisionError("SYNC_HPKE_VERIFY_FAILED") from None
+            if (
+                not isinstance(manifest, dict)
+                or set(manifest) != {"version", "suite_id", "keys"}
+                or manifest["version"] != KEYSET_VERSION
+                or manifest["suite_id"] != SUITE_ID
+                or not isinstance(manifest["keys"], list)
+                or len(manifest["keys"]) != len(PURPOSES)
+            ):
+                raise ProvisionError("SYNC_HPKE_VERIFY_FAILED")
+            observed_ids: set[str] = set()
+            observed_purposes: set[str] = set()
+            for entry in manifest["keys"]:
+                if not isinstance(entry, dict) or set(entry) != {
+                    "purpose",
+                    "key_id",
+                    "private_file",
+                    "public_file",
+                    "created_at",
+                }:
+                    raise ProvisionError("SYNC_HPKE_VERIFY_FAILED")
+                purpose = entry["purpose"]
+                if (
+                    not isinstance(purpose, str)
+                    or purpose not in PURPOSES
+                    or purpose in observed_purposes
+                    or not isinstance(entry["key_id"], str)
+                    or len(entry["key_id"]) != 64
+                ):
+                    raise ProvisionError("SYNC_HPKE_VERIFY_FAILED")
+                private_name, public_name = PURPOSES[purpose]
+                if (
+                    entry["private_file"] != private_name
+                    or entry["public_file"] != public_name
+                    or not isinstance(entry["created_at"], str)
+                ):
+                    raise ProvisionError("SYNC_HPKE_VERIFY_FAILED")
+                private_raw = _read_checked_file(
+                    directory_fd,
+                    private_name,
+                    expected_size=RAW_KEY_BYTES,
+                    require_root=require_root,
+                )
+                public_raw = _read_checked_file(
+                    directory_fd,
+                    public_name,
+                    expected_size=RAW_KEY_BYTES,
+                    require_root=require_root,
+                )
+                try:
+                    private_key = RecipientPrivateKey.from_raw_bytes(private_raw)
+                    public_key = RecipientPublicKey.from_raw_bytes(public_raw)
+                except HpkeEnvelopeError:
+                    raise ProvisionError("SYNC_HPKE_VERIFY_FAILED") from None
+                if (
+                    private_key.public_key.to_raw_bytes() != public_key.to_raw_bytes()
+                    or entry["key_id"] != public_key.key_id
+                    or public_key.key_id in observed_ids
+                ):
+                    raise ProvisionError("SYNC_HPKE_VERIFY_FAILED")
+                observed_ids.add(public_key.key_id)
+                observed_purposes.add(purpose)
+                del private_raw, public_raw
+            if observed_purposes != set(PURPOSES):
+                raise ProvisionError("SYNC_HPKE_VERIFY_FAILED")
+        finally:
+            os.close(directory_fd)
+    finally:
+        os.close(parent_fd)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Provision isolated sync HPKE keys")
+    parser.add_argument("action", choices=("provision", "verify"))
+    parser.add_argument("--directory", type=Path, default=DEFAULT_DIRECTORY)
+    args = parser.parse_args()
+    try:
+        if args.action == "provision":
+            provision(args.directory)
+        else:
+            verify(args.directory)
+    except ProvisionError as exc:
+        raise SystemExit(f"sync-hpke: denied code={exc.code}") from None
+    print("sync-hpke: ok purposes=2 pairs_distinct=true")
+
+
+if __name__ == "__main__":
+    main()

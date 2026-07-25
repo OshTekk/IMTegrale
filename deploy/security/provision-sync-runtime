@@ -1,0 +1,57 @@
+#!/bin/sh
+set -eu
+
+if [ "$(id -u)" -ne 0 ]; then
+    echo "sync-runtime: denied code=ROOT_REQUIRED" >&2
+    exit 1
+fi
+
+script_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
+if ! getent group botnote-runtime >/dev/null; then
+    groupadd --system botnote-runtime
+fi
+if ! getent group botnote-sync-lock >/dev/null; then
+    groupadd --system botnote-sync-lock
+fi
+if ! getent group botnote-sync >/dev/null; then
+    groupadd --system botnote-sync
+fi
+if ! id botnote-sync >/dev/null 2>&1; then
+    useradd \
+        --system \
+        --gid botnote-sync \
+        --groups botnote-runtime,botnote-sync-lock \
+        --home-dir /nonexistent \
+        --no-create-home \
+        --shell /usr/sbin/nologin \
+        botnote-sync
+fi
+
+usermod \
+    --gid botnote-sync \
+    --groups botnote-runtime,botnote-sync-lock \
+    --home /nonexistent \
+    --shell /usr/sbin/nologin \
+    --lock \
+    botnote-sync
+usermod --append --groups botnote-runtime,botnote-sync-lock botnote
+
+install -o root -g root -m 0644 \
+    "$script_directory/../botnote-sync-locks.tmpfiles.conf" \
+    /etc/tmpfiles.d/botnote-sync-locks.conf
+systemd-tmpfiles --create /etc/tmpfiles.d/botnote-sync-locks.conf
+find /run/botnote-sync-locks -maxdepth 1 -type f -name 'sync-*.lock' \
+    -exec chown root:botnote-sync-lock {} + \
+    -exec chmod 0660 {} +
+
+chown root:botnote-runtime /opt/botnote
+chmod 0750 /opt/botnote
+for tree in /opt/botnote/releases /opt/botnote/venvs; do
+    if [ -d "$tree" ]; then
+        chgrp -R botnote-runtime "$tree"
+        chmod -R g+rX,o-rwx "$tree"
+    fi
+done
+
+echo "sync-runtime: ok identity=dedicated groups=restricted"

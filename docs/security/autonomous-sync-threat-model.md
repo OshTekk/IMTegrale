@@ -3,7 +3,8 @@
 ## Portée
 
 Ce document distingue la fondation livrée par G1, la primitive HPKE isolée
-livrée par G2 et l'architecture autonome future. Aucun mot de passe IMT n'est
+livrée par G2, la frontière worker livrée par G3 et l'architecture autonome
+future. Aucun mot de passe IMT n'est
 conservé et la table de credentials reste vide. Les seules capacités distantes
 actives restent les cookies PASS/HUB chiffrés décrits dans la politique
 actuelle.
@@ -18,15 +19,15 @@ Les actifs futurs à protéger seront :
 
 ## Frontières de confiance
 
-| Composant | G1 | Cible autonome |
+| Composant | G3 | Cible autonome |
 | --- | --- | --- |
 | Navigateur | Transmet le mot de passe uniquement à l'authentification | Saisie distincte et consentie lors de l'enrôlement |
-| API web | N'importe pas le module HPKE et ne persiste aucun mot de passe | Chiffre avec une clé publique, sans capacité de lecture |
+| API web | Ne reçoit aucune clé HPKE et ne persiste aucun mot de passe | Chiffre avec une clé publique, sans capacité de lecture |
 | PostgreSQL | Sessions chiffrées et table credential vide | Enveloppes uniquement, jamais de clé privée |
 | Scheduler | Planifie `session_only` depuis le booléen historique | Ne reçoit aucune clé privée |
-| Worker sync | Réutilise seulement la session existante | Seul processus autorisé à ouvrir une enveloppe |
+| Worker sync | Identité dédiée, clés privées limitées aux self-tests | Seul processus autorisé à ouvrir une enveloppe métier |
 | Workers calendar/outbox | Aucun accès au mot de passe | Aucun accès à la clé privée |
-| systemd | Environnement commun actuel | Credential privé limité à l'unité sync |
+| systemd | Credentials privés limités à l'unité sync | Même frontière avec rotation |
 
 ## Scénarios
 
@@ -76,11 +77,22 @@ Les actifs futurs à protéger seront :
 - HPKE base mode n'apporte ni identité du producteur, ni consentement,
   anti-replay, génération courante ou révocation.
 
+## Invariants G3
+
+- le worker sync possède une identité Unix et un rôle PostgreSQL non privilégié ;
+- les quatre clés sont injectées uniquement par `LoadCredential` ;
+- le web, scheduler, calendar et outbox ne reçoivent aucune clé privée ;
+- le loader accepte uniquement des noms fixes, vérifie fichiers, paires et
+  séparation des purposes ;
+- les self-tests précèdent tout claim de job ;
+- un heartbeat ancien ne satisfait plus la readiness de production ;
+- aucune donnée utilisateur, session réelle ou table credential n'utilise HPKE.
+
 ## Risques résiduels
 
-G1 ne réduit pas la capacité déjà détenue par les processus qui chargent la clé
+G3 ne supprime pas la capacité déjà détenue par les processus qui chargent la clé
 symétrique générale : ils peuvent encore déchiffrer les cookies PASS/HUB selon
-leur périmètre actuel. Ce risque est antérieur et doit être traité par G3 et G4.
+leur périmètre actuel. Ce risque est antérieur et doit être traité par G4.
 L'exception locale `owner_managed`, lorsqu'un exploitant l'a volontairement
 configurée pour son compte unique, reste également hors du modèle multi-compte
 et hors de G1.
@@ -91,5 +103,5 @@ irréductibles. L'enveloppe asymétrique réduira la surface de déchiffrement, 
 ne rendra jamais l'exploitation d'un mot de passe sans risque.
 
 La présence d'une table vide et d'une primitive isolée ne constitue pas une
-capacité autonome. Toute activation avant G3 à G7 doit être considérée comme
+capacité autonome. Toute activation avant G4 à G7 doit être considérée comme
 une erreur de configuration.

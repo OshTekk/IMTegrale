@@ -107,7 +107,7 @@ pnpm audit --prod
 - [présentation des bundles Parcours v1/v2](docs/presentation-schema-v2.md) et [bibliothèque personnelle v3](docs/presentation-schema-v3.md) ;
 - [données, consentements et cadre d'utilisation](docs/data-and-usage.md) ;
 - [actualisation automatique](docs/automatic-sync.md) et [synchronisation manuelle](docs/manual-sync.md) ;
-- [architecture cible de la synchronisation autonome](docs/security/autonomous-sync-architecture.md) et [modèle de menace dédié](docs/security/autonomous-sync-threat-model.md) ;
+- [architecture cible de la synchronisation autonome](docs/security/autonomous-sync-architecture.md), [isolation du worker sync](docs/security/sync-worker-isolation.md) et [modèle de menace dédié](docs/security/autonomous-sync-threat-model.md) ;
 - [exploitation et observabilité](docs/operations.md) et [politique d'arrondi académique](docs/academic-rounding.md) ;
 - [déploiement et rollback](deploy/README.md) ;
 - [politique de sécurité](SECURITY.md), [modèle de menace](docs/security/threat-model.md), [rotation des clés](docs/security/key-rotation.md) et [niveaux d'assurance](docs/security/authentication-assurance.md) ;
