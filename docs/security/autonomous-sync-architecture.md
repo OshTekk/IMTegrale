@@ -2,10 +2,12 @@
 
 ## État de cette release
 
-Cette release constitue uniquement le gate **G1**. Elle introduit le vocabulaire
-de domaine, le schéma additif et les gardes nécessaires aux lots suivants. Elle
-ne conserve aucun mot de passe IMT, ne chiffre aucune enveloppe et ne permet
-aucune reconnexion autonome.
+Cette release termine les gates **G1** et **G2**. G1 introduit le vocabulaire de
+domaine, le schéma additif et les gardes. G2 ajoute un
+[format d'enveloppe HPKE](hpke-envelope-format.md) générique, versionné et
+entièrement isolé. Il n'est relié ni aux comptes, ni à la table de credentials,
+ni aux API, ni aux workers. La release ne conserve toujours aucun mot de passe
+IMT et ne permet aucune reconnexion autonome.
 
 Les modes cibles sont :
 
@@ -132,12 +134,29 @@ Si une modification SQL manuelle injecte ce mode :
 Le système ne convertit pas silencieusement cette incohérence en
 `session_only`.
 
-## Architecture cible, non implémentée
+## Primitive G2 isolée
+
+Le paquet `app.crypto` utilise directement l'API one-shot HPKE de
+`cryptography 49` avec X25519, HKDF-SHA-256 et ChaCha20-Poly1305. Il fournit :
+
+- deux purposes cryptographiquement séparés ;
+- des contextes immuables liés par `info` ;
+- une enveloppe binaire v1 fermée ;
+- un `key_id` SHA-256 complet ;
+- un keyring préparé pour la rotation ;
+- un frame credential fixe de 3 072 octets.
+
+Les tests emploient uniquement des clés et secrets fictifs en mémoire. Le
+smoke-test du wheel effectue un round-trip isolé, sans persistance ni appel
+réseau. Aucun chemin applicatif n'importe ce paquet dans G2.
+
+## Architecture cible, encore non implémentée
 
 La cible envisagée est une enveloppe asymétrique standard, chiffrable par le
 web avec une clé publique et déchiffrable uniquement par le worker sync. La
-primitive, les clés et la dépendance feront l'objet du gate G2 et ne sont pas
-présentes ici.
+primitive est désormais validée par G2. Les clés opérationnelles, leur
+chargement et la séparation des processus relèvent de G3 et ne sont pas
+présents ici.
 
 La séparation cible devra garantir :
 
@@ -162,13 +181,13 @@ ne la transforme pas en credential et ne l'associe pas au mode
 | Gate | Objet | État |
 | --- | --- | --- |
 | G1 | Schéma, modes, API compatible et gardes fermés | Terminé |
-| G2 | Module HPKE versionné avec clés entièrement fictives | Non terminé |
+| G2 | Module HPKE versionné avec clés entièrement fictives | Terminé |
 | G3 | Worker sync dédié et clé privée isolée | Non terminé |
 | G4 | Cookies PASS/HUB migrés vers l'isolation worker-only | Non terminé |
 | G5 | API d'enrôlement, renouvellement et suppression | Non terminé |
 | G6 | Fallback autonome, révocation et rotation | Non terminé |
 | G7 | UX, consentement distinct et activation canary | Non terminé |
 
-`autonomous` reste indisponible tant que G2 à G7 ne sont pas validés. Chaque
+`autonomous` reste indisponible tant que G3 à G7 ne sont pas validés. Chaque
 gate doit conserver un rollback documenté et employer uniquement des secrets
 fictifs en test.

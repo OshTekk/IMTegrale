@@ -18,8 +18,11 @@ effectif est donc dérivé du booléen jusqu'à la fermeture documentée de la
 fenêtre de rollback.
 
 La migration crée également `imt_sync_credentials`, mais cette table reste vide
-et aucune route ne peut y écrire. Aucun mot de passe, chiffrement asymétrique ou
-fallback autonome n'est implémenté. Le détail des gates se trouve dans
+et aucune route ne peut y écrire. G2 fournit désormais une
+[primitive HPKE générique](security/hpke-envelope-format.md), testée uniquement
+avec des clés et secrets fictifs en mémoire. Elle n'est branchée ni à cette
+table, ni aux API, ni aux workers. Aucun mot de passe ou fallback autonome n'est
+implémenté. Le détail des gates se trouve dans
 [`security/autonomous-sync-architecture.md`](security/autonomous-sync-architecture.md).
 
 ## Consentement

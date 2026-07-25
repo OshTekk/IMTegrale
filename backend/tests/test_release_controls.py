@@ -83,3 +83,11 @@ def test_release_smoke_probe_uses_asgi_without_test_client() -> None:
 
     assert status_code == 200
     assert json.loads(body) == {"status": "ok"}
+
+
+def test_release_smoke_hpke_roundtrip_is_memory_only(capsys) -> None:  # noqa: ANN001
+    smoke = _load_script("smoke_release")
+
+    smoke._hpke_wheel_roundtrip()
+
+    assert capsys.readouterr().out == ""
