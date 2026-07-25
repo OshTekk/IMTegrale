@@ -4,7 +4,10 @@ import json
 import logging
 import uuid
 from datetime import timedelta
+from pathlib import Path
 
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from app.config import Settings
 from app.database import SessionLocal, utcnow
 from app.models import Account, DurableJob, NotificationOutbox, RuntimeHeartbeat, SyncRequest
@@ -22,6 +25,14 @@ from app.services.operations import (
     record_runtime_heartbeat,
 )
 from sqlalchemy import text
+
+
+def test_expected_database_revision_matches_the_single_alembic_head() -> None:
+    repository_root = Path(__file__).resolve().parents[2]
+    config = Config(repository_root / "alembic.ini")
+    script = ScriptDirectory.from_config(config)
+
+    assert script.get_heads() == [EXPECTED_DATABASE_REVISION]
 
 
 def test_http_response_has_a_valid_correlation_id(client) -> None:  # noqa: ANN001

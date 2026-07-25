@@ -20,7 +20,7 @@ from app.models import (
 from app.observability import runtime_metrics
 from app.security import ensure_utc
 
-EXPECTED_DATABASE_REVISION = "0024"
+EXPECTED_DATABASE_REVISION = "0025"
 REQUIRED_RUNTIME_COMPONENTS = ("scheduler", "sync", "calendar", "outbox")
 
 
