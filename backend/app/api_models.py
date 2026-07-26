@@ -18,6 +18,12 @@ from app.sync_modes import SyncMode
 Role = Literal["owner", "editor", "viewer"]
 AuthMethod = Literal["imt", "token", "passkey"]
 SyncStatus = Literal["queued", "running", "succeeded", "failed", "skipped"]
+SyncPauseReason: TypeAlias = Literal[
+    "reauth_required",
+    "credential_invalid",
+    "credential_key_unavailable",
+    "autonomous_runtime_unavailable",
+]
 AcademicSemester = Literal["S5", "S6", "S7", "S8", "S9", "S10"]
 Grade = Literal["A", "B", "C", "D", "E", "FX", "F"]
 Campus = Literal["rennes", "brest", "nantes", "other", "unknown"]
@@ -258,7 +264,7 @@ class SyncSettingsResponse(ApiModel):
     current_interval_hours: Literal[2, 4, 6, 8, 12, 24]
     no_change_streak: int
     consented_at: datetime | None
-    paused_reason: Literal["reauth_required"] | None
+    paused_reason: SyncPauseReason | None
     paused_at: datetime | None
     next_eligible_at: datetime | None
     allowed_intervals: list[Literal[2, 4, 6, 8, 12, 24]]
@@ -1204,7 +1210,7 @@ class AdminAccountResponse(ApiModel):
     auto_sync_interval_hours: Literal[2, 4, 6, 8, 12, 24]
     auto_sync_adaptive: bool
     auto_sync_current_interval_hours: Literal[2, 4, 6, 8, 12, 24]
-    auto_sync_paused_reason: Literal["reauth_required"] | None
+    auto_sync_paused_reason: SyncPauseReason | None
     auto_sync_paused_at: datetime | None
     created_at: datetime
     session_count: int
@@ -1282,6 +1288,15 @@ class AdminProfileMetricsResponse(ApiModel):
     skipped: int
 
 
+class AdminAutonomousSyncMetricsResponse(ApiModel):
+    credential_operations: int
+    succeeded: int
+    authentication_failures: int
+    transient_failures: int
+    full_sso_performed: int
+    pauses_by_reason: dict[str, int]
+
+
 class AdminCompletedDurationResponse(ApiModel):
     median: float | None
     longest: float | None
@@ -1321,6 +1336,7 @@ class AdminPassMetricsResponse(ApiModel):
     duration_ms: AdminDurationMetricsResponse
     session_reuse: AdminSessionReuseMetricsResponse
     profiles: AdminProfileMetricsResponse
+    autonomous: AdminAutonomousSyncMetricsResponse
     by_kind: dict[str, int]
     errors: dict[str, int]
     denials: dict[str, int]
@@ -1361,6 +1377,7 @@ class AdminPassOperationalMetricsResponse(ApiModel):
     circuit_state: str
     operations_24h: int
     errors_24h: int
+    autonomous_credential_operations_24h: int
     hourly_quota: int
     daily_quota: int
 
@@ -1385,7 +1402,7 @@ class AdminPassSessionResponse(ServiceSessionResponse):
     display_name: str
     imt_username: str
     auto_sync_enabled: bool
-    auto_sync_paused_reason: Literal["reauth_required"] | None
+    auto_sync_paused_reason: SyncPauseReason | None
 
 
 class AdminAuditResponse(ApiModel):

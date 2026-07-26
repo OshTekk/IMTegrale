@@ -3,6 +3,8 @@ import type { LearningSessionAccess } from "./types/learning";
 export * from "./types/learning";
 
 export type Role = "owner" | "editor" | "viewer";
+export type SyncPauseReason =
+  "reauth_required" | "credential_invalid" | "credential_key_unavailable" | "autonomous_runtime_unavailable";
 export type AcademicSemester = "S5" | "S6" | "S7" | "S8" | "S9" | "S10";
 export type SimulationSemester = AcademicSemester;
 
@@ -542,7 +544,7 @@ export interface SettingsView {
     current_interval_hours: 2 | 4 | 6 | 8 | 12 | 24;
     no_change_streak: number;
     consented_at: string | null;
-    paused_reason: "reauth_required" | null;
+    paused_reason: SyncPauseReason | null;
     paused_at: string | null;
     next_eligible_at: string | null;
     allowed_intervals: Array<2 | 4 | 6 | 8 | 12 | 24>;
@@ -676,7 +678,7 @@ export interface AdminAccount {
   auto_sync_interval_hours: 2 | 4 | 6 | 8 | 12 | 24;
   auto_sync_adaptive: boolean;
   auto_sync_current_interval_hours: 2 | 4 | 6 | 8 | 12 | 24;
-  auto_sync_paused_reason: "reauth_required" | null;
+  auto_sync_paused_reason: SyncPauseReason | null;
   auto_sync_paused_at: string | null;
   created_at: string;
   session_count: number;
@@ -774,7 +776,7 @@ export interface AdminPassSession extends ServiceSessionStatus {
   display_name: string;
   imt_username: string;
   auto_sync_enabled: boolean;
-  auto_sync_paused_reason: "reauth_required" | null;
+  auto_sync_paused_reason: SyncPauseReason | null;
 }
 
 export interface AdminAccountsView {

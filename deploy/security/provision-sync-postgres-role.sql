@@ -55,4 +55,19 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
     notification_outbox,
     runtime_heartbeats
 TO "botnote-sync";
+GRANT SELECT ON TABLE imt_sync_credentials TO "botnote-sync";
+GRANT UPDATE (
+    encrypted_envelope,
+    envelope_version,
+    key_id,
+    credential_generation,
+    state,
+    last_used_at,
+    last_success_at,
+    last_failure_at,
+    failure_count,
+    revoked_at,
+    revoked_reason,
+    updated_at
+) ON TABLE imt_sync_credentials TO "botnote-sync";
 GRANT USAGE, SELECT ON SEQUENCE auth_attempts_id_seq TO "botnote-sync";

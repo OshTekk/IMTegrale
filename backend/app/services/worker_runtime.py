@@ -25,11 +25,14 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 WorkerKind = Literal["sync", "calendar", "outbox", "scheduler"]
 ISOLATED_SYNC_RUNTIME_DETAILS: dict[str, int | bool | str] = {
-    "runtime_profile": "isolated-sync-v2",
+    "runtime_profile": "isolated-sync-v3",
     "hpke_credentials_ready": True,
     "pass_session_storage": "hpke-v1",
     "legacy_decrypt_available": False,
     "dedicated_identity": True,
+    "autonomous_runtime_ready": True,
+    "credential_opener_ready": True,
+    "autonomous_activation": False,
 }
 WORKER_POLL_SECONDS = 2
 HEARTBEAT_INTERVAL = timedelta(seconds=30)

@@ -1,17 +1,19 @@
 # Isolation du worker de synchronisation
 
-## Portée G3 à G5
+## Portée G3 à G6A
 
 G3 crée la frontière d'exécution dédiée. G4 y branche les sessions techniques
-PASS/HUB. G5 ajoute uniquement la frontière web d'enrôlement :
+PASS/HUB. G5 ajoute la frontière web d'enrôlement. G6A prépare l'ouverture
+worker-only sans encore la relier au gateway :
 
 - toute nouvelle session PASS/HUB est scellée en HPKE ;
 - les anciennes sessions sont migrées hors réseau ;
 - aucun mot de passe multi-compte n'est conservé en production ;
 - `imt_sync_credentials` reste vide en production ;
 - `autonomous` reste indisponible ;
-- le worker ne lit toujours pas la table credential et ne réalise aucun
-  fallback autonome.
+- le worker possède un opener credential strict et testé ;
+- aucun chemin de synchronisation ne l'appelle encore ;
+- aucun fallback autonome n'est encore réalisé.
 
 ## Identités et accès
 
@@ -41,8 +43,11 @@ utilisateur, un mot de passe ou une option de socket. Le rôle est
 `NOSUPERUSER`, `NOCREATEDB`, `NOCREATEROLE`, `NOINHERIT`, `NOREPLICATION` et
 `NOBYPASSRLS`. Il reçoit seulement `CONNECT`, `USAGE` du schéma et le DML sur
 les tables nécessaires aux jobs sync, comptes, résultats, sessions, opérations,
-événements, cohortes, outbox et heartbeats. Il ne possède ni DDL, ni migration,
-ni table d'administration, ni `imt_sync_credentials`.
+événements, cohortes, outbox et heartbeats. G6A ajoute `SELECT` sur
+`imt_sync_credentials` et `UPDATE` uniquement sur les colonnes de cycle de vie
+nécessaires au futur fallback. `INSERT`, `DELETE`, `account_id`, le consentement,
+la vérification, le DDL, les migrations et les tables d'administration restent
+refusés.
 
 Les deux lignes de `deploy/security/botnote-sync.pg-hba.conf` sont installées
 avant la règle Debian générique `local all all peer` : la première autorise
@@ -171,11 +176,14 @@ avec un code stable et sans secret.
 Le heartbeat final G4B expose uniquement :
 
 ```text
-runtime_profile=isolated-sync-v2
+runtime_profile=isolated-sync-v3
 hpke_credentials_ready=true
 pass_session_storage=hpke-v1
 legacy_decrypt_available=false
 dedicated_identity=true
+autonomous_runtime_ready=true
+credential_opener_ready=true
+autonomous_activation=false
 ```
 
 En production, `/health/ready` devient non vert si le heartbeat est absent,

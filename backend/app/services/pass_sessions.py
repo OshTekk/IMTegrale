@@ -388,7 +388,7 @@ def load_service_session(
                 )
                 _validate_service_snapshot(snapshot)
             except PassSessionKeyUnavailable:
-                account.auto_sync_paused_reason = "key_unavailable"
+                account.auto_sync_paused_reason = "credential_key_unavailable"
                 account.auto_sync_paused_at = now
                 account.auto_sync_next_at = None
                 db.commit()

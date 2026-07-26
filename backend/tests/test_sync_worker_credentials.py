@@ -208,8 +208,8 @@ def test_self_test_error_is_stable_and_never_contains_plaintext(
 ) -> None:  # noqa: ANN001
     credentials = load_sync_worker_credentials(_credential_directory(tmp_path))
     monkeypatch.setattr(
-        sync_worker_credentials,
-        "seal_envelope",
+        sync_worker_credentials.ImtSyncCredentialSealer,
+        "seal",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(EnvelopeEncryptionError()),
     )
 

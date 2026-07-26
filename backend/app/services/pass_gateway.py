@@ -445,6 +445,7 @@ def complete_pass_operation(
     session_reused: bool,
     full_sso_performed: bool,
     profile_fetched: bool,
+    autonomous_credential_used: bool = False,
     error: Exception | None = None,
 ) -> None:
     current = utcnow()
@@ -466,6 +467,7 @@ def complete_pass_operation(
         operation.session_reused = session_reused
         operation.full_sso_performed = full_sso_performed
         operation.profile_fetched = profile_fetched
+        operation.autonomous_credential_used = autonomous_credential_used
         operation.error_class = error_class
         operation.upstream_status = upstream_status
         operation.retry_after_seconds = retry_after
@@ -917,6 +919,9 @@ def metrics_view(db: Session, *, hours: int) -> dict:
     successful = [operation for operation in operations if operation.status == "succeeded"]
     reused = sum(operation.session_reused for operation in successful)
     full_sso = sum(operation.full_sso_performed for operation in operations)
+    autonomous_operations = [
+        operation for operation in operations if operation.autonomous_credential_used
+    ]
     p95_index = max(0, math.ceil(len(durations) * 0.95) - 1) if durations else 0
     denial_counts = Counter(db.scalars(select(PassDenial.reason).where(PassDenial.created_at >= since)))
     return {
@@ -940,6 +945,32 @@ def metrics_view(db: Session, *, hours: int) -> dict:
         "profiles": {
             "fetched": sum(operation.profile_fetched for operation in successful),
             "skipped": sum(not operation.profile_fetched for operation in successful),
+        },
+        "autonomous": {
+            "credential_operations": len(autonomous_operations),
+            "succeeded": sum(
+                operation.status == "succeeded" for operation in autonomous_operations
+            ),
+            "authentication_failures": sum(
+                operation.error_class == "authentication"
+                for operation in autonomous_operations
+            ),
+            "transient_failures": sum(
+                operation.error_class in {"network", "upstream"}
+                for operation in autonomous_operations
+            ),
+            "full_sso_performed": sum(
+                operation.full_sso_performed for operation in autonomous_operations
+            ),
+            "pauses_by_reason": dict(
+                Counter(
+                    db.scalars(
+                        select(Account.auto_sync_paused_reason).where(
+                            Account.auto_sync_paused_reason.is_not(None)
+                        )
+                    )
+                )
+            ),
         },
         "by_kind": dict(Counter(operation.kind for operation in operations)),
         "errors": dict(

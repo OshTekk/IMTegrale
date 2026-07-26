@@ -180,9 +180,9 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def reject_unimplemented_autonomous_sync(self) -> Settings:
-        if self.autonomous_sync_enabled:
+        if self.environment == "production" and self.autonomous_sync_enabled:
             raise ValueError(
-                "BOTNOTE_AUTONOMOUS_SYNC_ENABLED cannot be enabled: the autonomous runtime is not implemented"
+                "AUTONOMOUS_SYNC_RUNTIME_NOT_ACTIVATABLE_IN_G6"
             )
         if self.environment == "production" and self.autonomous_sync_enrollment_enabled:
             raise ValueError("AUTONOMOUS_SYNC_ENROLLMENT_NOT_ACTIVATABLE_IN_G5")

@@ -54,11 +54,14 @@ mais il n'est importé par aucun worker normal.
 Le heartbeat final est limité à :
 
 ```text
-runtime_profile=isolated-sync-v2
+runtime_profile=isolated-sync-v3
 hpke_credentials_ready=true
 pass_session_storage=hpke-v1
 legacy_decrypt_available=false
 dedicated_identity=true
+autonomous_runtime_ready=true
+credential_opener_ready=true
+autonomous_activation=false
 ```
 
 Un legacy réintroduit rend `operations-check` non vert et n'est jamais converti

@@ -92,7 +92,7 @@ La révision `0017` supprime physiquement les anciennes colonnes de mot de passe
    Ces lectures ne doivent ni modifier le consentement ni réserver un job.
    Pour la contraction G4B, conserver une copie root-only exacte du fichier
    sync G4A pour le rollback, retirer les deux variables symétriques du fichier
-   actif, puis vérifier le heartbeat `isolated-sync-v2`, l'inventaire legacy à
+   actif, puis vérifier le heartbeat `isolated-sync-v3`, l'inventaire legacy à
    zéro et `operations-check` avant de redémarrer le scheduler.
    Pour G5A, vérifier d'abord que `imt_sync_credentials` est vide, arrêter le
    scheduler dans une fenêtre sans job ni lease, puis appliquer `0027`. La
@@ -106,6 +106,14 @@ La révision `0017` supprime physiquement les anciennes colonnes de mot de passe
    nouveau `active=invalid=revoked=autonomous=0`. Les routes de révocation et
    de purge restent disponibles afin de détruire un ancien secret, mais aucun
    smoke-test de production ne doit les appeler sur un compte réel.
+   Pour G6A, vérifier que les compteurs credential et autonomous restent nuls,
+   arrêter le scheduler sans supprimer de job, appliquer `0028`, puis
+   reprovisionner `botnote-sync` avec `SELECT` sur
+   `imt_sync_credentials` et `UPDATE` limité aux colonnes de cycle de vie.
+   `INSERT`, `DELETE`, les colonnes de consentement et le DDL doivent rester
+   refusés. Déployer ensuite l'artefact round-trip avec les deux flags fermés,
+   redémarrer le worker et vérifier le heartbeat `isolated-sync-v3`. Cette
+   étape ne doit réserver aucune opération PASS.
 9. Créer le répertoire dédié avec `install -d -o botnote -g botnote -m 0700 /var/lib/botnote-admin`, puis amorcer le premier compte avec `botnote admin-bootstrap --username <nom> --output /var/lib/botnote-admin/initial-credentials.txt`. Le fichier doit rester `0600`, être supprimé après lecture et le mot de passe doit être changé à la première connexion. La première session permet ensuite d'enrôler une passkey pendant dix minutes. Après cet enrôlement, toute nouvelle session admin exige cette passkey et les mutations sensibles exigent un step-up de moins de dix minutes. Conserver au moins deux passkeys administrateur sur des dispositifs distincts ; la dernière ne peut pas être supprimée depuis l'interface. Ne pas relâcher les permissions du répertoire legacy `/var/lib/botnote`.
 
 Un redémarrage Nginx complet est volontaire lors d'un changement d'upstream : un reload gracieux peut conserver un ancien worker tant qu'une connexion SSE reste ouverte.

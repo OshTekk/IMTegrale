@@ -7,19 +7,17 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.crypto import (
-    EnvelopePurpose,
     ImtSyncCredentialContext,
     PassServiceSessionContext,
-    PlaintextProfile,
     RecipientPrivateKey,
     RecipientPrivateKeyring,
     RecipientPublicKey,
-    decode_imt_password_frame,
-    encode_imt_password_frame,
-    open_envelope,
-    seal_envelope,
 )
 from app.crypto.errors import HpkeEnvelopeError
+from app.services.imt_sync_credential_crypto import (
+    ImtSyncCredentialOpener,
+    ImtSyncCredentialSealer,
+)
 from app.services.pass_session_crypto import (
     PASS_SESSION_PUBLIC_CREDENTIAL,
     PassSessionOpener,
@@ -72,17 +70,25 @@ class SyncWorkerCredentials:
 
 @dataclass(frozen=True, slots=True, repr=False)
 class SyncRuntimeContext:
+    imt_sync_credential_opener: ImtSyncCredentialOpener
+    imt_sync_credential_sealer: ImtSyncCredentialSealer
     pass_session_sealer: PassSessionSealer
     pass_session_opener: PassSessionOpener
 
     def __repr__(self) -> str:
-        return "SyncRuntimeContext(pass_session_crypto=<loaded>)"
+        return "SyncRuntimeContext(credential_crypto=<loaded>, pass_session_crypto=<loaded>)"
 
 
 def build_sync_runtime_context(
     credentials: SyncWorkerCredentials,
 ) -> SyncRuntimeContext:
     return SyncRuntimeContext(
+        imt_sync_credential_opener=ImtSyncCredentialOpener(
+            credentials.credential.private_keyring
+        ),
+        imt_sync_credential_sealer=ImtSyncCredentialSealer(
+            credentials.credential.public_key
+        ),
         pass_session_sealer=PassSessionSealer(credentials.service_session.public_key),
         pass_session_opener=PassSessionOpener(
             credentials.service_session.private_keyring
@@ -232,23 +238,23 @@ def self_test_sync_worker_credentials(credentials: SyncWorkerCredentials) -> Non
             consent_version=1,
         )
         synthetic_secret = secrets.token_urlsafe(24)
-        frame = encode_imt_password_frame(synthetic_secret)
-        credential_envelope = seal_envelope(
-            credentials.credential.public_key,
-            purpose=EnvelopePurpose.IMT_SYNC_CREDENTIAL,
-            profile=PlaintextProfile.IMT_PASSWORD_FRAME_V1,
-            context=credential_context,
-            plaintext=frame,
+        runtime = build_sync_runtime_context(credentials)
+        credential_envelope = runtime.imt_sync_credential_sealer.seal(
+            synthetic_secret,
+            account_id=credential_context.account_id,
+            imt_login=credential_context.imt_login,
+            credential_generation=credential_context.credential_generation,
+            consent_version=credential_context.consent_version,
         )
-        opened_frame = open_envelope(
+        with runtime.imt_sync_credential_opener.open(
             credential_envelope,
-            credentials.credential.private_keyring,
-            purpose=EnvelopePurpose.IMT_SYNC_CREDENTIAL,
-            profile=PlaintextProfile.IMT_PASSWORD_FRAME_V1,
-            context=credential_context,
-        )
-        if decode_imt_password_frame(opened_frame) != synthetic_secret:
-            raise ValueError
+            account_id=credential_context.account_id,
+            imt_login=credential_context.imt_login,
+            credential_generation=credential_context.credential_generation,
+            consent_version=credential_context.consent_version,
+        ) as opened:
+            if opened.reveal_for_gateway() != synthetic_secret:
+                raise ValueError
 
         session_context = PassServiceSessionContext(
             account_id="22222222-2222-4222-8222-222222222222",
@@ -256,14 +262,13 @@ def self_test_sync_worker_credentials(credentials: SyncWorkerCredentials) -> Non
             service_session_id="33333333-3333-4333-8333-333333333333",
         )
         synthetic_session = '{"cookies":[],"version":1}'
-        session_crypto = build_sync_runtime_context(credentials)
-        session_envelope = session_crypto.pass_session_sealer.seal(
+        session_envelope = runtime.pass_session_sealer.seal(
             synthetic_session,
             account_id=session_context.account_id,
             imt_login=session_context.imt_login,
             service_session_id=session_context.service_session_id,
         )
-        opened_session = session_crypto.pass_session_opener.open(
+        opened_session = runtime.pass_session_opener.open(
             session_envelope,
             account_id=session_context.account_id,
             imt_login=session_context.imt_login,
@@ -276,10 +281,8 @@ def self_test_sync_worker_credentials(credentials: SyncWorkerCredentials) -> Non
             session_envelope,
             synthetic_session,
             session_context,
-            session_crypto,
-            opened_frame,
+            runtime,
             credential_envelope,
-            frame,
             synthetic_secret,
             credential_context,
         )

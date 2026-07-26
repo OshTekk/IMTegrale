@@ -24,8 +24,11 @@ d'enrôlement, de révocation et de purge uniquement derrière un flag
 non-production. La production conserve ce flag fermé, aucune clé publique
 credential dans le web et zéro credential. G2 fournit la
 [primitive HPKE générique](security/hpke-envelope-format.md), G3 isole le worker
-sync et G4 migre les sessions PASS/HUB vers ce worker. Le worker ne lit pas
-encore la table credential et aucun fallback autonome n'est implémenté. Le
+sync et G4 migre les sessions PASS/HUB vers ce worker. `0028` ajoute un marqueur
+agrégé sur les opérations PASS, borne les raisons de pause et équipe le worker
+d'un opener credential strict. G6A ne branche pas cet opener au gateway :
+aucun credential n'est lu pendant une synchronisation et aucun fallback
+autonome n'est encore implémenté. Le
 détail des gates se trouve dans
 [`security/autonomous-sync-architecture.md`](security/autonomous-sync-architecture.md).
 
@@ -99,9 +102,10 @@ Les jobs réussis sont conservés 7 jours, les notifications livrées 30 jours e
 
 Le portail administrateur affiche l'état et la fréquence choisis pour faciliter le support, sans proposer d'activation administrateur. Les événements `sync:auto_enabled` et `sync:auto_disabled` assurent la traçabilité du choix du propriétaire.
 
-Dans la release G5, `BOTNOTE_AUTONOMOUS_SYNC_ENABLED` et
+Dans la release G6A, `BOTNOTE_AUTONOMOUS_SYNC_ENABLED` et
 `BOTNOTE_AUTONOMOUS_SYNC_ENROLLMENT_ENABLED` doivent rester absents ou valoir
-`false` en production. Une activation du runtime autonome échoue partout ; une
+`false` en production. Une activation du runtime autonome reste refusée en
+production ; elle est autorisée uniquement par les tests isolés. Une
 activation de l'enrôlement est explicitement refusée en production. Si une
 ligne `autonomous` est injectée manuellement en base, le scheduler l'ignore,
 émet une alerte agrégée sans identité et le worker la refuse avant tout appel

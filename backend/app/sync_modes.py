@@ -11,6 +11,12 @@ class SyncMode(StrEnum):
 
 
 SYNC_MODE_VALUES = tuple(mode.value for mode in SyncMode)
+SYNC_PAUSE_REASONS = (
+    "reauth_required",
+    "credential_invalid",
+    "credential_key_unavailable",
+    "autonomous_runtime_unavailable",
+)
 
 
 class SyncModeAccount(Protocol):

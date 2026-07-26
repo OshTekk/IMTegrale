@@ -19,6 +19,7 @@ from app.models import (
     Account,
     CalendarFetchAttempt,
     DurableJob,
+    ImtSyncCredential,
     NotificationOutbox,
     PassOperation,
     PassServiceSession,
@@ -29,14 +30,17 @@ from app.observability import runtime_metrics
 from app.pass_session_contract import PASS_SERVICE_SESSION_ENVELOPE_BYTES
 from app.services.sync_control import ensure_utc
 
-EXPECTED_DATABASE_REVISION = "0027"
+EXPECTED_DATABASE_REVISION = "0028"
 REQUIRED_RUNTIME_COMPONENTS = ("scheduler", "sync", "calendar", "outbox")
 ISOLATED_SYNC_PROFILE = {
-    "runtime_profile": "isolated-sync-v2",
+    "runtime_profile": "isolated-sync-v3",
     "hpke_credentials_ready": True,
     "pass_session_storage": "hpke-v1",
     "legacy_decrypt_available": False,
     "dedicated_identity": True,
+    "autonomous_runtime_ready": True,
+    "credential_opener_ready": True,
+    "autonomous_activation": False,
 }
 _SAFE_HEARTBEAT_DETAIL_KEYS = {
     "processed",
@@ -198,6 +202,15 @@ def operations_metrics(db: Session, settings: Settings) -> dict:
         )
         or 0
     )
+    autonomous_operations = int(
+        db.scalar(
+            select(func.count(PassOperation.id)).where(
+                PassOperation.started_at >= cutoff,
+                PassOperation.autonomous_credential_used.is_(True),
+            )
+        )
+        or 0
+    )
     calendar_counts = dict(
         db.execute(
             select(CalendarFetchAttempt.outcome, func.count(CalendarFetchAttempt.id))
@@ -227,6 +240,7 @@ def operations_metrics(db: Session, settings: Settings) -> dict:
             "circuit_state": pass_state.circuit_state if pass_state else "closed",
             "operations_24h": pass_operations,
             "errors_24h": pass_errors,
+            "autonomous_credential_operations_24h": autonomous_operations,
             "hourly_quota": settings.pass_hourly_quota,
             "daily_quota": settings.pass_daily_quota,
         },
@@ -313,12 +327,25 @@ def operational_alert_codes(db: Session, settings: Settings) -> list[str]:
         alerts.add("SYNC_WORKER_NOT_ISOLATED")
     if sync_heartbeat is not None and not sync_heartbeat.details.get("hpke_credentials_ready", False):
         alerts.add("SYNC_HPKE_KEYS_NOT_READY")
+    if sync_heartbeat is not None and not sync_heartbeat.details.get(
+        "credential_opener_ready",
+        False,
+    ):
+        alerts.add("AUTONOMOUS_SYNC_RUNTIME_NOT_READY")
+    if sync_heartbeat is not None and sync_heartbeat.details.get(
+        "error_code"
+    ) == "AUTONOMOUS_SYNC_ROLE_PERMISSION_INVALID":
+        alerts.add("AUTONOMOUS_SYNC_ROLE_PERMISSION_INVALID")
     if (
         sync_heartbeat is not None
         and sync_heartbeat.details.get("error_code") == "PASS_SESSION_HPKE_KEY_UNAVAILABLE"
     ):
         alerts.add("PASS_SESSION_HPKE_KEY_UNAVAILABLE")
-    if db.scalar(select(func.count(Account.id)).where(Account.auto_sync_paused_reason == "key_unavailable")):
+    if db.scalar(
+        select(func.count(Account.id)).where(
+            Account.auto_sync_paused_reason == "credential_key_unavailable"
+        )
+    ):
         alerts.add("PASS_SESSION_HPKE_KEY_UNAVAILABLE")
     for row in db.scalars(select(PassServiceSession)):
         has_legacy = bool(row.encrypted_cookie_jar)
@@ -344,6 +371,54 @@ def operational_alert_codes(db: Session, settings: Settings) -> list[str]:
         ):
             alerts.add("PASS_SESSION_HPKE_METADATA_INVALID")
     alerts.update(_sync_credential_alert_codes(db, settings))
+    autonomous_accounts = int(
+        db.scalar(
+            select(func.count(Account.id)).where(
+                Account.auto_sync_enabled.is_(True),
+                Account.auto_sync_mode == "autonomous",
+            )
+        )
+        or 0
+    )
+    if autonomous_accounts and not settings.autonomous_sync_enabled:
+        alerts.add("AUTONOMOUS_SYNC_RUNTIME_DISABLED_WITH_ACCOUNT")
+    if autonomous_accounts:
+        active_credentials = int(
+            db.scalar(
+                select(func.count(ImtSyncCredential.id))
+                .join(Account, Account.id == ImtSyncCredential.account_id)
+                .where(
+                    Account.auto_sync_enabled.is_(True),
+                    Account.auto_sync_mode == "autonomous",
+                    ImtSyncCredential.state == ImtSyncCredentialState.ACTIVE,
+                )
+            )
+            or 0
+        )
+        invalid_credentials = int(
+            db.scalar(
+                select(func.count(ImtSyncCredential.id))
+                .join(Account, Account.id == ImtSyncCredential.account_id)
+                .where(
+                    Account.auto_sync_enabled.is_(True),
+                    Account.auto_sync_mode == "autonomous",
+                    ImtSyncCredential.state == ImtSyncCredentialState.INVALID,
+                )
+            )
+            or 0
+        )
+        if active_credentials < autonomous_accounts:
+            alerts.add("AUTONOMOUS_SYNC_CREDENTIAL_MISSING")
+        if invalid_credentials:
+            alerts.add("AUTONOMOUS_SYNC_CREDENTIAL_INVALID")
+    if autonomous_accounts and db.scalar(
+        select(func.count(Account.id)).where(
+            Account.auto_sync_enabled.is_(True),
+            Account.auto_sync_mode == "autonomous",
+            Account.auto_sync_paused_reason == "credential_key_unavailable",
+        )
+    ):
+        alerts.add("AUTONOMOUS_SYNC_CREDENTIAL_KEY_UNAVAILABLE")
     for queue in metrics["queues"]:
         name = str(queue["name"]).upper()
         if queue["dead_letter"]:

@@ -283,7 +283,7 @@ export type AdminAccountResponse = {
     /**
      * Auto Sync Paused Reason
      */
-    auto_sync_paused_reason: 'reauth_required' | null;
+    auto_sync_paused_reason: 'reauth_required' | 'credential_invalid' | 'credential_key_unavailable' | 'autonomous_runtime_unavailable' | null;
     /**
      * Created At
      */
@@ -459,6 +459,38 @@ export type AdminAuthenticatedSessionResponse = {
      * Username
      */
     username: string;
+};
+
+/**
+ * AdminAutonomousSyncMetricsResponse
+ */
+export type AdminAutonomousSyncMetricsResponse = {
+    /**
+     * Authentication Failures
+     */
+    authentication_failures: number;
+    /**
+     * Credential Operations
+     */
+    credential_operations: number;
+    /**
+     * Full Sso Performed
+     */
+    full_sso_performed: number;
+    /**
+     * Pauses By Reason
+     */
+    pauses_by_reason: {
+        [key: string]: number;
+    };
+    /**
+     * Succeeded
+     */
+    succeeded: number;
+    /**
+     * Transient Failures
+     */
+    transient_failures: number;
 };
 
 /**
@@ -777,6 +809,7 @@ export type AdminOperationsMetricsResponse = {
  * AdminPassMetricsResponse
  */
 export type AdminPassMetricsResponse = {
+    autonomous: AdminAutonomousSyncMetricsResponse;
     /**
      * By Kind
      */
@@ -826,6 +859,10 @@ export type AdminPassMetricsResponse = {
  * AdminPassOperationalMetricsResponse
  */
 export type AdminPassOperationalMetricsResponse = {
+    /**
+     * Autonomous Credential Operations 24H
+     */
+    autonomous_credential_operations_24h: number;
     /**
      * Circuit State
      */
@@ -877,7 +914,7 @@ export type AdminPassSessionResponse = {
     /**
      * Auto Sync Paused Reason
      */
-    auto_sync_paused_reason: 'reauth_required' | null;
+    auto_sync_paused_reason: 'reauth_required' | 'credential_invalid' | 'credential_key_unavailable' | 'autonomous_runtime_unavailable' | null;
     /**
      * Beta
      */
@@ -4752,7 +4789,7 @@ export type SyncSettingsResponse = {
     /**
      * Paused Reason
      */
-    paused_reason: 'reauth_required' | null;
+    paused_reason: 'reauth_required' | 'credential_invalid' | 'credential_key_unavailable' | 'autonomous_runtime_unavailable' | null;
     service_session: ServiceSessionResponse | null;
 };
 

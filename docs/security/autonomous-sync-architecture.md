@@ -2,8 +2,8 @@
 
 ## État de cette release
 
-Cette release termine les gates **G1** à **G5** sans rendre la synchronisation
-autonome utilisable. G1 introduit le vocabulaire de
+Cette release termine les gates **G1** à **G5** et la fondation **G6A** sans
+rendre la synchronisation autonome utilisable. G1 introduit le vocabulaire de
 domaine, le schéma additif et les gardes. G2 ajoute un
 [format d'enveloppe HPKE](hpke-envelope-format.md) générique, versionné et
 entièrement isolé. G3 ajoute la
@@ -16,8 +16,10 @@ La migration `0027` resserre la table credential selon le
 [cycle de vie G5](imt-sync-credential-lifecycle.md). G5 ajoute la frontière
 serveur d'enrôlement, de révocation et de purge, mais son second feature flag
 est refusé en production. Le web de production ne reçoit donc aucune clé
-publique credential et la table reste vide. Le worker sync ne lit toujours pas
-cette table et aucune reconnexion autonome n'existe.
+publique credential et la table reste vide. G6A ajoute la migration `0028`,
+l'opener credential worker-only, les droits PostgreSQL bornés et
+l'observabilité nécessaire. Aucun chemin de synchronisation n'appelle encore
+l'opener et aucune reconnexion autonome n'existe.
 
 Les modes cibles sont :
 
@@ -27,9 +29,10 @@ Les modes cibles sont :
 | `session_only` | Oui | Cookies PASS/HUB chiffrés existants | Planifié tant que la session distante reste valide |
 | `autonomous` | Non | Futur credential sous enveloppe | Refusé avant toute mutation dans cette release |
 
-`BOTNOTE_AUTONOMOUS_SYNC_ENABLED` vaut `false` par défaut. Le positionner à
-`true` fait échouer la validation de configuration : aucun opérateur ne peut
-activer accidentellement un runtime incomplet.
+`BOTNOTE_AUTONOMOUS_SYNC_ENABLED` vaut `false` par défaut. Il peut être activé
+uniquement dans les tests et un développement explicitement configuré. Une
+valeur `true` en production échoue avec
+`AUTONOMOUS_SYNC_RUNTIME_NOT_ACTIVATABLE_IN_G6`.
 
 `BOTNOTE_AUTONOMOUS_SYNC_ENROLLMENT_ENABLED` vaut également `false`. Il permet
 uniquement les tests et le développement explicitement configuré. Une valeur
@@ -231,7 +234,7 @@ ne la transforme pas en credential et ne l'associe pas au mode
 | G3 | Worker sync dédié et clé privée isolée | Terminé |
 | G4 | Cookies PASS/HUB migrés vers l'isolation worker-only | Terminé |
 | G5 | API d'enrôlement, renouvellement, révocation et purge, fermée en production | Terminé |
-| G6 | Fallback autonome, révocation et rotation | Non terminé |
+| G6 | Fallback autonome, révocation et rotation | En cours : G6A terminé |
 | G7 | UX, consentement distinct et activation canary | Non terminé |
 
 `autonomous` reste indisponible tant que G6 et G7 ne sont pas validés. Chaque

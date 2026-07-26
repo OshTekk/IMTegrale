@@ -14,6 +14,7 @@ WEB_UNIT = ROOT / "deploy" / "botnote-web.service"
 SCHEDULER_UNIT = ROOT / "deploy" / "botnote-scheduler.service"
 PROVISIONER = ROOT / "deploy" / "security" / "provision-sync-hpke-keys"
 PG_HBA_RULES = ROOT / "deploy" / "security" / "botnote-sync.pg-hba.conf"
+POSTGRES_ROLE = ROOT / "deploy" / "security" / "provision-sync-postgres-role.sql"
 
 
 def test_dedicated_unit_has_fixed_credentials_and_hardening() -> None:
@@ -77,6 +78,39 @@ def test_postgres_peer_identity_is_limited_to_the_application_database() -> None
         ["local", "botnote", "botnote-sync", "peer"],
         ["local", "all", "botnote-sync", "reject"],
     ]
+
+
+def test_sync_role_receives_only_bounded_credential_table_permissions() -> None:
+    source = POSTGRES_ROLE.read_text()
+    assert 'GRANT SELECT ON TABLE imt_sync_credentials TO "botnote-sync";' in source
+    update_grant = source.split("GRANT UPDATE (", 1)[1].split(
+        ") ON TABLE imt_sync_credentials",
+        1,
+    )[0]
+    for allowed in (
+        "encrypted_envelope",
+        "envelope_version",
+        "key_id",
+        "credential_generation",
+        "state",
+        "last_used_at",
+        "last_success_at",
+        "last_failure_at",
+        "failure_count",
+        "revoked_at",
+        "revoked_reason",
+        "updated_at",
+    ):
+        assert allowed in update_grant
+    for forbidden in (
+        "account_id",
+        "consent_version",
+        "consented_at",
+        "verified_at",
+    ):
+        assert forbidden not in update_grant
+    assert "INSERT ON TABLE imt_sync_credentials" not in source
+    assert "DELETE ON TABLE imt_sync_credentials" not in source
 
 
 def test_sync_environment_example_contains_no_hpke_or_unrelated_secrets() -> None:

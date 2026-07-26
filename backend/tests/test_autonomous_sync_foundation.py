@@ -147,7 +147,7 @@ def test_sync_mode_domain_preserves_the_legacy_boolean_authority() -> None:
     assert sync_mode_requires_credential(SyncMode.SESSION_ONLY) is False
 
 
-def test_autonomous_feature_flag_is_closed_in_this_release() -> None:
+def test_autonomous_runtime_flag_is_testable_but_closed_in_production() -> None:
     assert Settings(_env_file=None, environment="test").autonomous_sync_enabled is False
     assert (
         Settings(
@@ -157,10 +157,29 @@ def test_autonomous_feature_flag_is_closed_in_this_release() -> None:
         ).autonomous_sync_enabled
         is False
     )
-    with pytest.raises(ValidationError, match="autonomous runtime is not implemented"):
+    assert (
         Settings(
             _env_file=None,
             environment="test",
+            autonomous_sync_enabled=True,
+        ).autonomous_sync_enabled
+        is True
+    )
+    assert (
+        Settings(
+            _env_file=None,
+            environment="development",
+            autonomous_sync_enabled=True,
+        ).autonomous_sync_enabled
+        is True
+    )
+    with pytest.raises(
+        ValidationError,
+        match="AUTONOMOUS_SYNC_RUNTIME_NOT_ACTIVATABLE_IN_G6",
+    ):
+        Settings(
+            _env_file=None,
+            environment="production",
             autonomous_sync_enabled=True,
         )
 

@@ -545,7 +545,12 @@
           "auto_sync_paused_reason": {
             "anyOf": [
               {
-                "const": "reauth_required",
+                "enum": [
+                  "reauth_required",
+                  "credential_invalid",
+                  "credential_key_unavailable",
+                  "autonomous_runtime_unavailable"
+                ],
                 "type": "string"
               },
               {
@@ -876,6 +881,48 @@
           "expires_at"
         ],
         "title": "AdminAuthenticatedSessionResponse",
+        "type": "object"
+      },
+      "AdminAutonomousSyncMetricsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "authentication_failures": {
+            "title": "Authentication Failures",
+            "type": "integer"
+          },
+          "credential_operations": {
+            "title": "Credential Operations",
+            "type": "integer"
+          },
+          "full_sso_performed": {
+            "title": "Full Sso Performed",
+            "type": "integer"
+          },
+          "pauses_by_reason": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Pauses By Reason",
+            "type": "object"
+          },
+          "succeeded": {
+            "title": "Succeeded",
+            "type": "integer"
+          },
+          "transient_failures": {
+            "title": "Transient Failures",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "credential_operations",
+          "succeeded",
+          "authentication_failures",
+          "transient_failures",
+          "full_sso_performed",
+          "pauses_by_reason"
+        ],
+        "title": "AdminAutonomousSyncMetricsResponse",
         "type": "object"
       },
       "AdminCalendarOperationalMetricsResponse": {
@@ -1503,6 +1550,9 @@
       "AdminPassMetricsResponse": {
         "additionalProperties": false,
         "properties": {
+          "autonomous": {
+            "$ref": "#/components/schemas/AdminAutonomousSyncMetricsResponse"
+          },
           "by_kind": {
             "additionalProperties": {
               "type": "integer"
@@ -1571,6 +1621,7 @@
           "duration_ms",
           "session_reuse",
           "profiles",
+          "autonomous",
           "by_kind",
           "errors",
           "denials",
@@ -1583,6 +1634,10 @@
       "AdminPassOperationalMetricsResponse": {
         "additionalProperties": false,
         "properties": {
+          "autonomous_credential_operations_24h": {
+            "title": "Autonomous Credential Operations 24H",
+            "type": "integer"
+          },
           "circuit_state": {
             "title": "Circuit State",
             "type": "string"
@@ -1608,6 +1663,7 @@
           "circuit_state",
           "operations_24h",
           "errors_24h",
+          "autonomous_credential_operations_24h",
           "hourly_quota",
           "daily_quota"
         ],
@@ -1650,7 +1706,12 @@
           "auto_sync_paused_reason": {
             "anyOf": [
               {
-                "const": "reauth_required",
+                "enum": [
+                  "reauth_required",
+                  "credential_invalid",
+                  "credential_key_unavailable",
+                  "autonomous_runtime_unavailable"
+                ],
                 "type": "string"
               },
               {
@@ -9544,7 +9605,12 @@
           "paused_reason": {
             "anyOf": [
               {
-                "const": "reauth_required",
+                "enum": [
+                  "reauth_required",
+                  "credential_invalid",
+                  "credential_key_unavailable",
+                  "autonomous_runtime_unavailable"
+                ],
                 "type": "string"
               },
               {

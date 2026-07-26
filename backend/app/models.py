@@ -39,7 +39,7 @@ from app.models_operations import (
     RuntimeHeartbeat as RuntimeHeartbeat,
 )
 from app.pass_session_contract import PASS_SERVICE_SESSION_ENVELOPE_BYTES
-from app.sync_modes import SYNC_MODE_VALUES
+from app.sync_modes import SYNC_MODE_VALUES, SYNC_PAUSE_REASONS
 
 
 class Account(Base):
@@ -57,6 +57,12 @@ class Account(Base):
         CheckConstraint(
             f"auto_sync_mode IN ({', '.join(repr(mode) for mode in SYNC_MODE_VALUES)})",
             name="ck_accounts_auto_sync_mode",
+        ),
+        CheckConstraint(
+            "auto_sync_paused_reason IS NULL OR auto_sync_paused_reason IN ("
+            + ", ".join(repr(reason) for reason in SYNC_PAUSE_REASONS)
+            + ")",
+            name="ck_accounts_auto_sync_paused_reason",
         ),
     )
 
@@ -650,6 +656,11 @@ class PassOperation(Base):
     request_count: Mapped[int] = mapped_column(Integer, default=0)
     session_reused: Mapped[bool] = mapped_column(Boolean, default=False)
     full_sso_performed: Mapped[bool] = mapped_column(Boolean, default=False)
+    autonomous_credential_used: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=text("false"),
+    )
     profile_fetched: Mapped[bool] = mapped_column(Boolean, default=False)
     error_class: Mapped[str | None] = mapped_column(String(64))
     upstream_status: Mapped[int | None] = mapped_column(Integer)

@@ -404,7 +404,7 @@ def test_missing_private_key_preserves_envelope_and_pauses_sync(
         assert stored is not None and managed is not None
         assert stored.state == "active"
         assert stored.hpke_envelope == envelope
-        assert managed.auto_sync_paused_reason == "key_unavailable"
+        assert managed.auto_sync_paused_reason == "credential_key_unavailable"
         assert "PASS_SESSION_HPKE_KEY_UNAVAILABLE" in operational_alert_codes(
             db,
             get_settings(),
