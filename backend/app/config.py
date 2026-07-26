@@ -19,6 +19,7 @@ class RuntimeRole(StrEnum):
     WEB = "web"
     SYNC = "sync"
     SYNC_MIGRATION = "sync-migration"
+    HPKE_ROTATION = "hpke-rotation"
     CALENDAR = "calendar"
     OUTBOX = "outbox"
     SCHEDULER = "scheduler"
@@ -195,7 +196,10 @@ class Settings(BaseSettings):
             raise RuntimeError("Unknown runtime role") from None
         if runtime_role is RuntimeRole.WEB:
             self.validate_learning_content_boundary()
-        if runtime_role is RuntimeRole.SYNC_MIGRATION and self.sync_runtime_profile != "migration":
+        if runtime_role in {
+            RuntimeRole.SYNC_MIGRATION,
+            RuntimeRole.HPKE_ROTATION,
+        } and self.sync_runtime_profile != "migration":
             raise RuntimeError("BOTNOTE_SYNC_RUNTIME_PROFILE=migration is required")
         if runtime_role is RuntimeRole.SYNC and self.sync_runtime_profile != "normal":
             raise RuntimeError("The normal sync worker requires its normal profile")
@@ -210,6 +214,14 @@ class Settings(BaseSettings):
             legacy_sync_environment_present or self.credential_key or self.credential_previous_keys
         ):
             raise RuntimeError("SYNC_LEGACY_CREDENTIAL_KEY_FORBIDDEN")
+        if runtime_role is RuntimeRole.HPKE_ROTATION and (
+            legacy_sync_environment_present
+            or self.credential_key
+            or self.credential_previous_keys
+            or self.token_pepper
+            or self.token_previous_peppers
+        ):
+            raise RuntimeError("HPKE_ROTATION_UNRELATED_SECRET_FORBIDDEN")
 
         needs_credential_key = runtime_role in {
             RuntimeRole.WEB,
@@ -241,7 +253,10 @@ class Settings(BaseSettings):
             else:
                 if not self.database_url.startswith("postgresql+psycopg:"):
                     raise RuntimeError("Production requires PostgreSQL through psycopg")
-                if runtime_role is RuntimeRole.SYNC:
+                if runtime_role in {
+                    RuntimeRole.SYNC,
+                    RuntimeRole.HPKE_ROTATION,
+                }:
                     database_target = urlsplit(self.database_url)
                     if (
                         database_target.scheme != "postgresql+psycopg"
@@ -253,6 +268,7 @@ class Settings(BaseSettings):
                         raise RuntimeError(
                             "Sync production requires local peer PostgreSQL access to the botnote database"
                         )
+                if runtime_role is RuntimeRole.SYNC:
                     if not self.sync_lock_dir.is_absolute():
                         raise RuntimeError("BOTNOTE_SYNC_LOCK_DIR must be an absolute path")
                     try:

@@ -1293,7 +1293,11 @@ class AdminAutonomousSyncMetricsResponse(ApiModel):
     succeeded: int
     authentication_failures: int
     transient_failures: int
+    credentials_invalidated: int
+    sessions_recreated: int
+    session_reuse_after_autonomous_sso: int
     full_sso_performed: int
+    owner_local_full_sso: int
     pauses_by_reason: dict[str, int]
 
 

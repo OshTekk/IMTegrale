@@ -27,10 +27,26 @@ class SyncModeAccount(Protocol):
 AVAILABLE_SYNC_MODES = (SyncMode.MANUAL, SyncMode.SESSION_ONLY)
 
 
-def effective_sync_mode(account: SyncModeAccount) -> SyncMode:
-    """Preserve the legacy boolean as the behavioral authority during expansion."""
+def effective_sync_mode(
+    account: SyncModeAccount,
+    *,
+    autonomous_runtime_enabled: bool = False,
+) -> SyncMode | None:
+    """Resolve the runtime mode while preserving rollback compatibility.
 
-    return SyncMode.SESSION_ONLY if account.auto_sync_enabled else SyncMode.MANUAL
+    The legacy boolean remains authoritative for manual/session-only rollback
+    writes. An autonomous row is never silently downgraded when its runtime is
+    unavailable.
+    """
+
+    if not account.auto_sync_enabled:
+        return SyncMode.MANUAL
+    mode = stored_sync_mode(account)
+    if mode is SyncMode.AUTONOMOUS:
+        return SyncMode.AUTONOMOUS if autonomous_runtime_enabled else None
+    if mode is None:
+        return None
+    return SyncMode.SESSION_ONLY
 
 
 def stored_sync_mode(account: SyncModeAccount) -> SyncMode | None:
@@ -43,11 +59,16 @@ def stored_sync_mode(account: SyncModeAccount) -> SyncMode | None:
         return None
 
 
-def stored_sync_mode_is_supported(account: SyncModeAccount) -> bool:
+def stored_sync_mode_is_supported(
+    account: SyncModeAccount,
+    *,
+    autonomous_runtime_enabled: bool = False,
+) -> bool:
     raw_mode = getattr(account, "auto_sync_mode", None)
     if raw_mode is None:
         return True
-    return stored_sync_mode(account) in AVAILABLE_SYNC_MODES
+    mode = stored_sync_mode(account)
+    return mode in AVAILABLE_SYNC_MODES or (mode is SyncMode.AUTONOMOUS and autonomous_runtime_enabled)
 
 
 def sync_mode_is_automatic(mode: SyncMode) -> bool:

@@ -67,8 +67,10 @@ La révision `0017` supprime physiquement les anciennes colonnes de mot de passe
    provisionnées hors Git et injectées uniquement par `LoadCredential`; elles
    ne doivent jamais être ajoutées à un environnement. Depuis G4, le web reçoit
    exactement `pass-service-session-public`; G5 ne lui ajoute pas la clé
-   publique credential. Le worker reçoit les quatre credentials mais ne lit
-   toujours pas `imt_sync_credentials`. Le fichier `botnote-sync.env` final ne
+   publique credential. Le worker reçoit les quatre credentials et G6 lui donne
+   l'accès minimal au cycle de vie de `imt_sync_credentials`, mais le flag
+   runtime fermé empêche toute lecture d'enveloppe en production. Le fichier
+   `botnote-sync.env` final ne
    contient ni
    `BOTNOTE_CREDENTIAL_KEY`, ni `BOTNOTE_CREDENTIAL_PREVIOUS_KEYS`; leur
    présence fait échouer le profil sync normal. La procédure de migration et de
@@ -114,6 +116,16 @@ La révision `0017` supprime physiquement les anciennes colonnes de mot de passe
    refusés. Déployer ensuite l'artefact round-trip avec les deux flags fermés,
    redémarrer le worker et vérifier le heartbeat `isolated-sync-v3`. Cette
    étape ne doit réserver aucune opération PASS.
+   Pour G6B, préparer une génération v2 pour chaque purpose, arrêter scheduler
+   et worker sync après expiration des leases, puis appliquer la procédure
+   [`hpke-operational-rotation.md`](../docs/security/hpke-operational-rotation.md).
+   Le dry-run doit afficher `failed=invalid_metadata=mixed_active=0` et
+   `remaining_source=source_found`. Après l'écriture puis `--verify-only`,
+   exiger en plus `remaining_source=0` avant la bascule.
+   Installer ensuite les unités dont les quatre mappings worker et l'unique
+   mapping web pointent vers v2. Les deux flags restent `false`, le web ne
+   reçoit aucune clé privée ni clé publique credential, et aucun smoke-test ne
+   contacte PASS.
 9. Créer le répertoire dédié avec `install -d -o botnote -g botnote -m 0700 /var/lib/botnote-admin`, puis amorcer le premier compte avec `botnote admin-bootstrap --username <nom> --output /var/lib/botnote-admin/initial-credentials.txt`. Le fichier doit rester `0600`, être supprimé après lecture et le mot de passe doit être changé à la première connexion. La première session permet ensuite d'enrôler une passkey pendant dix minutes. Après cet enrôlement, toute nouvelle session admin exige cette passkey et les mutations sensibles exigent un step-up de moins de dix minutes. Conserver au moins deux passkeys administrateur sur des dispositifs distincts ; la dernière ne peut pas être supprimée depuis l'interface. Ne pas relâcher les permissions du répertoire legacy `/var/lib/botnote`.
 
 Un redémarrage Nginx complet est volontaire lors d'un changement d'upstream : un reload gracieux peut conserver un ancien worker tant qu'une connexion SSE reste ouverte.
@@ -129,6 +141,47 @@ botnote keys-reencrypt --dry-run
 ```
 
 La commande est transactionnelle par lot, reprenable et n'affiche ni secret ni donnée académique. Ne retirer une ancienne clé qu'après un inventaire à zéro, une sauvegarde restaurée et la validation de tous les processus. Pour un pepper, laisser la période de coexistence couvrir la durée maximale des sessions et tokens, ou les révoquer explicitement avant retrait.
+
+### Rotation HPKE du worker sync
+
+Le keyset `/etc/botnote/sync-hpke` est géré exclusivement par root. Préparer et
+activer une génération sont deux actions distinctes :
+
+```bash
+deploy/security/provision-sync-hpke-keys prepare-rotation \
+  --purpose pass-service-session
+deploy/security/provision-sync-hpke-keys verify
+deploy/security/provision-sync-hpke-keys activate-generation \
+  --purpose pass-service-session --generation 2 \
+  --confirm ACTIVATE-HPKE-GENERATION
+```
+
+Sur une installation neuve, `provision` crée la génération v1 de bootstrap,
+mais les unités G6B publiées dans ce dépôt ciblent v2. Il faut donc préparer et
+activer v2 pour les deux purposes avant d'installer ou démarrer ces unités.
+L'inventaire d'enveloppes doit alors être nul ; aucun service ne doit être lancé
+avec un mapping vers un fichier absent.
+
+Avant activation session, exécuter `botnote hpke-rotate-envelopes` dans une
+unité opérationnelle isolée recevant seulement l'ancienne clé privée, la
+nouvelle clé privée et la nouvelle clé publique. Commencer par `--dry-run`,
+répéter avec `--confirm ROTATE-HPKE-ENVELOPES`, puis terminer par
+`--verify-only`. Les identifiants de clés sont lus localement depuis le
+manifeste et ne sont jamais copiés dans un rapport. La commande ne construit
+rien, ne contacte aucun service et ne modifie ni compte, ni consentement, ni
+donnée académique.
+
+Cette unité utilise le rôle applicatif `hpke-rotation`, le profil
+`BOTNOTE_SYNC_RUNTIME_PROFILE=migration`, l'utilisateur Unix `botnote-sync` et
+la connexion peer `postgresql+psycopg:///botnote`. Elle ne charge aucun
+`EnvironmentFile` applicatif : la présence de la clé symétrique générale, du
+token pepper ou de leurs anciennes valeurs provoque un échec fermé.
+
+Refuser la bascule si `failed`, `invalid_metadata`, `mixed_active` ou
+`remaining_source` est non nul. Après rotation, les unités normales ne
+reçoivent que les fichiers v2. Le retrait de v1 exige un inventaire de
+références à zéro et une confirmation explicite. Une restauration de base
+révoque toutes les sessions et tous les credentials avant remise en service.
 
 ## Release privée IMTégrale Parcours
 
@@ -254,6 +307,11 @@ production.
   agrégats `active`, `invalid`, `revoked` et `autonomous` doivent tous rester à
   zéro ; le flag d'enrôlement est fermé et le web n'a pas la clé publique
   credential.
+- Après `0028` et G6B, vérifier les mappings v2, zéro source v1, zéro
+  `mixed_active`, zéro métadonnée invalide, zéro credential et zéro compte
+  autonome. Le runtime et l'enrôlement restent fermés ; le worker normal ne
+  reçoit aucune ancienne clé et le web reçoit uniquement la clé publique
+  session v2.
 - `systemctl --failed` doit être vide sur PVE et LXC.
 - Depuis le LAN, `/api/v1/admin/auth/session` doit répondre `404`. Depuis l'identité Tailscale autorisée, il doit répondre sans révéler de compte tant que l'authentification admin n'est pas faite.
 - Vérifier qu'une session admin obtenue par mot de passe seul ne peut pas ouvrir le portail après l'enrôlement initial, qu'une passkey est exigée et qu'une mutation sensible refuse un step-up vieux de plus de dix minutes avec `ADMIN_STEP_UP_REQUIRED`. Une lecture non destructive doit rester disponible après expiration du step-up.
@@ -273,7 +331,9 @@ production.
 ## Rollback
 
 Rebasculer ensemble `current` et `runtime` vers la version précédente, puis
-restaurer les unités compatibles avant de redémarrer l'API et Nginx. Pour G4B,
+restaurer les unités compatibles avant de redémarrer l'API et Nginx. Pour G6B,
+la cible immédiate est G6A : conserver Alembic `0028` et les mappings v2, sans
+réintroduire v1 ni downgrader. Pour G4B,
 le rollback immédiat est exclusivement G4A : restaurer son fichier sync
 temporaire, conserver Alembic `0026` et ne jamais recréer de legacy. Un
 downgrade de `0026` est refusé dès qu'une enveloppe existe.
@@ -283,7 +343,8 @@ supprime irréversiblement les mots de passe stockés ; `0020` introduit les job
 durables ; `0021` le MFA admin ; `0022` l'observabilité ; `0023` les décimaux ;
 `0024` retire les index redondants ; `0025` ajoute le miroir de mode et la table
 credential vide ; `0026` ajoute le stockage HPKE des sessions ; `0027` durcit
-le cycle de vie credential avant toute première écriture. G5B se rollbacke vers
+le cycle de vie credential avant toute première écriture ; `0028` ajoute
+l'observabilité et les pauses runtime G6. G5B se rollbacke vers
 G5A sans downgrade de la base ni modification des clés systemd. Un rollback
 applicatif conserve la base migrée. Ne pas downgrader `0017` en production et
 révoquer toutes les sessions avant tout retour antérieur à G4.

@@ -25,10 +25,10 @@ plus la clé symétrique depuis G4B. Aucun plaintext n'est
 
 Les nouvelles sessions sont scellées avec la clé publique active. Le worker
 ouvre uniquement le `key_id` déclaré avec son keyring privé et rechiffre avec la
-clé publique active lors d'un refresh. G4 ne crée pas de seconde clé
-opérationnelle. Une rotation future doit inventorier les lignes par
-`hpke_key_id`, conserver les anciennes clés privées de lecture jusqu'à un
-inventaire à zéro et ne jamais essayer toutes les clés.
+clé publique active lors d'un refresh. G6 fournit le keyset v2 et la
+[rotation opérationnelle hors réseau](hpke-operational-rotation.md). Les
+anciennes clés privées restent disponibles uniquement dans l'unité temporaire
+de rotation jusqu'à un inventaire source à zéro.
 
 La perte de la clé privée ne détruit pas automatiquement les enveloppes. Le
 worker échoue fermé et l'exploitation décide soit de restaurer la clé, soit
@@ -38,16 +38,12 @@ En cas d'échec, conserver la nouvelle clé active et toutes les anciennes clés
 
 ## Clé HPKE des credentials IMT
 
-G5 peut sceller une enveloppe credential dans les tests, mais ne livre aucune
-rotation opérationnelle et conserve l'enrôlement fermé en production. Le
-`key_id` stocké permet un inventaire agrégé sans exposer la clé.
-
-G6 devra définir une clé publique active, un keyring privé de lecture et une
-rotation qui ne retire jamais une ancienne clé avant inventaire à zéro. Une clé
-perdue ne doit pas être remplacée silencieusement : les enveloppes concernées
-sont révoquées avec la commande hors réseau, puis les utilisateurs se
-réenrôlent. Après restauration d'une base, la révocation globale utilise la
-raison `database_restored` avant tout redémarrage normal.
+G6 fournit la même rotation pour les credentials IMT. L'enrôlement reste fermé
+en production et l'inventaire attendu est donc nul. Une clé perdue ne doit pas
+être remplacée silencieusement : les enveloppes concernées sont révoquées avec
+la commande hors réseau, puis les utilisateurs se réenrôlent. Après
+restauration d'une base, la révocation globale utilise la raison
+`database_restored` avant tout redémarrage normal.
 
 ## Pepper HMAC
 

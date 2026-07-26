@@ -894,8 +894,16 @@
             "title": "Credential Operations",
             "type": "integer"
           },
+          "credentials_invalidated": {
+            "title": "Credentials Invalidated",
+            "type": "integer"
+          },
           "full_sso_performed": {
             "title": "Full Sso Performed",
+            "type": "integer"
+          },
+          "owner_local_full_sso": {
+            "title": "Owner Local Full Sso",
             "type": "integer"
           },
           "pauses_by_reason": {
@@ -904,6 +912,14 @@
             },
             "title": "Pauses By Reason",
             "type": "object"
+          },
+          "session_reuse_after_autonomous_sso": {
+            "title": "Session Reuse After Autonomous Sso",
+            "type": "integer"
+          },
+          "sessions_recreated": {
+            "title": "Sessions Recreated",
+            "type": "integer"
           },
           "succeeded": {
             "title": "Succeeded",
@@ -919,7 +935,11 @@
           "succeeded",
           "authentication_failures",
           "transient_failures",
+          "credentials_invalidated",
+          "sessions_recreated",
+          "session_reuse_after_autonomous_sso",
           "full_sso_performed",
+          "owner_local_full_sso",
           "pauses_by_reason"
         ],
         "title": "AdminAutonomousSyncMetricsResponse",

@@ -67,6 +67,22 @@ autonomous_activation=false
 Un legacy réintroduit rend `operations-check` non vert et n'est jamais converti
 silencieusement.
 
+## G6 : rotation opérationnelle
+
+G6 fait évoluer le keyset vers un manifeste versionné et tourne les enveloppes
+actives hors réseau. La commande `botnote hpke-rotate-envelopes` reçoit
+uniquement, via des credentials systemd temporaires, l'ancienne clé privée, la
+nouvelle clé privée et la nouvelle clé publique. Pour chaque ligne elle ouvre
+v1, rescelle en v2, rouvre v2, compare exactement le plaintext puis remplace
+l'enveloppe sous verrou. Elle ne contacte ni PASS, ni HUB, ni COMPETENCES.
+
+Le dry-run, l'écriture confirmée et `--verify-only` sont distincts. La bascule
+des `LoadCredential` n'est autorisée qu'avec `remaining_source=0`,
+`mixed_active=0`, `invalid_metadata=0` et `failed=0`. Le web reçoit seulement
+la clé publique session v2 ; le worker normal reçoit les quatre fichiers v2.
+Les anciennes clés privées ne sont jamais injectées dans un service normal
+après la bascule.
+
 ## Perte de clé
 
 Une clé privée absente met la synchronisation en pause et préserve l'enveloppe.
@@ -108,8 +124,8 @@ tables avant de considérer la restauration exploitable.
 
 ## Rollback
 
-Le rollback de G4B rebascule release et runtime vers G4A, restaure son fichier
-sync temporaire, puis redémarre worker et scheduler. La base reste en `0026`.
-Il ne faut ni downgrader, ni recréer de legacy. Un retour jusqu'à G3 exige au
-préalable la révocation de toutes les enveloppes et l'acceptation d'une
-reconnexion pour chaque compte concerné.
+Le rollback immédiat de G6B rebascule release et runtime vers G6A, conserve la
+base en `0028` et les mappings v2, puis redémarre worker et scheduler. Il ne
+faut ni downgrader, ni ramener les enveloppes vers v1. Un retour jusqu'à G3
+exige au préalable la révocation de toutes les enveloppes et l'acceptation
+d'une reconnexion pour chaque compte concerné.

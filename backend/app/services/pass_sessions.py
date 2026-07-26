@@ -548,7 +548,19 @@ def service_session_view(db: Session, account: Account) -> dict:
     active = bool(
         row and bool(row.encrypted_cookie_jar) != bool(row.hpke_envelope) and ensure_utc(row.expires_at) > now
     )
-    owner_managed = owner_autonomous_sync_available(account)
+    from app.services.autonomous_sync_schedule import (
+        autonomous_fallback_is_available,
+    )
+
+    owner_managed = (
+        autonomous_fallback_is_available(
+            db,
+            account,
+            runtime_enabled=get_settings().autonomous_sync_enabled,
+        )
+        if account.auto_sync_mode == "autonomous"
+        else owner_autonomous_sync_available(account)
+    )
     if active:
         state = "active"
     elif owner_managed:

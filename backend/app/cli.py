@@ -23,6 +23,8 @@ def _runtime_role(command: str, worker_kind: str | None = None) -> RuntimeRole:
         return RuntimeRole.SYNC
     if command == "pass-sessions-migrate-hpke":
         return RuntimeRole.SYNC_MIGRATION
+    if command == "hpke-rotate-envelopes":
+        return RuntimeRole.HPKE_ROTATION
     if command == "worker":
         return RuntimeRole(worker_kind or "")
     return RuntimeRole.CLI
@@ -118,6 +120,22 @@ def main() -> None:
     revoke_credentials.add_argument(
         "--confirm",
         choices=("REVOKE-ALL-SYNC-CREDENTIALS",),
+    )
+    hpke_rotation = subparsers.add_parser("hpke-rotate-envelopes")
+    hpke_rotation.add_argument(
+        "--purpose",
+        choices=("pass-service-session", "imt-sync-credential", "all"),
+        required=True,
+    )
+    hpke_rotation.add_argument("--source-key-id", action="append", required=True)
+    hpke_rotation.add_argument("--target-key-id", action="append", required=True)
+    hpke_rotation.add_argument("--batch-size", type=int, default=50)
+    hpke_rotation_mode = hpke_rotation.add_mutually_exclusive_group()
+    hpke_rotation_mode.add_argument("--dry-run", action="store_true")
+    hpke_rotation_mode.add_argument("--verify-only", action="store_true")
+    hpke_rotation.add_argument(
+        "--confirm",
+        choices=("ROTATE-HPKE-ENVELOPES",),
     )
 
     args = parser.parse_args()
@@ -266,6 +284,42 @@ def main() -> None:
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
         print(json.dumps(result, sort_keys=True))
+    elif args.command == "hpke-rotate-envelopes":
+        from app.services.hpke_envelope_rotation import (
+            ROTATION_PURPOSES,
+            HpkeRotationError,
+            load_hpke_rotation_keys,
+            rotate_hpke_envelopes,
+        )
+
+        purposes = ROTATION_PURPOSES if args.purpose == "all" else (args.purpose,)
+        if len(args.source_key_id) != len(purposes) or len(args.target_key_id) != len(purposes):
+            raise SystemExit("HPKE_ROTATION_KEY_ID_COUNT_INVALID")
+        aggregate: dict[str, dict[str, int]] = {}
+        try:
+            for index, purpose in enumerate(purposes):
+                keys = load_hpke_rotation_keys(purpose)
+                aggregate[purpose] = rotate_hpke_envelopes(
+                    purpose=purpose,
+                    keys=keys,
+                    source_key_id=args.source_key_id[index],
+                    target_key_id=args.target_key_id[index],
+                    dry_run=args.dry_run,
+                    verify_only=args.verify_only,
+                    batch_size=args.batch_size,
+                    confirmed=args.confirm == "ROTATE-HPKE-ENVELOPES",
+                )
+        except HpkeRotationError as exc:
+            raise SystemExit(exc.code) from None
+        print(json.dumps(aggregate, sort_keys=True))
+        if any(
+            result["failed"]
+            or result["invalid_metadata"]
+            or result["mixed_active"]
+            or (not args.dry_run and result["remaining_source"])
+            for result in aggregate.values()
+        ):
+            raise SystemExit(1)
 
 
 if __name__ == "__main__":

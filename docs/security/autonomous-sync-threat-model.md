@@ -3,8 +3,8 @@
 ## Portée
 
 Ce document distingue la fondation G1, la primitive HPKE G2, la frontière
-worker G3, la migration de sessions G4, la frontière serveur G5 et
-l'architecture autonome future. G5 sait sceller un credential dans les tests,
+worker G3, la migration de sessions G4, la frontière serveur G5 et le runtime
+G6. G5 sait sceller un credential dans les tests,
 mais son enrôlement est refusé en production et la table y reste vide. Les
 seules capacités distantes actives restent les cookies PASS/HUB protégés par
 HPKE et décrits dans la politique actuelle.
@@ -25,7 +25,7 @@ Les actifs futurs à protéger seront :
 | API web | Peut sceller un credential lorsque le flag non-production est ouvert, sans capacité de lecture | Même frontière avec activation canary |
 | PostgreSQL | Enveloppes de sessions ; zéro credential en production | Enveloppes uniquement, jamais de clé privée |
 | Scheduler | Planifie `session_only` depuis le booléen historique | Ne reçoit aucune clé privée |
-| Worker sync | Ouvre les sessions PASS/HUB mais ne lit pas la table credential | Seul futur processus autorisé à ouvrir un credential |
+| Worker sync | Ouvre les sessions PASS/HUB et, en runtime G6 explicitement activé, les credentials actifs | Seul processus autorisé à ouvrir un credential |
 | Workers calendar/outbox | Aucun accès au mot de passe | Aucun accès à la clé privée |
 | systemd | Credentials privés limités à l'unité sync | Même frontière avec rotation |
 
@@ -36,7 +36,7 @@ Les actifs futurs à protéger seront :
 | Lecture de PostgreSQL ou fuite d'un dump | Une enveloppe de test ou future peut être copiée | Clé privée absente de PostgreSQL ; contexte lié au compte | Revérification du mode et de la génération par G6 |
 | RCE dans le web | Peut capturer le mot de passe pendant une saisie et produire des enveloppes | Aucune clé privée ni méthode d'ouverture ; production fermée | Le risque pendant la saisie reste irréductible |
 | RCE scheduler/calendar/outbox | Ne peut ni ouvrir ni enrôler un credential | Aucun chemin de lecture, aucune clé privée | Frontière inchangée |
-| RCE worker sync | Possède déjà la clé privée, mais son rôle et son chemin runtime ne lisent pas la table | Refus PostgreSQL et tests structurels | G6 ajoutera une lecture strictement bornée |
+| RCE worker sync | Peut ouvrir les credentials actifs lisibles | Rôle PostgreSQL borné, clé isolée, runtime production fermé | Risque critique accepté seulement lors du futur canary |
 | Token `owner` volé | Reçoit une vue neutre et ne peut ni enrôler, ni supprimer, ni purger | Propriétaire primaire requis | Frontière inchangée |
 | Session web primaire volée | Peut révoquer ou purger ; enrôler exige encore le mot de passe IMT | Origin, CSRF, rate limits et vérification IMT | Step-up récent à étudier séparément |
 | Compte administrateur compromis | Ne peut pas créer, lire ou ouvrir un credential | Aucune route admin ; révocation d'urgence par CLI locale | L'admin futur reste limité aux agrégats |
@@ -48,8 +48,8 @@ Les actifs futurs à protéger seront :
 | Changement du login IMT | Invalide la session HPKE liée à l'ancien login | Ciphertext effacé et reconnexion requise | Ancien credential invalide, réenrôlement requis |
 | Rollback d'une sauvegarde | Peut ressusciter une session révoquée | Révocation globale obligatoire avant remise en service | Génération et consentement vérifiés avant déchiffrement |
 | Perte de clé privée | Sessions préservées mais worker fermé | Alerte agrégée, restauration de clé ou révocation humaine | Réenrôlement, aucune perte de note |
-| Rotation incomplète | G5 ne tourne aucune clé | Inventaire agrégé et révocation globale | Rotation opérationnelle G6 |
-| Révocation pendant un job | Le worker revérifie le booléen et le consentement | Garde avant appel | Nouvelle vérification génération/mode juste avant ouverture |
+| Rotation incomplète | Une enveloppe peut rester sur l'ancienne clé | Dry-run, round-trip, inventaire source et vérification cible | Ancienne clé conservée jusqu'à zéro |
+| Révocation pendant un job | Une requête déjà envoyée ne peut pas être rappelée | Vérifications avant et après SSO, génération compare-and-swap | Fenêtre résiduelle documentée |
 
 ## Invariants G1
 
@@ -113,8 +113,25 @@ Les actifs futurs à protéger seront :
 - révocation, purge et transitions vers `manual` ou `session_only` effacent
   immédiatement l'enveloppe ;
 - viewers et tokens owner ne révèlent pas l'existence d'un credential ;
-- le scheduler et le worker n'utilisent toujours aucun credential ;
+- le scheduler ne lit que l'état non secret ; le worker peut ouvrir un
+  credential uniquement dans le runtime synthétique G6 explicitement activé ;
 - la restauration exige une révocation globale hors réseau avant redémarrage.
+
+## Invariants G6
+
+- le gateway essaie toujours la session avant le credential ;
+- le scheduler ne lit que l'état non secret du credential ;
+- seul le worker sync possède l'opener et les clés privées ;
+- mode, consentement, login, génération, enveloppe et leases sont revérifiés
+  avant et après l'unique SSO ;
+- un mot de passe refusé ou une enveloppe altérée invalide la génération
+  utilisée sans toucher un remplacement concurrent ;
+- une panne transitoire ou une clé absente conserve l'enveloppe ;
+- aucun secret n'entre dans les jobs, événements, métriques ou logs ;
+- les deux purposes disposent d'une rotation hors réseau, idempotente et
+  vérifiée ;
+- runtime et enrôlement restent fermés en production, avec zéro credential et
+  zéro compte autonome.
 
 ## Risques résiduels
 
@@ -130,7 +147,6 @@ inspection de sa mémoire pendant un futur SSO resteront des risques
 irréductibles. L'enveloppe asymétrique réduira la surface de déchiffrement, mais
 ne rendra jamais l'exploitation d'un mot de passe sans risque.
 
-La présence d'une API fermée et d'un cycle de vie ne constitue pas une capacité
-autonome. Toute activation avant G6 et G7 doit être considérée comme une erreur
-de configuration. G5 est terminé ; le fallback, la rotation réelle et l'UX
-restent fermés.
+Le moteur G6 est prêt mais ne constitue pas une activation produit. Toute
+activation avant G7 doit être considérée comme une erreur de configuration.
+L'UX, le consentement visible et le canary restent fermés.

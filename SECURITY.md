@@ -45,9 +45,10 @@ ciphertext dans un état révoqué ou invalide. `autonomous` reste indisponible 
 le flag d'enrôlement est refusé en production : aucune option visible ne stocke
 de mot de passe et la production conserve zéro credential. L'architecture cible
 et son [modèle de menace](docs/security/autonomous-sync-threat-model.md) sont
-documentés séparément. G6A n'appelle jamais cet opener pendant une
-synchronisation ; G6B et G7 restent nécessaires avant toute utilisation
-autonome.
+documentés séparément. G6 termine le moteur session-first, les revérifications
+de génération, l'invalidation et la rotation hors réseau, mais garde le runtime
+production fermé. G7 reste nécessaire avant toute activation, tout consentement
+visible ou tout canary autonome.
 
 Avant toute exposition Internet, l'administrateur doit adapter les exemples de `deploy/`, isoler les secrets hors Git, tester une restauration de sauvegarde chiffrée et limiter l'administration à une identité réseau privée.
 

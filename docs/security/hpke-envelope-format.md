@@ -10,7 +10,9 @@ sur un sealer web public uniquement dans les environnements de test ou de
 développement explicitement autorisés. La production ne charge pas cette clé
 et conserve `imt_sync_credentials` vide. Le module cryptographique générique
 lui-même ne lit toujours aucune configuration et ne charge aucun fichier de
-clé.
+clé. G6 connecte l'opener credential uniquement au worker sync derrière le
+flag runtime fermé en production. Le gateway revérifie le contexte métier avant
+et après l'unique SSO ; HPKE ne remplace jamais ces contrôles.
 
 Le module utilise directement
 [l'API one-shot HPKE de `cryptography 49`](https://cryptography.io/en/49.0.0/hazmat/primitives/hpke/)
@@ -226,16 +228,19 @@ Le format ne fournit pas :
 - la protection d'un secret avant chiffrement dans un processus web compromis.
 
 G5 fournit l'autorisation, le consentement, la génération et la révocation côté
-base, mais pas encore leur revérification par un worker avant ouverture. Une
-RCE du worker détenteur de la clé privée reste critique.
+base. G6 ajoute la sélection de la génération déclarée, les revérifications
+optimistes avant et après réseau et l'abandon du résultat si l'état a changé.
+Une requête déjà transmise ne peut toutefois pas être rappelée. Une RCE du
+worker détenteur de la clé privée reste critique.
 
 ## Compatibilité future
 
 Les nouvelles suites, structures de contexte ou frames nécessiteront de nouveaux
 identifiants et tests de migration. Une ancienne implémentation refuse une
-version inconnue au lieu de tenter une interprétation. Les anciennes clés
-privées pourront rester temporairement dans le keyring de lecture, sélectionnées
-par leur `key_id`, sans devenir des clés actives d'écriture.
+version inconnue au lieu de tenter une interprétation. La rotation G6 fournit
+les anciennes et nouvelles clés uniquement à une commande hors réseau dédiée ;
+le worker normal final ne tente jamais plusieurs clés et ne reçoit que la
+génération active.
 
 Les exemples et tests emploient uniquement des identités, clés et secrets
 fictifs générés en mémoire. Les clés opérationnelles G3 sont provisionnées

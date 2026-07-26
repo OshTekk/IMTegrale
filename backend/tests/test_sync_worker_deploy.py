@@ -32,6 +32,8 @@ def test_dedicated_unit_has_fixed_credentials_and_hardening() -> None:
     ):
         assert f"LoadCredential={logical_name}:" in unit
         assert f"Environment={logical_name}" not in unit
+    assert "-v2." in unit
+    assert "-v1." not in unit
     for directive in (
         "PrivateMounts=true",
         "ProtectProc=invisible",
@@ -52,7 +54,7 @@ def test_web_can_share_only_the_account_lock_boundary() -> None:
     assert "ReadWritePaths=/run/botnote-sync-locks" in unit
     assert unit.count("LoadCredential=") == 1
     assert (
-        "LoadCredential=pass-service-session-public:/etc/botnote/sync-hpke/pass-service-session-v1.public.raw"
+        "LoadCredential=pass-service-session-public:/etc/botnote/sync-hpke/pass-service-session-v2.public.raw"
     ) in unit
     for forbidden_name in (
         "pass-service-session-private",

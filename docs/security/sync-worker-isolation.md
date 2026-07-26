@@ -1,10 +1,10 @@
 # Isolation du worker de synchronisation
 
-## Portée G3 à G6A
+## Portée G3 à G6
 
 G3 crée la frontière d'exécution dédiée. G4 y branche les sessions techniques
 PASS/HUB. G5 ajoute la frontière web d'enrôlement. G6A prépare l'ouverture
-worker-only sans encore la relier au gateway :
+worker-only ; G6B la relie au gateway derrière le flag de runtime fermé :
 
 - toute nouvelle session PASS/HUB est scellée en HPKE ;
 - les anciennes sessions sont migrées hors réseau ;
@@ -12,8 +12,10 @@ worker-only sans encore la relier au gateway :
 - `imt_sync_credentials` reste vide en production ;
 - `autonomous` reste indisponible ;
 - le worker possède un opener credential strict et testé ;
-- aucun chemin de synchronisation ne l'appelle encore ;
-- aucun fallback autonome n'est encore réalisé.
+- le gateway essaie toujours la session technique avant le credential ;
+- un fallback autonome exige mode, consentement, credential, leases et
+  génération cohérents avant et après l'unique SSO ;
+- le runtime et l'enrôlement restent désactivés en production jusqu'à G7.
 
 ## Identités et accès
 
@@ -83,8 +85,8 @@ actif décrite ci-dessous.
 
 ## Clés opérationnelles
 
-Le provisionneur `deploy/security/provision-sync-hpke-keys` crée exactement deux
-paires X25519 distinctes :
+Le provisionneur `deploy/security/provision-sync-hpke-keys` gère un keyset
+versionné pour exactement deux purposes X25519 distincts :
 
 - `imt-sync-credential` ;
 - `pass-service-session`.
@@ -98,11 +100,20 @@ Usage initial :
   /opt/botnote/releases/RELEASE/deploy/security/provision-sync-hpke-keys verify
 ```
 
-Le répertoire `/etc/botnote/sync-hpke` est `root:root 0700`. Les quatre fichiers
-raw et `keyset.json` sont `root:root 0400`. Le provisionnement est atomique,
-refuse une cible existante, les symlinks, hardlinks, types spéciaux, tailles
-incorrectes et paires incohérentes. `verify` n'affiche que le nombre de purposes
-et le fait que les paires sont distinctes, jamais une clé ou un ciphertext.
+Le provisionnement neuf crée volontairement une génération v1 de bootstrap.
+Avant d'installer les unités de la release G6B, qui pointent explicitement sur
+v2, préparer puis activer une génération v2 pour chacun des deux purposes selon
+la procédure de rotation. Sur une base neuve, l'inventaire des enveloppes doit
+être nul ; aucune unité ne doit être démarrée entre le bootstrap v1 et
+l'activation v2.
+
+Le répertoire `/etc/botnote/sync-hpke` est `root:root 0700`. Les fichiers raw
+versionnés et `keyset.json` sont `root:root 0400`. Le manifeste ne contient
+aucune clé. Les actions `prepare-rotation`, `activate-generation` et
+`retire-generation` sont séparées, verrouillées et confirmées explicitement.
+Le provisionnement refuse cible existante, symlink, hardlink, type spécial,
+permission ou paire incohérente. `verify` n'affiche jamais une clé, un
+ciphertext ou un identifiant complet.
 
 Ces fichiers ne font partie ni du dépôt, ni du wheel, ni de l'artefact CI, ni du
 SBOM, ni des sauvegardes PostgreSQL. Les sessions PASS/HUB utilisent désormais
@@ -112,17 +123,18 @@ n'est perdue.
 
 ## Credentials systemd
 
-L'unité dédiée utilise `LoadCredential=` avec exactement quatre noms logiques :
+L'unité dédiée utilise `LoadCredential=` avec exactement quatre noms logiques,
+actuellement reliés aux fichiers de génération v2 :
 
 - `imt-sync-credential-private` ;
 - `imt-sync-credential-public` ;
 - `pass-service-session-private` ;
 - `pass-service-session-public`.
 
-L'unité web de production reçoit séparément et exclusivement
-`pass-service-session-public`. Elle ne reçoit ni clé privée ni clé publique
-credential en G5. En test ou développement, le flag d'enrôlement exige les deux
-clés publiques sous leurs noms fixes ; les loaders refusent tout autre nom et
+L'unité web de production reçoit séparément et exclusivement la clé publique v2
+`pass-service-session-public`. Elle ne reçoit aucune clé privée ni clé publique
+credential. En test ou développement, le flag d'enrôlement exige les deux clés
+publiques sous leurs noms fixes ; les loaders refusent tout autre nom et
 réalisent un scellement synthétique avant l'écoute.
 
 Le code lit uniquement le dossier absolu indiqué par
@@ -212,6 +224,17 @@ systemctl show botnote-sync-worker.service \
 Les résultats doivent être lus sans afficher les environnements ou le contenu
 de `CREDENTIALS_DIRECTORY`.
 
+## Rotation G6 sans appel PASS
+
+La rotation opérationnelle est décrite dans
+[`hpke-operational-rotation.md`](hpke-operational-rotation.md). Elle ouvre,
+rescelle, rouvre et compare les enveloppes hors réseau. L'ancienne clé privée
+n'est fournie qu'à la commande dédiée sous le rôle applicatif
+`hpke-rotation`, qui refuse la clé symétrique générale et les token peppers.
+Après inventaire source, mixed et erreurs à zéro, les services normaux ne
+reçoivent que v2. Le rollback applicatif vers G6A conserve Alembic `0028` et
+les mappings v2.
+
 ## Migration G4A sans appel PASS
 
 1. Vérifier l'artefact CI retéléchargé et son manifeste.
@@ -250,8 +273,11 @@ Ne pas downgrader la base et ne jamais réécrire une enveloppe HPKE en legacy.
 - Le web peut sceller une session mais ne peut pas l'ouvrir.
 - L'exception propriétaire historique reste compatible avec l'ancien runtime.
 - Root dans le LXC compromet toutes les clés.
-- Une RCE dans le worker sync compromet les futures clés privées.
-- Les sessions PASS/HUB sont protégées par HPKE. Le sealer credential est
-  testable, mais aucune enveloppe réelle n'est attendue en production G5.
-- Rotation et sauvegarde hors machine des clés ne sont pas encore livrées.
+- Une RCE dans le worker sync peut ouvrir les sessions et futurs credentials
+  actifs auxquels son rôle PostgreSQL donne accès.
+- Les sessions PASS/HUB sont protégées par HPKE et les deux purposes disposent
+  d'une rotation hors réseau. Aucune enveloppe credential réelle n'est attendue
+  avant G7.
+- Root dans le LXC peut toujours copier les clés avant leur retrait ; une
+  suppression logique ne garantit pas l'effacement physique du support.
 - `autonomous` reste indisponible.

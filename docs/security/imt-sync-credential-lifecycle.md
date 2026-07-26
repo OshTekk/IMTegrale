@@ -1,11 +1,12 @@
 # Cycle de vie du credential IMT
 
-## État G5
+## État G6 fermé
 
 La migration additive `0027` a durci le cycle de vie avant sa première
-écriture. G5 ajoute les opérations serveur, mais l'enrôlement reste fermé en
-production et `autonomous` demeure inexécutable. La production attend donc
-toujours :
+écriture. G5 ajoute les opérations serveur. G6 relie le credential au worker
+sync isolé et ajoute les revérifications de génération, sans ouvrir le produit.
+L'enrôlement et le runtime restent fermés en production ; la production attend
+donc toujours :
 
 ```text
 active = 0
@@ -14,9 +15,10 @@ revoked = 0
 autonomous = 0
 ```
 
-Le worker sync n'interroge pas cette table et son rôle PostgreSQL reste
-explicitement refusé. La clé privée qu'il possède depuis G3 ne suffit donc pas
-à créer un chemin autonome.
+Le worker sync possède désormais un `SELECT` et des `UPDATE` limités aux
+colonnes du cycle de vie. Il ne possède ni `INSERT`, ni `DELETE`, ni droit de
+modifier le compte ou le consentement. Le scheduler ne lit que l'état non
+secret. Avec le flag runtime à `false`, aucun des deux ne charge une enveloppe.
 
 ## Invariants 0027
 
@@ -87,6 +89,27 @@ credential, la révocation des sessions techniques et le passage en `manual`.
 Cette purge ne supprime ni le compte, ni les notes, ni le profil, ni les
 passkeys, ni la session web courante.
 
+## Utilisation worker G6
+
+Le gateway essaie d'abord la session PASS/HUB. Il ne charge le credential que
+si cette session est absente ou expirée, que le compte est réellement
+`autonomous`, que le runtime de test est actif et que l'acteur est autorisé.
+Après réservation des quotas et de l'opération, le worker :
+
+1. charge un snapshot scellé sans mot de passe ;
+2. ouvre l'enveloppe avec la clé privée worker-only ;
+3. revérifie compte, login, consentement, génération, enveloppe, demande et
+   lease immédiatement avant l'unique SSO ;
+4. revérifie les mêmes invariants après le retour réseau ;
+5. stocke la nouvelle session HPKE et les résultats dans une même transaction
+   seulement si l'état est encore courant.
+
+Un refus définitif d'authentification invalide la génération utilisée, efface
+l'enveloppe et met le compte en pause sans retry. Une panne réseau ou PASS
+préserve l'enveloppe. Une clé absente la préserve également et produit la pause
+`credential_key_unavailable`. Une enveloppe altérée est invalidée sans appel
+réseau. Un ancien job ne peut jamais invalider un remplacement plus récent.
+
 La commande hors réseau
 `botnote sync-credentials-revoke-all --reason <database_restored|operator_revoked>`
 produit uniquement les agrégats `active_found`, `revoked`,
@@ -112,8 +135,9 @@ G1. Cette dernière fenêtre fermée empêche qu'une ligne d'un format ambigu so
 interprétée comme un credential G5. Le downgrade est également refusé dès
 qu'une ligne de cycle de vie existe.
 
-G5A est la cible de rollback immédiate de G5B : la base reste en `0027`. Aucun
-downgrade de production n'est prévu après la première enveloppe, même révoquée.
+G6A est la cible de rollback immédiate de G6B : la base reste en `0028` et les
+mappings HPKE restent sur la génération v2. Aucun downgrade de production n'est
+prévu après la première enveloppe, même révoquée.
 
 ## Restauration
 

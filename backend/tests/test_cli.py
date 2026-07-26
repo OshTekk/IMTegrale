@@ -218,10 +218,10 @@ def test_pass_session_migration_and_restore_revocation_commands_are_dispatchable
         "migrate_legacy_service_sessions",
         lambda **options: (
             captured.update(options)
-        or {
-            "failed": 0,
-            "migrated": 2,
-            "remaining_legacy": 0,
+            or {
+                "failed": 0,
+                "migrated": 2,
+                "remaining_legacy": 0,
             }
         ),
     )
@@ -321,3 +321,66 @@ def test_sync_credential_restore_revocation_command_is_dispatchable(
     output = capsys.readouterr().out
     assert '"active_found": 2' in output
     assert "account_id" not in output
+
+
+def test_hpke_rotation_command_is_aggregate_and_uses_migration_profile(
+    monkeypatch,
+    capsys,
+) -> None:
+    from app.services import hpke_envelope_rotation
+
+    source_id = "1" * 64
+    target_id = "2" * 64
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(cli, "get_settings", StubSettings)
+    monkeypatch.setattr(
+        hpke_envelope_rotation,
+        "load_hpke_rotation_keys",
+        lambda purpose: SimpleNamespace(purpose=purpose),
+    )
+    monkeypatch.setattr(
+        hpke_envelope_rotation,
+        "rotate_hpke_envelopes",
+        lambda **options: (
+            captured.update(options)
+            or {
+                "source_found": 2,
+                "rotated": 2,
+                "already_target": 0,
+                "inactive_ignored": 1,
+                "mixed_active": 0,
+                "invalid_metadata": 0,
+                "failed": 0,
+                "remaining_source": 2,
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "botnote",
+            "hpke-rotate-envelopes",
+            "--purpose",
+            "pass-service-session",
+            "--source-key-id",
+            source_id,
+            "--target-key-id",
+            target_id,
+            "--dry-run",
+            "--batch-size",
+            "7",
+        ],
+    )
+
+    cli.main()
+
+    assert StubSettings.validated_roles[-1] is RuntimeRole.HPKE_ROTATION
+    assert captured["purpose"] == "pass-service-session"
+    assert captured["source_key_id"] == source_id
+    assert captured["target_key_id"] == target_id
+    assert captured["dry_run"] is True
+    assert captured["batch_size"] == 7
+    output = capsys.readouterr().out
+    assert '"rotated": 2' in output
+    assert source_id not in output
+    assert target_id not in output

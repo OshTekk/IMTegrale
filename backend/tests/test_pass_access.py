@@ -5,6 +5,7 @@ from datetime import timedelta
 
 import pytest
 import requests
+from app.api_models import AdminPassMetricsResponse
 from app.config import get_settings
 from app.database import SessionLocal, utcnow
 from app.models import Account, PassDenial, PassOperation, PassServiceSession
@@ -447,9 +448,14 @@ def test_metrics_are_aggregate_and_do_not_expose_raw_identity() -> None:
 
     with SessionLocal() as db:
         metrics = metrics_view(db, hours=24)
+        AdminPassMetricsResponse.model_validate(metrics)
 
     serialized = json.dumps(metrics, default=str)
     assert "private.person" not in serialized
     assert account.id not in serialized
     assert metrics["operations"] == 1
     assert metrics["real_requests"] == 1
+    assert metrics["autonomous"]["credentials_invalidated"] == 0
+    assert metrics["autonomous"]["sessions_recreated"] == 0
+    assert metrics["autonomous"]["session_reuse_after_autonomous_sso"] == 0
+    assert metrics["autonomous"]["owner_local_full_sso"] == 1

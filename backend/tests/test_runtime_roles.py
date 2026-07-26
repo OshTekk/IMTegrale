@@ -68,6 +68,40 @@ def test_runtime_roles_require_only_their_current_symmetric_secrets(tmp_path: Pa
     no_pepper.validate_for_runtime(RuntimeRole.OUTBOX)
 
 
+def test_hpke_rotation_role_rejects_unrelated_application_secrets(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    minimal = _production_settings(
+        tmp_path,
+        credential_key="",
+        token_pepper="",
+        sync_runtime_profile="migration",
+    )
+    minimal.validate_for_runtime(RuntimeRole.HPKE_ROTATION)
+
+    for field, value in (
+        ("credential_key", base64.urlsafe_b64encode(b"k" * 32).decode()),
+        ("token_pepper", "synthetic-token-pepper-not-needed-by-rotation"),
+    ):
+        values = {
+            "credential_key": "",
+            "token_pepper": "",
+            "sync_runtime_profile": "migration",
+            field: value,
+        }
+        settings = _production_settings(
+            tmp_path,
+            **values,
+        )
+        with pytest.raises(RuntimeError, match="HPKE_ROTATION_UNRELATED_SECRET_FORBIDDEN"):
+            settings.validate_for_runtime(RuntimeRole.HPKE_ROTATION)
+
+    monkeypatch.setenv("BOTNOTE_CREDENTIAL_KEY", "")
+    with pytest.raises(RuntimeError, match="HPKE_ROTATION_UNRELATED_SECRET_FORBIDDEN"):
+        minimal.validate_for_runtime(RuntimeRole.HPKE_ROTATION)
+
+
 def test_sync_role_rejects_relative_or_symlink_lock_directory(tmp_path: Path) -> None:
     relative = _production_settings(
         tmp_path,
@@ -119,6 +153,26 @@ def test_sync_role_requires_exact_local_peer_database_url(tmp_path: Path) -> Non
         )
         with pytest.raises(RuntimeError, match="local peer"):
             settings.validate_for_runtime(RuntimeRole.SYNC)
+
+
+def test_hpke_rotation_role_requires_exact_local_peer_database_url(
+    tmp_path: Path,
+) -> None:
+    for database_url in (
+        "postgresql+psycopg://botnote-sync@localhost/botnote",
+        "postgresql+psycopg://botnote-sync:synthetic@/botnote",
+        "postgresql+psycopg:///other",
+        "postgresql+psycopg:///botnote?host=/tmp",
+    ):
+        settings = _production_settings(
+            tmp_path,
+            credential_key="",
+            token_pepper="",
+            database_url=database_url,
+            sync_runtime_profile="migration",
+        )
+        with pytest.raises(RuntimeError, match="local peer"):
+            settings.validate_for_runtime(RuntimeRole.HPKE_ROTATION)
 
 
 def test_g4b_legacy_key_is_forbidden_in_normal_sync_and_migration_is_explicit(

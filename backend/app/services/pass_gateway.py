@@ -21,10 +21,27 @@ from app.models import (
     Account,
     AuthAttempt,
     AuthThrottleState,
+    Event,
     PassDenial,
     PassOperation,
+    PassServiceSession,
     PassSystemState,
     WebAuthnChallenge,
+)
+from app.services.autonomous_sync_credentials import (
+    AutonomousCredentialSnapshot,
+    AutonomousSyncCredentialError,
+    AutonomousSyncCredentialInvalid,
+    AutonomousSyncCredentialKeyUnavailable,
+    AutonomousSyncCredentialMissing,
+    AutonomousSyncRuntimeUnavailable,
+    AutonomousSyncStateChanged,
+    assert_autonomous_state_current,
+    invalidate_autonomous_credential,
+    load_autonomous_credential_snapshot,
+    mark_autonomous_credential_success_locked,
+    mark_autonomous_credential_used,
+    pause_autonomous_account,
 )
 from app.services.imt import (
     CompetencyUe,
@@ -35,6 +52,11 @@ from app.services.imt import (
     ImtUpstreamError,
     PassEntry,
     PassProfile,
+)
+from app.services.imt_sync_credential_crypto import (
+    ImtSyncCredentialEnvelopeInvalid,
+    ImtSyncCredentialKeyUnavailable,
+    ImtSyncCredentialMetadataInvalid,
 )
 from app.services.pass_sessions import (
     PassSessionRequired,
@@ -140,6 +162,7 @@ class GatewayResult:
     session_snapshot: str
     hub_attempted: bool
     hub_succeeded: bool
+    autonomous_credential_used: bool = False
 
 
 def _system_state(db: Session, *, for_update: bool = False) -> PassSystemState:
@@ -430,6 +453,18 @@ def _open_circuit(
 def _failure_metadata(exc: Exception) -> tuple[str, int | None, int | None]:
     if isinstance(exc, (ImtAuthenticationError, PassSessionRequired)):
         return "authentication", None, None
+    if isinstance(exc, AutonomousSyncCredentialKeyUnavailable):
+        return "credential_key", None, None
+    if isinstance(exc, AutonomousSyncCredentialInvalid):
+        return "credential_invalid", None, None
+    if isinstance(exc, AutonomousSyncCredentialMissing):
+        return "credential_missing", None, None
+    if isinstance(exc, AutonomousSyncRuntimeUnavailable):
+        return "autonomous_runtime", None, None
+    if isinstance(exc, AutonomousSyncStateChanged):
+        return "autonomous_state_changed", None, None
+    if isinstance(exc, AutonomousSyncCredentialError):
+        return "credential", None, None
     if isinstance(exc, ImtUpstreamError):
         return "upstream", exc.status_code, exc.retry_after_seconds
     if isinstance(exc, ImtNetworkError):
@@ -721,8 +756,19 @@ def perform_sync_operation(
     bypass_reason: str | None = None,
     force_probe: bool = False,
     sync_runtime: SyncRuntimeContext,
+    sync_request_id: str | None = None,
 ) -> GatewayResult:
     now = utcnow()
+    if (
+        account.auto_sync_enabled
+        and account.auto_sync_mode == "autonomous"
+        and not get_settings().autonomous_sync_enabled
+    ):
+        pause_autonomous_account(
+            account.id,
+            reason="autonomous_runtime_unavailable",
+        )
+        raise AutonomousSyncRuntimeUnavailable
     target_ref = target_reference(account.imt_username)
     profile_due = _profile_refresh_due(account, now)
     metadata_due = _ue_metadata_refresh_due(account, now)
@@ -730,9 +776,6 @@ def perform_sync_operation(
         account.id,
         opener=sync_runtime.pass_session_opener,
     )
-    owner_password = owner_password_for(account)
-    if stored is None and owner_password is None:
-        raise PassSessionRequired()
     lease = reserve_pass_operation(
         account_id=account.id,
         target_ref=target_ref,
@@ -751,7 +794,68 @@ def perform_sync_operation(
     request_count = 0
     current_client_counted = False
     session_reused = stored is not None
-    full_sso = stored is None
+    full_sso = False
+    autonomous_snapshot: AutonomousCredentialSnapshot | None = None
+    autonomous_credential_used = False
+    final_state_locked = False
+    owner_password_unset = object()
+
+    def perform_fallback_fetch(
+        local_owner_password: str | None | object = owner_password_unset,
+    ) -> list[PassEntry]:
+        nonlocal autonomous_credential_used, autonomous_snapshot, full_sso
+        if account.auto_sync_enabled and account.auto_sync_mode == "autonomous":
+            if sync_request_id is None:
+                raise AutonomousSyncStateChanged
+            autonomous_snapshot = load_autonomous_credential_snapshot(
+                account_id=account.id,
+                sync_request_id=sync_request_id,
+                pass_operation_id=lease.id,
+                actor=actor,
+            )
+            try:
+                opened = sync_runtime.imt_sync_credential_opener.open(
+                    autonomous_snapshot.envelope_metadata,
+                    account_id=autonomous_snapshot.account_id,
+                    imt_login=autonomous_snapshot.imt_login,
+                    credential_generation=autonomous_snapshot.credential_generation,
+                    consent_version=autonomous_snapshot.consent_version,
+                )
+            except ImtSyncCredentialKeyUnavailable:
+                pause_autonomous_account(
+                    account.id,
+                    reason="credential_key_unavailable",
+                )
+                raise AutonomousSyncCredentialKeyUnavailable from None
+            except (ImtSyncCredentialEnvelopeInvalid, ImtSyncCredentialMetadataInvalid):
+                invalidate_autonomous_credential(autonomous_snapshot)
+                raise AutonomousSyncCredentialInvalid from None
+            with opened:
+                assert_autonomous_state_current(
+                    autonomous_snapshot,
+                    sync_request_id=sync_request_id,
+                    pass_operation_id=lease.id,
+                    actor=actor,
+                )
+                autonomous_credential_used = True
+                full_sso = True
+                return client.fetch_entries(
+                    account.imt_username,
+                    opened.reveal_for_gateway(),
+                )
+        owner_password = (
+            owner_password_for(account)
+            if local_owner_password is owner_password_unset
+            else local_owner_password
+        )
+        if not isinstance(owner_password, str):
+            raise PassSessionRequired()
+        try:
+            full_sso = True
+            return client.fetch_entries(account.imt_username, owner_password)
+        finally:
+            del owner_password
+
     try:
         if stored is not None:
             try:
@@ -768,7 +872,7 @@ def perform_sync_operation(
                         include_competencies=metadata_due,
                         competency_credentials=None,
                     )
-            except ImtAuthenticationError as exc:
+            except ImtAuthenticationError:
                 request_count += client.request_count
                 current_client_counted = True
                 invalidate_service_session(
@@ -776,20 +880,28 @@ def perform_sync_operation(
                     state="expired",
                     reason="upstream_expired",
                 )
-                if owner_password is None:
-                    raise PassSessionRequired() from exc
+                local_owner_password: str | None = None
+                if not (
+                    account.auto_sync_enabled
+                    and account.auto_sync_mode == "autonomous"
+                ):
+                    local_owner_password = owner_password_for(account)
+                    if local_owner_password is None:
+                        raise PassSessionRequired from None
                 _close_client_session(client)
                 client = ImtPassClient(timeout_seconds=get_settings().imt_timeout_seconds)
                 current_client_counted = False
                 client.include_profile_on_fetch = profile_due
                 client.include_competencies_on_fetch = metadata_due
-                entries = client.fetch_entries(account.imt_username, owner_password)
+                try:
+                    entries = perform_fallback_fetch(local_owner_password)
+                finally:
+                    del local_owner_password
                 session_reused = False
-                full_sso = True
         else:
             client.include_profile_on_fetch = profile_due
             client.include_competencies_on_fetch = metadata_due
-            entries = client.fetch_entries(account.imt_username, owner_password or "")
+            entries = perform_fallback_fetch()
         request_count += client.request_count
         current_client_counted = True
         session_snapshot = serialize_service_cookies(client.session)
@@ -798,7 +910,34 @@ def perform_sync_operation(
             getattr(client, "last_competency_succeeded", False)
             and _has_service_cookie(client, "hub.imt-atlantique.fr")
         )
-        if stored is not None and session_reused:
+        if autonomous_snapshot is not None:
+            if sync_request_id is None:
+                raise AutonomousSyncStateChanged
+            assert_autonomous_state_current(
+                autonomous_snapshot,
+                sync_request_id=sync_request_id,
+                pass_operation_id=lease.id,
+                actor=actor,
+            )
+            locked_account = assert_autonomous_state_current(
+                autonomous_snapshot,
+                sync_request_id=sync_request_id,
+                pass_operation_id=lease.id,
+                actor=actor,
+                db=db,
+                lock_for_commit=True,
+            )
+            final_state_locked = True
+            store_service_session_if_reusable(
+                db,
+                locked_account,
+                session_snapshot,
+                sealer=sync_runtime.pass_session_sealer,
+                hub_attempted=hub_attempted,
+                hub_succeeded=hub_succeeded,
+            )
+            mark_autonomous_credential_success_locked(db, autonomous_snapshot)
+        elif stored is not None and session_reused:
             if service_snapshot_is_reusable(session_snapshot):
                 refresh_service_session(
                     stored.id,
@@ -814,7 +953,14 @@ def perform_sync_operation(
                     state="expired",
                     reason="upstream_cookie_missing",
                 )
-                if owner_password is None:
+                if (
+                    not (
+                        account.auto_sync_enabled
+                        and account.auto_sync_mode == "autonomous"
+                        and get_settings().autonomous_sync_enabled
+                    )
+                    and owner_password_for(account) is None
+                ):
                     account.auto_sync_paused_reason = "reauth_required"
                     account.auto_sync_paused_at = utcnow()
         else:
@@ -833,6 +979,7 @@ def perform_sync_operation(
             session_reused=session_reused,
             full_sso_performed=full_sso,
             profile_fetched=profile_due and client.last_profile is not None,
+            autonomous_credential_used=autonomous_credential_used,
         )
         return GatewayResult(
             operation_id=lease.id,
@@ -846,10 +993,33 @@ def perform_sync_operation(
             session_snapshot=session_snapshot,
             hub_attempted=hub_attempted,
             hub_succeeded=hub_succeeded,
+            autonomous_credential_used=autonomous_credential_used,
         )
     except Exception as exc:
+        error = exc
         if not current_client_counted:
             request_count += client.request_count
+        if autonomous_credential_used and autonomous_snapshot is not None:
+            if final_state_locked:
+                db.rollback()
+            if isinstance(exc, ImtAuthenticationError):
+                if not invalidate_autonomous_credential(
+                    autonomous_snapshot,
+                    used=True,
+                ):
+                    error = AutonomousSyncStateChanged()
+            elif not isinstance(
+                exc,
+                (
+                    AutonomousSyncCredentialInvalid,
+                    AutonomousSyncCredentialKeyUnavailable,
+                    AutonomousSyncStateChanged,
+                ),
+            ):
+                mark_autonomous_credential_used(
+                    autonomous_snapshot,
+                    success=False,
+                )
         complete_pass_operation(
             lease,
             success=False,
@@ -857,8 +1027,11 @@ def perform_sync_operation(
             session_reused=session_reused,
             full_sso_performed=full_sso,
             profile_fetched=False,
-            error=exc,
+            autonomous_credential_used=autonomous_credential_used,
+            error=error,
         )
+        if error is not exc:
+            raise error from None
         raise
     finally:
         _close_client_session(client)
@@ -919,9 +1092,39 @@ def metrics_view(db: Session, *, hours: int) -> dict:
     successful = [operation for operation in operations if operation.status == "succeeded"]
     reused = sum(operation.session_reused for operation in successful)
     full_sso = sum(operation.full_sso_performed for operation in operations)
-    autonomous_operations = [
-        operation for operation in operations if operation.autonomous_credential_used
+    autonomous_operations = [operation for operation in operations if operation.autonomous_credential_used]
+    autonomous_successes = [
+        operation for operation in autonomous_operations if operation.status == "succeeded"
     ]
+    service_sessions = list(
+        db.scalars(
+            select(PassServiceSession).where(
+                PassServiceSession.established_at >= since,
+            )
+        )
+    )
+    sessions_recreated = sum(
+        any(
+            session.account_id == operation.account_id
+            and ensure_utc(operation.started_at)
+            <= ensure_utc(session.established_at)
+            <= ensure_utc(operation.completed_at)
+            for session in service_sessions
+        )
+        for operation in autonomous_successes
+        if operation.completed_at is not None
+    )
+    reused_after_autonomous = sum(
+        operation.session_reused
+        and operation.account_id is not None
+        and any(
+            earlier.account_id == operation.account_id
+            and earlier.completed_at is not None
+            and ensure_utc(earlier.completed_at) <= ensure_utc(operation.started_at)
+            for earlier in autonomous_successes
+        )
+        for operation in successful
+    )
     p95_index = max(0, math.ceil(len(durations) * 0.95) - 1) if durations else 0
     denial_counts = Counter(db.scalars(select(PassDenial.reason).where(PassDenial.created_at >= since)))
     return {
@@ -948,19 +1151,30 @@ def metrics_view(db: Session, *, hours: int) -> dict:
         },
         "autonomous": {
             "credential_operations": len(autonomous_operations),
-            "succeeded": sum(
-                operation.status == "succeeded" for operation in autonomous_operations
-            ),
+            "succeeded": sum(operation.status == "succeeded" for operation in autonomous_operations),
             "authentication_failures": sum(
-                operation.error_class == "authentication"
-                for operation in autonomous_operations
+                operation.error_class == "authentication" for operation in autonomous_operations
             ),
             "transient_failures": sum(
-                operation.error_class in {"network", "upstream"}
-                for operation in autonomous_operations
+                operation.error_class in {"network", "upstream"} for operation in autonomous_operations
             ),
-            "full_sso_performed": sum(
-                operation.full_sso_performed for operation in autonomous_operations
+            "credentials_invalidated": int(
+                db.scalar(
+                    select(func.count(Event.id)).where(
+                        Event.kind == "sync_credential:invalidated",
+                        Event.created_at >= since,
+                    )
+                )
+                or 0
+            ),
+            "sessions_recreated": sessions_recreated,
+            "session_reuse_after_autonomous_sso": reused_after_autonomous,
+            "full_sso_performed": sum(operation.full_sso_performed for operation in autonomous_operations),
+            "owner_local_full_sso": sum(
+                operation.full_sso_performed
+                and not operation.autonomous_credential_used
+                and operation.kind in {"manual_sync", "automatic_sync", "admin_sync"}
+                for operation in operations
             ),
             "pauses_by_reason": dict(
                 Counter(

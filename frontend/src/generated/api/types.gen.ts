@@ -474,15 +474,31 @@ export type AdminAutonomousSyncMetricsResponse = {
      */
     credential_operations: number;
     /**
+     * Credentials Invalidated
+     */
+    credentials_invalidated: number;
+    /**
      * Full Sso Performed
      */
     full_sso_performed: number;
+    /**
+     * Owner Local Full Sso
+     */
+    owner_local_full_sso: number;
     /**
      * Pauses By Reason
      */
     pauses_by_reason: {
         [key: string]: number;
     };
+    /**
+     * Session Reuse After Autonomous Sso
+     */
+    session_reuse_after_autonomous_sso: number;
+    /**
+     * Sessions Recreated
+     */
+    sessions_recreated: number;
     /**
      * Succeeded
      */

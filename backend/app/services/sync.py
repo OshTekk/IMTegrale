@@ -20,6 +20,10 @@ from app.config import get_settings
 from app.database import SessionLocal, utcnow
 from app.limits import MAX_ARCHIVED_PASS_NOTES_PER_ACCOUNT, MAX_UE_SETTINGS_PER_ACCOUNT
 from app.models import Account, Note, SyncRequest, UeSetting
+from app.services.autonomous_sync_credentials import AutonomousSyncCredentialError
+from app.services.autonomous_sync_schedule import (
+    reconcile_autonomous_schedule_state,
+)
 from app.services.cohort_pulse import emit_cohort_pulse
 from app.services.events import record_event
 from app.services.imt import (
@@ -446,6 +450,8 @@ def apply_competency_ues(
 
 
 def _sync_error(exc: Exception) -> tuple[str, str]:
+    if isinstance(exc, AutonomousSyncCredentialError):
+        return exc.code, "La synchronisation autonome nécessite une action."
     if isinstance(exc, PassSessionRequired):
         return exc.code, exc.message
     if isinstance(exc, ImtAuthenticationError):
@@ -635,6 +641,7 @@ def execute_sync_request(
                 bypass_reason=bypass_reason,
                 force_probe=force_probe,
                 sync_runtime=sync_runtime,
+                sync_request_id=request.id,
             )
             result = apply_pass_entries(db, account, gateway.entries, actor=request.actor)
             apply_pass_profile(account, gateway.profile)
@@ -778,6 +785,7 @@ def sync_all_accounts(*, sync_runtime: SyncRuntimeContext) -> list[dict]:
 
 def sync_due_accounts() -> list[dict]:
     now = utcnow()
+    settings = get_settings()
     with SessionLocal() as db:
         accounts = list(
             db.scalars(
@@ -788,8 +796,20 @@ def sync_due_accounts() -> list[dict]:
                 )
             )
         )
+        schedule_state_changed = reconcile_autonomous_schedule_state(
+            db,
+            accounts,
+            runtime_enabled=settings.autonomous_sync_enabled,
+            now=now,
+        )
+        if schedule_state_changed:
+            db.commit()
         unsupported_count = sum(
-            not stored_sync_mode_is_supported(account) for account in accounts
+            not stored_sync_mode_is_supported(
+                account,
+                autonomous_runtime_enabled=settings.autonomous_sync_enabled,
+            )
+            for account in accounts
         )
         if unsupported_count:
             logger.error(

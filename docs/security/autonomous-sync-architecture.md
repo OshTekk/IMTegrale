@@ -2,7 +2,7 @@
 
 ## État de cette release
 
-Cette release termine les gates **G1** à **G5** et la fondation **G6A** sans
+Cette release termine les gates **G1** à **G6** sans
 rendre la synchronisation autonome utilisable. G1 introduit le vocabulaire de
 domaine, le schéma additif et les gardes. G2 ajoute un
 [format d'enveloppe HPKE](hpke-envelope-format.md) générique, versionné et
@@ -18,8 +18,10 @@ serveur d'enrôlement, de révocation et de purge, mais son second feature flag
 est refusé en production. Le web de production ne reçoit donc aucune clé
 publique credential et la table reste vide. G6A ajoute la migration `0028`,
 l'opener credential worker-only, les droits PostgreSQL bornés et
-l'observabilité nécessaire. Aucun chemin de synchronisation n'appelle encore
-l'opener et aucune reconnexion autonome n'existe.
+l'observabilité nécessaire. G6B branche ensuite le
+[runtime session-first](autonomous-sync-runtime.md), les revérifications de
+génération et la [rotation hors réseau](hpke-operational-rotation.md).
+La capacité reste fermée en production et invisible jusqu'à G7.
 
 Les modes cibles sont :
 
@@ -154,21 +156,22 @@ Les contraintes imposent notamment :
 - date et raison de révocation obligatoires pour les états inactifs ;
 - aucune colonne de mot de passe, hash, empreinte, longueur ou métadonnée libre.
 
-Une enveloppe active peut être créée dans les tests G5, mais elle n'est pas
-consommée par le scheduler ou le worker. La production G5 conserve zéro ligne.
+Une enveloppe active est consommée uniquement par les tests synthétiques G6
+lorsque le runtime est explicitement activé. La production conserve zéro ligne.
 
 ## Défense du scheduler et du worker
 
-Pendant l'expansion, le booléen reste l'autorité de planification. Une seconde
-barrière refuse cependant toute ligne dont le mode stocké est inconnu ou
-`autonomous`.
+Pendant l'expansion, le booléen reste l'autorité de compatibilité. Une seconde
+barrière refuse toute valeur inconnue. `autonomous` n'est reconnu par le
+scheduler que lorsque le runtime est explicitement activé et qu'un credential
+actif existe.
 
 Si une modification SQL manuelle injecte ce mode :
 
-1. le scheduler l'écarte et produit seulement une alerte agrégée ;
-2. aucun job automatique n'est réservé ;
-3. le worker revérifie le compte avant tout appel distant ;
-4. aucun déchiffrement ou fallback n'existe.
+1. runtime fermé, le scheduler l'écarte et produit une alerte agrégée ;
+2. runtime de test ouvert, il exige un credential actif sans lire l'enveloppe ;
+3. le worker essaie toujours la session avant de charger le credential ;
+4. il revérifie compte, consentement, génération et leases avant et après SSO.
 
 Le système ne convertit pas silencieusement cette incohérence en
 `session_only`.
@@ -234,9 +237,9 @@ ne la transforme pas en credential et ne l'associe pas au mode
 | G3 | Worker sync dédié et clé privée isolée | Terminé |
 | G4 | Cookies PASS/HUB migrés vers l'isolation worker-only | Terminé |
 | G5 | API d'enrôlement, renouvellement, révocation et purge, fermée en production | Terminé |
-| G6 | Fallback autonome, révocation et rotation | En cours : G6A terminé |
+| G6 | Fallback autonome, révocation et rotation | Terminé, fermé en production |
 | G7 | UX, consentement distinct et activation canary | Non terminé |
 
-`autonomous` reste indisponible tant que G6 et G7 ne sont pas validés. Chaque
+`autonomous` reste indisponible tant que G7 n'est pas validé. Chaque
 gate doit conserver un rollback documenté et employer uniquement des secrets
 fictifs en test.

@@ -141,6 +141,11 @@ def test_sync_mode_domain_preserves_the_legacy_boolean_authority() -> None:
     assert effective_sync_mode(account) is SyncMode.SESSION_ONLY
     assert stored_sync_mode_is_supported(account) is True
     account.auto_sync_mode = "autonomous"
+    assert effective_sync_mode(account) is None
+    assert (
+        effective_sync_mode(account, autonomous_runtime_enabled=True)
+        is SyncMode.AUTONOMOUS
+    )
     assert stored_sync_mode_is_supported(account) is False
     assert sync_mode_is_automatic(SyncMode.SESSION_ONLY) is True
     assert sync_mode_requires_credential(SyncMode.AUTONOMOUS) is True
@@ -479,7 +484,7 @@ def test_injected_autonomous_mode_never_queues_or_reaches_pass(
         db.commit()
         account_id = account.id
         assert auto_sync_is_due(account, now) is False
-        assert auto_sync_view(account)["mode"] == "session_only"
+        assert auto_sync_view(account)["mode"] == "autonomous"
 
     monkeypatch.setattr(sync_service, "utcnow", lambda: now)
     assert sync_service.sync_due_accounts() == []
