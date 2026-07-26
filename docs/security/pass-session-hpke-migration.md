@@ -90,11 +90,18 @@ botnote pass-sessions-revoke-all \
 botnote pass-sessions-revoke-all \
   --reason database_restored \
   --confirm REVOKE-ALL-PASS-SESSIONS
+botnote sync-credentials-revoke-all \
+  --reason database_restored \
+  --dry-run
+botnote sync-credentials-revoke-all \
+  --reason database_restored \
+  --confirm REVOKE-ALL-SYNC-CREDENTIALS
 ```
 
 La procédure s'exécute dans la base isolée, sans PASS, HUB, COMPETENCES ou
-Telegram. Le test mensuel de restauration doit vérifier l'inventaire à zéro
-après révocation.
+Telegram. Les sessions sont révoquées avant les credentials. Le test mensuel
+de restauration doit vérifier l'inventaire ciphertext à zéro pour les deux
+tables avant de considérer la restauration exploitable.
 
 ## Rollback
 

@@ -1280,13 +1280,53 @@ export type AutoSyncUpdate = {
  */
 export type AutonomousSyncSettingsResponse = {
     /**
+     * Activation Pending
+     */
+    activation_pending: boolean;
+    /**
      * Available
      */
     available: false;
     /**
      * Configured
      */
-    configured: false;
+    configured: boolean;
+    /**
+     * Consent Version
+     */
+    consent_version: number | null;
+    /**
+     * Consented At
+     */
+    consented_at: string | null;
+    /**
+     * Enrollment Available
+     */
+    enrollment_available: boolean;
+    /**
+     * Last Failure At
+     */
+    last_failure_at: string | null;
+    /**
+     * Last Success At
+     */
+    last_success_at: string | null;
+    /**
+     * Last Used At
+     */
+    last_used_at: string | null;
+    /**
+     * Needs Reenrollment
+     */
+    needs_reenrollment: boolean;
+    /**
+     * State
+     */
+    state: 'active' | 'invalid' | 'revoked' | null;
+    /**
+     * Verified At
+     */
+    verified_at: string | null;
 };
 
 /**
@@ -4590,6 +4630,28 @@ export type SimulationWarningResponse = {
 };
 
 /**
+ * SyncCredentialEnrollRequest
+ */
+export type SyncCredentialEnrollRequest = {
+    /**
+     * Acknowledge Encrypted Storage
+     */
+    acknowledge_encrypted_storage: true;
+    /**
+     * Acknowledge Irreversible Deletion
+     */
+    acknowledge_irreversible_deletion: true;
+    /**
+     * Acknowledge Worker Risk
+     */
+    acknowledge_worker_risk: true;
+    /**
+     * Consent Version
+     */
+    consent_version: number;
+};
+
+/**
  * SyncMode
  */
 export type SyncMode = 'manual' | 'session_only' | 'autonomous';
@@ -4926,6 +4988,32 @@ export type WebAuthnOptionsResponse = {
     publicKey: {
         [key: string]: unknown;
     };
+};
+
+/**
+ * SyncCredentialEnrollRequest
+ */
+export type SyncCredentialEnrollRequestWritable = {
+    /**
+     * Acknowledge Encrypted Storage
+     */
+    acknowledge_encrypted_storage: true;
+    /**
+     * Acknowledge Irreversible Deletion
+     */
+    acknowledge_irreversible_deletion: true;
+    /**
+     * Acknowledge Worker Risk
+     */
+    acknowledge_worker_risk: true;
+    /**
+     * Consent Version
+     */
+    consent_version: number;
+    /**
+     * Password
+     */
+    password: string;
 };
 
 export type AcademicReportsDownloadPersonalReportData = {
@@ -9744,6 +9832,177 @@ export type SettingsUpdateAutoSyncResponses = {
 };
 
 export type SettingsUpdateAutoSyncResponse = SettingsUpdateAutoSyncResponses[keyof SettingsUpdateAutoSyncResponses];
+
+export type SettingsPurgePassAccessData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/settings/pass-access/purge';
+};
+
+export type SettingsPurgePassAccessErrors = {
+    /**
+     * Requête refusée
+     */
+    400: ApiErrorEnvelope;
+    /**
+     * Authentification requise
+     */
+    401: ApiErrorEnvelope;
+    /**
+     * Action interdite
+     */
+    403: ApiErrorEnvelope;
+    /**
+     * Ressource introuvable
+     */
+    404: ApiErrorEnvelope;
+    /**
+     * Conflit d'état
+     */
+    409: ApiErrorEnvelope;
+    /**
+     * Requête trop volumineuse
+     */
+    413: ApiErrorEnvelope;
+    /**
+     * Validation impossible
+     */
+    422: ApiErrorEnvelope;
+    /**
+     * Limite temporaire atteinte
+     */
+    429: ApiErrorEnvelope;
+    /**
+     * Service temporairement indisponible
+     */
+    503: ApiErrorEnvelope;
+};
+
+export type SettingsPurgePassAccessError = SettingsPurgePassAccessErrors[keyof SettingsPurgePassAccessErrors];
+
+export type SettingsPurgePassAccessResponses = {
+    /**
+     * Successful Response
+     */
+    200: SettingsResponse;
+};
+
+export type SettingsPurgePassAccessResponse = SettingsPurgePassAccessResponses[keyof SettingsPurgePassAccessResponses];
+
+export type SettingsDeleteSyncCredentialData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/settings/sync-credential';
+};
+
+export type SettingsDeleteSyncCredentialErrors = {
+    /**
+     * Requête refusée
+     */
+    400: ApiErrorEnvelope;
+    /**
+     * Authentification requise
+     */
+    401: ApiErrorEnvelope;
+    /**
+     * Action interdite
+     */
+    403: ApiErrorEnvelope;
+    /**
+     * Ressource introuvable
+     */
+    404: ApiErrorEnvelope;
+    /**
+     * Conflit d'état
+     */
+    409: ApiErrorEnvelope;
+    /**
+     * Requête trop volumineuse
+     */
+    413: ApiErrorEnvelope;
+    /**
+     * Validation impossible
+     */
+    422: ApiErrorEnvelope;
+    /**
+     * Limite temporaire atteinte
+     */
+    429: ApiErrorEnvelope;
+    /**
+     * Service temporairement indisponible
+     */
+    503: ApiErrorEnvelope;
+};
+
+export type SettingsDeleteSyncCredentialError = SettingsDeleteSyncCredentialErrors[keyof SettingsDeleteSyncCredentialErrors];
+
+export type SettingsDeleteSyncCredentialResponses = {
+    /**
+     * Successful Response
+     */
+    200: SettingsResponse;
+};
+
+export type SettingsDeleteSyncCredentialResponse = SettingsDeleteSyncCredentialResponses[keyof SettingsDeleteSyncCredentialResponses];
+
+export type SettingsEnrollSyncCredentialData = {
+    body: SyncCredentialEnrollRequestWritable;
+    path?: never;
+    query?: never;
+    url: '/api/v1/settings/sync-credential/enroll';
+};
+
+export type SettingsEnrollSyncCredentialErrors = {
+    /**
+     * Requête refusée
+     */
+    400: ApiErrorEnvelope;
+    /**
+     * Authentification requise
+     */
+    401: ApiErrorEnvelope;
+    /**
+     * Action interdite
+     */
+    403: ApiErrorEnvelope;
+    /**
+     * Ressource introuvable
+     */
+    404: ApiErrorEnvelope;
+    /**
+     * Conflit d'état
+     */
+    409: ApiErrorEnvelope;
+    /**
+     * Requête trop volumineuse
+     */
+    413: ApiErrorEnvelope;
+    /**
+     * Validation impossible
+     */
+    422: ApiErrorEnvelope;
+    /**
+     * Limite temporaire atteinte
+     */
+    429: ApiErrorEnvelope;
+    /**
+     * Service temporairement indisponible
+     */
+    503: ApiErrorEnvelope;
+};
+
+export type SettingsEnrollSyncCredentialError = SettingsEnrollSyncCredentialErrors[keyof SettingsEnrollSyncCredentialErrors];
+
+export type SettingsEnrollSyncCredentialResponses = {
+    /**
+     * Successful Response
+     */
+    200: SettingsResponse;
+};
+
+export type SettingsEnrollSyncCredentialResponse = SettingsEnrollSyncCredentialResponses[keyof SettingsEnrollSyncCredentialResponses];
 
 export type SettingsUpdateSyncModeData = {
     body: SyncModeUpdate;

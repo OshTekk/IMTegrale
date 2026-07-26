@@ -114,9 +114,7 @@ def _valid_credential(account_id: str, *, state: str = "active") -> ImtSyncCrede
     active = state == "active"
     return ImtSyncCredential(
         account_id=account_id,
-        encrypted_envelope=(
-            os.urandom(IMT_SYNC_CREDENTIAL_ENVELOPE_BYTES) if active else None
-        ),
+        encrypted_envelope=(os.urandom(IMT_SYNC_CREDENTIAL_ENVELOPE_BYTES) if active else None),
         envelope_version=1 if active else None,
         key_id="a" * 64 if active else None,
         credential_generation=1,
@@ -176,7 +174,20 @@ def test_settings_exposes_only_effective_available_modes(
     assert sync["enabled"] is False
     assert sync["mode"] == "manual"
     assert sync["available_modes"] == ["manual", "session_only"]
-    assert sync["autonomous"] == {"available": False, "configured": False}
+    assert sync["autonomous"] == {
+        "available": False,
+        "enrollment_available": False,
+        "configured": False,
+        "state": None,
+        "activation_pending": False,
+        "consent_version": None,
+        "consented_at": None,
+        "verified_at": None,
+        "last_used_at": None,
+        "last_success_at": None,
+        "last_failure_at": None,
+        "needs_reenrollment": False,
+    }
 
 
 def test_primary_imt_owner_can_change_manual_and_session_only_modes(
@@ -551,9 +562,7 @@ def test_inactive_credential_cannot_retain_an_envelope(state: str) -> None:
         db.add(account)
         db.flush()
         credential = _valid_credential(account.id, state=state)
-        credential.encrypted_envelope = os.urandom(
-            IMT_SYNC_CREDENTIAL_ENVELOPE_BYTES
-        )
+        credential.encrypted_envelope = os.urandom(IMT_SYNC_CREDENTIAL_ENVELOPE_BYTES)
         db.add(credential)
         with pytest.raises(IntegrityError):
             db.commit()

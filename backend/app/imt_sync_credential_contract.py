@@ -3,10 +3,16 @@ from __future__ import annotations
 import re
 from enum import StrEnum
 
-from app.crypto import IMT_PASSWORD_ENVELOPE_BYTES
+from app.crypto import (
+    IMT_PASSWORD_ENVELOPE_BYTES,
+    IMT_PASSWORD_MAX_BYTES,
+    IMT_PASSWORD_MAX_CHARACTERS,
+)
 
 IMT_SYNC_CREDENTIAL_ENVELOPE_BYTES = IMT_PASSWORD_ENVELOPE_BYTES
 IMT_SYNC_CREDENTIAL_CONSENT_VERSION = 1
+IMT_SYNC_CREDENTIAL_PASSWORD_MAX_BYTES = IMT_PASSWORD_MAX_BYTES
+IMT_SYNC_CREDENTIAL_PASSWORD_MAX_CHARACTERS = IMT_PASSWORD_MAX_CHARACTERS
 IMT_SYNC_CREDENTIAL_KEY_ID_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -31,13 +37,8 @@ class ImtSyncCredentialRevocationReason(StrEnum):
 
 
 IMT_SYNC_CREDENTIAL_STATES = tuple(state.value for state in ImtSyncCredentialState)
-IMT_SYNC_CREDENTIAL_REVOCATION_REASONS = tuple(
-    reason.value for reason in ImtSyncCredentialRevocationReason
-)
+IMT_SYNC_CREDENTIAL_REVOCATION_REASONS = tuple(reason.value for reason in ImtSyncCredentialRevocationReason)
 
 
 def valid_imt_sync_credential_key_id(value: object) -> bool:
-    return (
-        isinstance(value, str)
-        and IMT_SYNC_CREDENTIAL_KEY_ID_PATTERN.fullmatch(value) is not None
-    )
+    return isinstance(value, str) and IMT_SYNC_CREDENTIAL_KEY_ID_PATTERN.fullmatch(value) is not None

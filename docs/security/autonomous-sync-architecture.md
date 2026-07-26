@@ -2,8 +2,8 @@
 
 ## État de cette release
 
-Cette release G5A termine les gates **G1** à **G4** et prépare G5 sans l'ouvrir.
-G1 introduit le vocabulaire de
+Cette release termine les gates **G1** à **G5** sans rendre la synchronisation
+autonome utilisable. G1 introduit le vocabulaire de
 domaine, le schéma additif et les gardes. G2 ajoute un
 [format d'enveloppe HPKE](hpke-envelope-format.md) générique, versionné et
 entièrement isolé. G3 ajoute la
@@ -12,12 +12,12 @@ opérationnelles hors Git et ses self-tests synthétiques. G4 ajoute la migratio
 `0026`, le framing fixe et la protection HPKE des sessions PASS/HUB. Le web ne
 reçoit que leur clé publique ; le worker sync isolé reçoit le keyring privé.
 Le runtime sync normal est HPKE-only et refuse toute clé symétrique legacy.
-HPKE reste sans lien avec la table de credentials et aucune enveloppe n'est
-exposée par une API. La release ne conserve toujours aucun mot de passe IMT et
-ne permet aucune reconnexion autonome. La migration `0027` resserre désormais
-la table credential encore vide selon le
-[cycle de vie G5](imt-sync-credential-lifecycle.md), sans endpoint ni clé
-publique supplémentaire dans le web.
+La migration `0027` resserre la table credential selon le
+[cycle de vie G5](imt-sync-credential-lifecycle.md). G5 ajoute la frontière
+serveur d'enrôlement, de révocation et de purge, mais son second feature flag
+est refusé en production. Le web de production ne reçoit donc aucune clé
+publique credential et la table reste vide. Le worker sync ne lit toujours pas
+cette table et aucune reconnexion autonome n'existe.
 
 Les modes cibles sont :
 
@@ -30,6 +30,13 @@ Les modes cibles sont :
 `BOTNOTE_AUTONOMOUS_SYNC_ENABLED` vaut `false` par défaut. Le positionner à
 `true` fait échouer la validation de configuration : aucun opérateur ne peut
 activer accidentellement un runtime incomplet.
+
+`BOTNOTE_AUTONOMOUS_SYNC_ENROLLMENT_ENABLED` vaut également `false`. Il permet
+uniquement les tests et le développement explicitement configuré. Une valeur
+`true` en production fait échouer le démarrage avec
+`AUTONOMOUS_SYNC_ENROLLMENT_NOT_ACTIVATABLE_IN_G5`. Lorsque ce flag est fermé,
+le web ne charge pas la clé publique credential et l'endpoint d'enrôlement
+répond avant tout quota ou appel réseau.
 
 ## Expansion compatible avec le rollback
 
@@ -99,10 +106,28 @@ créé.
 La lecture expose le mode effectif, les deux modes disponibles et l'état
 autonome fermé. Elle n'expose aucune donnée cryptographique.
 
+G5 ajoute trois routes réservées à un propriétaire primaire, avec Origin et
+CSRF :
+
+- `POST /api/v1/settings/sync-credential/enroll` vérifie un mot de passe soumis
+  expressément, renouvelle la session technique et scelle le credential dans
+  une transaction finale atomique ;
+- `DELETE /api/v1/settings/sync-credential` révoque l'enveloppe sans contacter
+  PASS et conserve la session PASS/HUB existante ;
+- `POST /api/v1/settings/pass-access/purge` révoque le credential et toutes les
+  sessions techniques, puis repasse le compte en `manual`.
+
+L'enrôlement n'active ni `auto_sync_enabled`, ni `auto_sync_mode`, ni aucune
+cadence. Son payload distinct exige le consentement v1 et trois acquittements
+explicites. Le mot de passe n'est jamais repris depuis une connexion
+antérieure, n'est accepté par aucune autre route de settings et n'apparaît
+jamais dans une réponse.
+
 ## Table de préparation
 
-`imt_sync_credentials` est une table one-to-one séparée de `accounts`. Elle est
-créée vide et aucune route G5A ne peut y écrire.
+`imt_sync_credentials` est une table one-to-one séparée de `accounts`. G5A l'a
+déployée vide ; seule la route G5B d'enrôlement peut y écrire lorsque son flag
+est explicitement ouvert dans un environnement autorisé.
 
 Elle prépare les métadonnées minimales d'un futur credential :
 
@@ -126,8 +151,8 @@ Les contraintes imposent notamment :
 - date et raison de révocation obligatoires pour les états inactifs ;
 - aucune colonne de mot de passe, hash, empreinte, longueur ou métadonnée libre.
 
-La table n'est pas un stockage utilisable tant que les gates suivants ne sont
-pas terminés.
+Une enveloppe active peut être créée dans les tests G5, mais elle n'est pas
+consommée par le scheduler ou le worker. La production G5 conserve zéro ligne.
 
 ## Défense du scheduler et du worker
 
@@ -171,8 +196,11 @@ Deux paires X25519 distinctes existent hors Git sous un répertoire root-only.
 systemd les copie sous quatre noms fixes uniquement dans
 `CREDENTIALS_DIRECTORY` de l'unité `botnote-sync-worker.service`. Le worker
 possède une identité Unix, un environnement et un rôle PostgreSQL dédiés.
-Le web reçoit uniquement `pass-service-session-public`. Scheduler, calendar,
-outbox et le web ne reçoivent aucune clé privée.
+Le web reçoit uniquement `pass-service-session-public` en production.
+Scheduler, calendar, outbox et le web ne reçoivent aucune clé privée. Le
+chargeur public credential G5 est strict, accepte uniquement un nom fixe et
+n'est appelé que lorsque le flag d'enrôlement est ouvert en test ou
+développement.
 
 La séparation cible devra garantir :
 
@@ -202,10 +230,10 @@ ne la transforme pas en credential et ne l'associe pas au mode
 | G2 | Module HPKE versionné avec clés entièrement fictives | Terminé |
 | G3 | Worker sync dédié et clé privée isolée | Terminé |
 | G4 | Cookies PASS/HUB migrés vers l'isolation worker-only | Terminé |
-| G5 | API d'enrôlement, renouvellement et suppression | G5A terminé, G5B non terminé |
+| G5 | API d'enrôlement, renouvellement, révocation et purge, fermée en production | Terminé |
 | G6 | Fallback autonome, révocation et rotation | Non terminé |
 | G7 | UX, consentement distinct et activation canary | Non terminé |
 
-`autonomous` reste indisponible tant que G5 à G7 ne sont pas validés. Chaque
+`autonomous` reste indisponible tant que G6 et G7 ne sont pas validés. Chaque
 gate doit conserver un rollback documenté et employer uniquement des secrets
 fictifs en test.

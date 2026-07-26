@@ -136,8 +136,7 @@ def service_snapshot_is_reusable(snapshot: str) -> bool:
     try:
         restore_service_cookies(validation_session, snapshot)
         return any(
-            (cookie.domain or "").lstrip(".").casefold()
-            == "pass.imt-atlantique.fr"
+            (cookie.domain or "").lstrip(".").casefold() == "pass.imt-atlantique.fr"
             for cookie in validation_session.cookies
         )
     finally:
@@ -271,10 +270,12 @@ def store_service_session(
         raise PassSessionStorageUnavailable from None
     active_rows = list(
         db.scalars(
-            select(PassServiceSession).where(
+            select(PassServiceSession)
+            .where(
                 PassServiceSession.account_id == account.id,
                 PassServiceSession.state == "active",
-            ).with_for_update()
+            )
+            .with_for_update()
         )
     )
     for existing in active_rows:
@@ -345,6 +346,15 @@ def _active_row(
     if for_update:
         statement = statement.with_for_update()
     return db.scalar(statement)
+
+
+def active_service_session_exists(db: Session, account_id: str) -> bool:
+    row = _active_row(db, account_id)
+    return bool(
+        row is not None
+        and ensure_utc(row.expires_at) > utcnow()
+        and bool(row.encrypted_cookie_jar) != bool(row.hpke_envelope)
+    )
 
 
 def load_service_session(
@@ -479,10 +489,12 @@ def purge_account_service_sessions(
 ) -> int:
     rows = list(
         db.scalars(
-            select(PassServiceSession).where(
+            select(PassServiceSession)
+            .where(
                 PassServiceSession.account_id == account_id,
                 PassServiceSession.state == "active",
-            ).with_for_update()
+            )
+            .with_for_update()
         )
     )
     for row in rows:
@@ -534,9 +546,7 @@ def service_session_view(db: Session, account: Account) -> dict:
     now = utcnow()
     row = _active_row(db, account.id)
     active = bool(
-        row
-        and bool(row.encrypted_cookie_jar) != bool(row.hpke_envelope)
-        and ensure_utc(row.expires_at) > now
+        row and bool(row.encrypted_cookie_jar) != bool(row.hpke_envelope) and ensure_utc(row.expires_at) > now
     )
     owner_managed = owner_autonomous_sync_available(account)
     if active:
@@ -573,13 +583,7 @@ def service_session_metrics(db: Session, *, hours: int) -> dict:
         raise ValueError("Fenêtre de métriques invalide")
     now = utcnow()
     since = now - timedelta(hours=hours)
-    rows = list(
-        db.scalars(
-            select(PassServiceSession).where(
-                PassServiceSession.established_at >= since
-            )
-        )
-    )
+    rows = list(db.scalars(select(PassServiceSession).where(PassServiceSession.established_at >= since)))
     active_rows = list(
         db.scalars(
             select(PassServiceSession).where(
@@ -595,8 +599,7 @@ def service_session_metrics(db: Session, *, hours: int) -> dict:
     completed_hours = [
         max(
             0.0,
-            (ensure_utc(row.ended_at) - ensure_utc(row.established_at)).total_seconds()
-            / 3600,
+            (ensure_utc(row.ended_at) - ensure_utc(row.established_at)).total_seconds() / 3600,
         )
         for row in rows
         if row.ended_at is not None
@@ -604,11 +607,7 @@ def service_session_metrics(db: Session, *, hours: int) -> dict:
 
     def survival(days: int) -> dict[str, float | int | None]:
         duration = timedelta(days=days)
-        eligible = [
-            row
-            for row in rows
-            if ensure_utc(row.established_at) <= now - duration
-        ]
+        eligible = [row for row in rows if ensure_utc(row.established_at) <= now - duration]
         survived = sum(
             1
             for row in eligible
@@ -646,9 +645,7 @@ def service_session_metrics(db: Session, *, hours: int) -> dict:
         "established": len(rows),
         "completed": len(completed_hours),
         "completed_duration_hours": {
-            "median": round(statistics.median(completed_hours), 1)
-            if completed_hours
-            else None,
+            "median": round(statistics.median(completed_hours), 1) if completed_hours else None,
             "longest": round(max(completed_hours), 1) if completed_hours else None,
         },
         "survival": {
@@ -681,10 +678,12 @@ def cleanup_service_session_history() -> None:
     cutoff = now - _HISTORY_RETENTION
     with SessionLocal() as db:
         for row in db.scalars(
-            select(PassServiceSession).where(
+            select(PassServiceSession)
+            .where(
                 PassServiceSession.state == "active",
                 PassServiceSession.expires_at <= now,
-            ).with_for_update()
+            )
+            .with_for_update()
         ):
             _end_session(row, state="expired", reason="local_expiry", now=now)
         db.execute(

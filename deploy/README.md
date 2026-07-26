@@ -60,12 +60,16 @@ La révision `0017` supprime physiquement les anciennes colonnes de mot de passe
 3. Créer un environnement neuf avec `python3 -m venv /opt/botnote/venvs/<release>` ; ne jamais recopier un ancien venv, car ses scripts contiennent des chemins absolus. Installer `deploy/requirements.lock`, puis le wheel IMTégrale avec `python -m pip install --no-deps`. Vérifier que les shebangs de `bin/botnote` et `bin/alembic` pointent vers le nouveau chemin, puis appliquer `chown -R root:botnote-runtime` et `chmod -R g+rX,o-rwx` à la release et au venv. Les utilisateurs `botnote` et `botnote-sync` appartiennent au groupe de lecture borné `botnote-runtime`. Ne pas compter sur l'`umask` seul : une archive tar conserve ses propres modes.
 4. Installer une copie adaptée de `botnote-runtime.env` en `root:botnote 0640`; `BOTNOTE_BIND_HOST` doit être l'adresse privée du conteneur et `BOTNOTE_TRUSTED_PROXY_IPS` ne doit contenir que le frontal. Les secrets et surcharges privées du web, scheduler, calendar et outbox restent dans `botnote.env`. Le worker sync charge à la place `botnote-sync.env`, installé `root:root 0600`, et ne reçoit ni secrets Telegram, ni mTLS, ni configuration Parcours. En production, les clés de chiffrement doivent être des valeurs base64 URL-safe de 32 octets, les peppers doivent contenir au moins 32 octets et toutes ces valeurs doivent être distinctes. `BOTNOTE_PASS_SESSION_MAX_DAYS` ne doit jamais dépasser 30. Pour Parcours, conserver `BOTNOTE_LEARNING_CONTENT_ROOT=/opt/botnote-learning` et `BOTNOTE_LEARNING_STUDENT_STATUS_MAX_AGE_DAYS=30`, ou réduire cette dernière durée après analyse d'impact. Cette fraîcheur est indépendante de la session : seule une authentification IMT réussie la renouvelle, jamais une passkey, un token ou une consultation. Le mode `cohort` conserve le comportement FIP 2028 existant. Une release personnelle doit sélectionner explicitement `BOTNOTE_LEARNING_ACCESS_MODE=personal` dans le fichier privé et renseigner une audience distincte préfixée `personal:`, l'allowlist de logins IMT et l'allowlist réseau exactes décrites plus bas ; une liste absente ou vide, ou l'audience générale `fip:2028`, fait échouer la configuration.
    Pour la fondation de synchronisation autonome, vérifier aussi que
-   `BOTNOTE_AUTONOMOUS_SYNC_ENABLED` est absent ou vaut `false`. Une valeur
-   `true` doit faire échouer la validation de configuration. Les clés G3 sont
+   `BOTNOTE_AUTONOMOUS_SYNC_ENABLED` et
+   `BOTNOTE_AUTONOMOUS_SYNC_ENROLLMENT_ENABLED` sont absents ou valent
+   `false`. Une valeur `true` doit faire échouer la validation de configuration
+   en production. Les clés G3 sont
    provisionnées hors Git et injectées uniquement par `LoadCredential`; elles
    ne doivent jamais être ajoutées à un environnement. Depuis G4, le web reçoit
-   exactement `pass-service-session-public`, tandis que le worker reçoit les
-   quatre credentials. Le fichier `botnote-sync.env` final ne contient ni
+   exactement `pass-service-session-public`; G5 ne lui ajoute pas la clé
+   publique credential. Le worker reçoit les quatre credentials mais ne lit
+   toujours pas `imt_sync_credentials`. Le fichier `botnote-sync.env` final ne
+   contient ni
    `BOTNOTE_CREDENTIAL_KEY`, ni `BOTNOTE_CREDENTIAL_PREVIOUS_KEYS`; leur
    présence fait échouer le profil sync normal. La procédure de migration et de
    contraction est décrite
@@ -96,6 +100,12 @@ La révision `0017` supprime physiquement les anciennes colonnes de mot de passe
    bascule, contrôler `active=invalid=revoked=autonomous=0`, les sessions HPKE
    inchangées et `operations-check` vert. G5A devient alors le rollback
    applicatif de G5B, sans downgrade de la base.
+   Pour G5B, ne modifier ni `LoadCredential` du web, ni les deux flags fermés.
+   Déployer uniquement l'artefact round-trip, vérifier que l'enrôlement est
+   refusé avec `AUTONOMOUS_SYNC_ENROLLMENT_UNAVAILABLE`, puis contrôler à
+   nouveau `active=invalid=revoked=autonomous=0`. Les routes de révocation et
+   de purge restent disponibles afin de détruire un ancien secret, mais aucun
+   smoke-test de production ne doit les appeler sur un compte réel.
 9. Créer le répertoire dédié avec `install -d -o botnote -g botnote -m 0700 /var/lib/botnote-admin`, puis amorcer le premier compte avec `botnote admin-bootstrap --username <nom> --output /var/lib/botnote-admin/initial-credentials.txt`. Le fichier doit rester `0600`, être supprimé après lecture et le mot de passe doit être changé à la première connexion. La première session permet ensuite d'enrôler une passkey pendant dix minutes. Après cet enrôlement, toute nouvelle session admin exige cette passkey et les mutations sensibles exigent un step-up de moins de dix minutes. Conserver au moins deux passkeys administrateur sur des dispositifs distincts ; la dernière ne peut pas être supprimée depuis l'interface. Ne pas relâcher les permissions du répertoire legacy `/var/lib/botnote`.
 
 Un redémarrage Nginx complet est volontaire lors d'un changement d'upstream : un reload gracieux peut conserver un ancien worker tant qu'une connexion SSE reste ouverte.
@@ -209,8 +219,9 @@ jamais sur le LXC ou le PVE de production. Créer l'utilisateur non privilégié
 uniquement l'URL de cette base isolée et le chemin de la copie chiffrée.
 Installer `botnote-restore-test.service` et son timer sur cet hôte. Le script
 déchiffre directement vers `pg_restore`, refuse tout autre nom de base, vérifie
-la tête Alembic, révoque toutes les sessions PASS/HUB restaurées puis exige un
-inventaire ciphertext à zéro. Il ne crée jamais de dump en clair et ne contacte
+la tête Alembic, révoque toutes les sessions PASS/HUB restaurées, révoque
+ensuite tous les credentials IMT restaurés, puis exige un inventaire ciphertext
+à zéro dans les deux tables. Il ne crée jamais de dump en clair et ne contacte
 aucun service externe. Transférer préalablement la sauvegarde `.dump.age` par le
 canal administratif ; la clé privée de restauration ne doit pas revenir en
 production.
@@ -230,9 +241,11 @@ production.
   en G4B. Le worker sync normal ne doit contenir aucune variable symétrique. Ni
   l'API ni l'administration ne doivent exposer le format, le `key_id` ou
   l'enveloppe.
-- Après `0027`, une enveloppe credential active aurait exactement 3 172 octets
-  et un `key_id` hexadécimal minuscule de 64 caractères. En G5A, les agrégats
-  `active`, `invalid`, `revoked` et `autonomous` doivent tous rester à zéro.
+- Après `0027`, une enveloppe credential active possède exactement 3 172 octets
+  et un `key_id` hexadécimal minuscule de 64 caractères. En production G5, les
+  agrégats `active`, `invalid`, `revoked` et `autonomous` doivent tous rester à
+  zéro ; le flag d'enrôlement est fermé et le web n'a pas la clé publique
+  credential.
 - `systemctl --failed` doit être vide sur PVE et LXC.
 - Depuis le LAN, `/api/v1/admin/auth/session` doit répondre `404`. Depuis l'identité Tailscale autorisée, il doit répondre sans révéler de compte tant que l'authentification admin n'est pas faite.
 - Vérifier qu'une session admin obtenue par mot de passe seul ne peut pas ouvrir le portail après l'enrôlement initial, qu'une passkey est exigée et qu'une mutation sensible refuse un step-up vieux de plus de dix minutes avec `ADMIN_STEP_UP_REQUIRED`. Une lecture non destructive doit rester disponible après expiration du step-up.
@@ -262,6 +275,7 @@ supprime irréversiblement les mots de passe stockés ; `0020` introduit les job
 durables ; `0021` le MFA admin ; `0022` l'observabilité ; `0023` les décimaux ;
 `0024` retire les index redondants ; `0025` ajoute le miroir de mode et la table
 credential vide ; `0026` ajoute le stockage HPKE des sessions ; `0027` durcit
-le cycle de vie credential avant toute première écriture. Un rollback
+le cycle de vie credential avant toute première écriture. G5B se rollbacke vers
+G5A sans downgrade de la base ni modification des clés systemd. Un rollback
 applicatif conserve la base migrée. Ne pas downgrader `0017` en production et
 révoquer toutes les sessions avant tout retour antérieur à G4.

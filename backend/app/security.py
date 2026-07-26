@@ -215,9 +215,7 @@ def create_web_session(
     web_session = WebSession(
         account_id=account.id,
         share_token_id=share_token_id,
-        access_generation=(
-            account.access_generation if access_generation is None else access_generation
-        ),
+        access_generation=(account.access_generation if access_generation is None else access_generation),
         digest=token_digest(raw_session, resolved),
         csrf_digest=token_digest(raw_csrf, resolved),
         role=role,
@@ -303,11 +301,7 @@ def session_is_active(db: Session, session_id: str, account_id: str) -> bool:
     if web_session is None or ensure_utc(web_session.expires_at) <= utcnow():
         return False
     account = db.get(Account, account_id)
-    if (
-        account is None
-        or account.is_disabled
-        or web_session.access_generation != account.access_generation
-    ):
+    if account is None or account.is_disabled or web_session.access_generation != account.access_generation:
         return False
     if web_session.auth_method != "token":
         return True
@@ -355,13 +349,18 @@ def require_owner_action(auth: AuthContext = Depends(require_action)) -> AuthCon
     return auth
 
 
+def is_primary_owner(auth: AuthContext) -> bool:
+    return (
+        auth.role == "owner"
+        and auth.session.auth_method in {"imt", "passkey"}
+        and auth.session.share_token_id is None
+    )
+
+
 def require_primary_owner(auth: AuthContext = Depends(get_auth_context)) -> AuthContext:
     if auth.role != "owner":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Accès propriétaire requis")
-    if (
-        auth.session.auth_method not in {"imt", "passkey"}
-        or auth.session.share_token_id is not None
-    ):
+    if not is_primary_owner(auth):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={

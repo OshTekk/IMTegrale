@@ -6,8 +6,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import utcnow
+from app.imt_sync_credential_contract import ImtSyncCredentialRevocationReason
 from app.models import Account
 from app.services.events import record_event
+from app.services.imt_sync_credentials import revoke_sync_credential
 from app.services.pass_sessions import service_session_view
 from app.sync_modes import SyncMode
 
@@ -28,17 +30,25 @@ def set_sync_mode(
     now: datetime | None = None,
 ) -> Account:
     if mode is SyncMode.AUTONOMOUS:
-        raise AutonomousSyncUnavailable(
-            "La synchronisation autonome n'est pas encore disponible."
-        )
+        raise AutonomousSyncUnavailable("La synchronisation autonome n'est pas encore disponible.")
 
-    locked_account = db.scalar(
-        select(Account).where(Account.id == account.id).with_for_update()
-    )
+    locked_account = db.scalar(select(Account).where(Account.id == account.id).with_for_update())
     if locked_account is None:
         raise LookupError("Compte introuvable")
 
     current = now or utcnow()
+    revoke_sync_credential(
+        db,
+        account_id=locked_account.id,
+        reason=(
+            ImtSyncCredentialRevocationReason.MANUAL_MODE
+            if mode is SyncMode.MANUAL
+            else ImtSyncCredentialRevocationReason.SESSION_ONLY_MODE
+        ),
+        actor=actor,
+        now=current,
+        locked_account=locked_account,
+    )
     enabled = mode is SyncMode.SESSION_ONLY
     was_enabled = locked_account.auto_sync_enabled
     locked_account.auto_sync_enabled = enabled
@@ -51,9 +61,7 @@ def set_sync_mode(
 
     if complete_setup:
         locked_account.auto_sync_consented_at = current if enabled else None
-    elif enabled and (
-        not was_enabled or locked_account.auto_sync_consented_at is None
-    ):
+    elif enabled and (not was_enabled or locked_account.auto_sync_consented_at is None):
         locked_account.auto_sync_consented_at = current
     elif not enabled:
         locked_account.auto_sync_consented_at = None

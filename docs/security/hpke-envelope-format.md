@@ -5,10 +5,12 @@
 Le gate G2 fournit la primitive interne générique et G3 isole les clés privées
 dans le worker sync. G4A branche le profil `pass-service-session-v1` sur les
 sessions techniques PASS/HUB : le web scelle avec la seule clé publique et le
-worker sync ouvre avec son keyring privé. Le profil credential IMT reste
-strictement fictif et `imt_sync_credentials` reste vide. Le module
-cryptographique lui-même ne lit toujours aucune configuration et ne charge
-aucun fichier de clé.
+worker sync ouvre avec son keyring privé. G5 branche le profil credential IMT
+sur un sealer web public uniquement dans les environnements de test ou de
+développement explicitement autorisés. La production ne charge pas cette clé
+et conserve `imt_sync_credentials` vide. Le module cryptographique générique
+lui-même ne lit toujours aucune configuration et ne charge aucun fichier de
+clé.
 
 Le module utilise directement
 [l'API one-shot HPKE de `cryptography 49`](https://cryptography.io/en/49.0.0/hazmat/primitives/hpke/)
@@ -64,9 +66,9 @@ envelope = seal_envelope(
 )
 ```
 
-Le profil credential de cet exemple n'est exposé par aucun routeur et n'est pas
-persisté. Les sessions techniques utilisent un adaptateur distinct qui ne
-transmet jamais d'enveloppe à une API.
+Le profil credential est utilisé par un adaptateur G5 spécialisé. Aucune
+réponse API ne transmet l'enveloppe. Les sessions techniques utilisent un
+adaptateur distinct.
 
 ## Enveloppe binaire v1
 
@@ -223,8 +225,9 @@ Le format ne fournit pas :
 - la forward secrecy après fuite de la clé privée ;
 - la protection d'un secret avant chiffrement dans un processus web compromis.
 
-Ces contrôles appartiendront aux gates ultérieurs et à la base de données. Une
-RCE du futur worker détenteur de la clé privée restera critique.
+G5 fournit l'autorisation, le consentement, la génération et la révocation côté
+base, mais pas encore leur revérification par un worker avant ouverture. Une
+RCE du worker détenteur de la clé privée reste critique.
 
 ## Compatibilité future
 

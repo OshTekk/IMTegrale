@@ -33,7 +33,7 @@ Les compteurs HTTP/SSE en mémoire repartent à zéro au redémarrage. Les files
 
 ## Restauration
 
-Le dump quotidien est compressé puis envoyé directement à `age`, sans fichier clair. Une copie chiffrée est transférée chaque mois vers un hôte de validation distinct qui détient la clé privée. `restore-test.sh` refuse tout nom autre que `botnote_restore_test`, déchiffre directement vers `pg_restore`, vérifie la tête Alembic et écrit uniquement la date du dernier succès. La procédure complète et les permissions sont dans [`deploy/README.md`](../deploy/README.md).
+Le dump quotidien est compressé puis envoyé directement à `age`, sans fichier clair. Une copie chiffrée est transférée chaque mois vers un hôte de validation distinct qui détient la clé privée. `restore-test.sh` refuse tout nom autre que `botnote_restore_test`, déchiffre directement vers `pg_restore`, vérifie la tête Alembic, révoque les sessions PASS/HUB et les credentials IMT restaurés, puis écrit uniquement la date du dernier succès. La procédure complète et les permissions sont dans [`deploy/README.md`](../deploy/README.md).
 
 ## Polling SSE
 

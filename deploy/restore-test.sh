@@ -37,10 +37,21 @@ BOTNOTE_ENVIRONMENT=test BOTNOTE_DATABASE_URL="${TARGET_URL}" \
     /opt/botnote/runtime/bin/botnote pass-sessions-revoke-all \
         --reason database_restored \
         --confirm REVOKE-ALL-PASS-SESSIONS >/dev/null
+BOTNOTE_ENVIRONMENT=test BOTNOTE_DATABASE_URL="${TARGET_URL}" \
+    /opt/botnote/runtime/bin/botnote sync-credentials-revoke-all \
+        --reason database_restored --dry-run >/dev/null
+BOTNOTE_ENVIRONMENT=test BOTNOTE_DATABASE_URL="${TARGET_URL}" \
+    /opt/botnote/runtime/bin/botnote sync-credentials-revoke-all \
+        --reason database_restored \
+        --confirm REVOKE-ALL-SYNC-CREDENTIALS >/dev/null
 REMAINING_SERVICE_SESSIONS="$(psql "${TARGET_URL}" -v ON_ERROR_STOP=1 -Atqc \
     'SELECT count(*) FROM pass_service_sessions
      WHERE encrypted_cookie_jar IS NOT NULL OR hpke_envelope IS NOT NULL')"
 test "${REMAINING_SERVICE_SESSIONS}" = "0"
+REMAINING_SYNC_CREDENTIALS="$(psql "${TARGET_URL}" -v ON_ERROR_STOP=1 -Atqc \
+    'SELECT count(*) FROM imt_sync_credentials
+     WHERE encrypted_envelope IS NOT NULL')"
+test "${REMAINING_SYNC_CREDENTIALS}" = "0"
 
 install -d -m 0700 "${STATE_DIR}"
 printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "${STATE_DIR}/last-success.tmp"

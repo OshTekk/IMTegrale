@@ -60,8 +60,7 @@ def record_runtime_heartbeat(
     safe_details = {
         key: value
         for key, value in (details or {}).items()
-        if key in _SAFE_HEARTBEAT_DETAIL_KEYS
-        and isinstance(value, (int, bool, str))
+        if key in _SAFE_HEARTBEAT_DETAIL_KEYS and isinstance(value, (int, bool, str))
     }
     values = {
         "component": component,
@@ -121,10 +120,7 @@ def readiness_checks(db: Session, settings: Settings) -> dict[str, bool]:
     )
     checks["sync_isolated"] = bool(
         sync_heartbeat
-        and all(
-            sync_heartbeat.details.get(key) == value
-            for key, value in ISOLATED_SYNC_PROFILE.items()
-        )
+        and all(sync_heartbeat.details.get(key) == value for key, value in ISOLATED_SYNC_PROFILE.items())
     )
     checks["workers"] = checks["workers"] and checks["sync_isolated"]
     return checks
@@ -172,9 +168,7 @@ def _queue_rows(db: Session, now) -> list[dict]:  # noqa: ANN001
         ).all()
     )
     outbox_oldest = db.scalar(
-        select(func.min(NotificationOutbox.available_at)).where(
-            NotificationOutbox.status == "pending"
-        )
+        select(func.min(NotificationOutbox.available_at)).where(NotificationOutbox.status == "pending")
     )
     rows.append(
         {
@@ -238,13 +232,12 @@ def operations_metrics(db: Session, settings: Settings) -> dict:
         },
         "calendar": {
             "attempts_24h": sum(calendar_counts.values()),
-            "errors_24h": calendar_counts.get("invalid", 0)
-            + calendar_counts.get("upstream", 0),
+            "errors_24h": calendar_counts.get("invalid", 0) + calendar_counts.get("upstream", 0),
         },
     }
 
 
-def _sync_credential_alert_codes(db: Session) -> set[str]:
+def _sync_credential_alert_codes(db: Session, settings: Settings) -> set[str]:
     alerts: set[str] = set()
     rows = db.execute(
         text(
@@ -277,8 +270,15 @@ def _sync_credential_alert_codes(db: Session) -> set[str]:
                 and row["revoked_at"] is None
                 and row["revoked_reason"] is None
             )
-            alerts.add("SYNC_CREDENTIAL_UNEXPECTED_WHILE_ENROLLMENT_DISABLED")
-            alerts.add("SYNC_CREDENTIAL_WITH_AUTONOMOUS_DISABLED")
+            if not settings.autonomous_sync_enrollment_enabled:
+                alerts.add(
+                    "SYNC_CREDENTIAL_UNEXPECTED_WHILE_ENROLLMENT_DISABLED"
+                )
+            if (
+                not settings.autonomous_sync_enrollment_enabled
+                and not settings.autonomous_sync_enabled
+            ):
+                alerts.add("SYNC_CREDENTIAL_WITH_AUTONOMOUS_DISABLED")
         elif state in {
             ImtSyncCredentialState.INVALID,
             ImtSyncCredentialState.REVOKED,
@@ -308,25 +308,17 @@ def operational_alert_codes(db: Session, settings: Settings) -> list[str]:
         alerts.add("WORKER_HEARTBEAT_STALE")
     sync_heartbeat = db.get(RuntimeHeartbeat, "sync")
     if sync_heartbeat is not None and any(
-        sync_heartbeat.details.get(key) != value
-        for key, value in ISOLATED_SYNC_PROFILE.items()
+        sync_heartbeat.details.get(key) != value for key, value in ISOLATED_SYNC_PROFILE.items()
     ):
         alerts.add("SYNC_WORKER_NOT_ISOLATED")
-    if sync_heartbeat is not None and not sync_heartbeat.details.get(
-        "hpke_credentials_ready", False
-    ):
+    if sync_heartbeat is not None and not sync_heartbeat.details.get("hpke_credentials_ready", False):
         alerts.add("SYNC_HPKE_KEYS_NOT_READY")
     if (
         sync_heartbeat is not None
-        and sync_heartbeat.details.get("error_code")
-        == "PASS_SESSION_HPKE_KEY_UNAVAILABLE"
+        and sync_heartbeat.details.get("error_code") == "PASS_SESSION_HPKE_KEY_UNAVAILABLE"
     ):
         alerts.add("PASS_SESSION_HPKE_KEY_UNAVAILABLE")
-    if db.scalar(
-        select(func.count(Account.id)).where(
-            Account.auto_sync_paused_reason == "key_unavailable"
-        )
-    ):
+    if db.scalar(select(func.count(Account.id)).where(Account.auto_sync_paused_reason == "key_unavailable")):
         alerts.add("PASS_SESSION_HPKE_KEY_UNAVAILABLE")
     for row in db.scalars(select(PassServiceSession)):
         has_legacy = bool(row.encrypted_cookie_jar)
@@ -341,8 +333,7 @@ def operational_alert_codes(db: Session, settings: Settings) -> list[str]:
             and row.hpke_envelope_version > 0
             and isinstance(row.hpke_key_id, str)
             and len(row.hpke_key_id) == 64
-            and len(row.hpke_envelope or b"")
-            == PASS_SERVICE_SESSION_ENVELOPE_BYTES
+            and len(row.hpke_envelope or b"") == PASS_SERVICE_SESSION_ENVELOPE_BYTES
         )
         if (
             has_hpke != bool(row.hpke_envelope_version and row.hpke_key_id)
@@ -352,7 +343,7 @@ def operational_alert_codes(db: Session, settings: Settings) -> list[str]:
             or (row.state != "active" and (has_legacy or has_hpke))
         ):
             alerts.add("PASS_SESSION_HPKE_METADATA_INVALID")
-    alerts.update(_sync_credential_alert_codes(db))
+    alerts.update(_sync_credential_alert_codes(db, settings))
     for queue in metrics["queues"]:
         name = str(queue["name"]).upper()
         if queue["dead_letter"]:

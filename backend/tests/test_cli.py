@@ -93,17 +93,13 @@ def test_isolated_sync_worker_fails_before_run_worker_when_credentials_fail(
         sync_worker_credentials,
         "load_sync_worker_credentials",
         lambda: (_ for _ in ()).throw(
-            sync_worker_credentials.SyncWorkerCredentialError(
-                "SYNC_HPKE_CREDENTIALS_MISSING"
-            )
+            sync_worker_credentials.SyncWorkerCredentialError("SYNC_HPKE_CREDENTIALS_MISSING")
         ),
     )
     monkeypatch.setattr(
         cli,
         "run_worker",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("worker must not start")
-        ),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("worker must not start")),
     )
 
     with pytest.raises(SystemExit, match="SYNC_HPKE_CREDENTIALS_MISSING"):
@@ -220,12 +216,14 @@ def test_pass_session_migration_and_restore_revocation_commands_are_dispatchable
     monkeypatch.setattr(
         legacy_pass_session_migration,
         "migrate_legacy_service_sessions",
-        lambda **options: captured.update(options)
+        lambda **options: (
+            captured.update(options)
         or {
             "failed": 0,
             "migrated": 2,
             "remaining_legacy": 0,
-        },
+            }
+        ),
     )
     monkeypatch.setattr(
         "sys.argv",
@@ -258,8 +256,7 @@ def test_pass_session_migration_and_restore_revocation_commands_are_dispatchable
     monkeypatch.setattr(
         legacy_pass_session_migration,
         "revoke_all_service_sessions",
-        lambda **options: revoked.update(options)
-        or {"sessions_cleared": 3, "dry_run": False},
+        lambda **options: revoked.update(options) or {"sessions_cleared": 3, "dry_run": False},
     )
     monkeypatch.setattr(
         "sys.argv",
@@ -281,3 +278,46 @@ def test_pass_session_migration_and_restore_revocation_commands_are_dispatchable
         "confirmed": True,
     }
     assert '"sessions_cleared": 3' in capsys.readouterr().out
+
+
+def test_sync_credential_restore_revocation_command_is_dispatchable(
+    monkeypatch,
+    capsys,
+) -> None:
+    from app.services import imt_sync_credentials
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(cli, "get_settings", StubSettings)
+    monkeypatch.setattr(
+        imt_sync_credentials,
+        "revoke_all_sync_credentials_operation",
+        lambda _db, **options: (
+            captured.update(options)
+            or {
+                "active_found": 2,
+                "revoked": 2,
+                "already_inactive": 1,
+                "affected_accounts": 2,
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "botnote",
+            "sync-credentials-revoke-all",
+            "--reason",
+            "database_restored",
+            "--confirm",
+            "REVOKE-ALL-SYNC-CREDENTIALS",
+        ],
+    )
+
+    cli.main()
+
+    assert captured["dry_run"] is False
+    assert captured["confirmed"] is True
+    assert str(captured["reason"]) == "database_restored"
+    output = capsys.readouterr().out
+    assert '"active_found": 2' in output
+    assert "account_id" not in output

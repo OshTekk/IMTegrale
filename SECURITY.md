@@ -34,16 +34,18 @@ donnée.
 Une instance auto-hébergée peut réserver à son unique compte propriétaire un mot de passe local hors base, hors dépôt et lisible uniquement par l'utilisateur système du service. Cette exception est désactivée par défaut, ne doit jamais être proposée à un compte public et augmente explicitement le risque accepté par cet exploitant.
 
 La fondation de synchronisation autonome ajoute un mode de domaine, une table
-vide durcie par `0027`, une
+durcie par `0027`, une
 [primitive HPKE isolée](docs/security/hpke-envelope-format.md) et une
 [frontière worker dédiée](docs/security/sync-worker-isolation.md). La paire
 `pass-service-session` protège désormais les sessions PASS/HUB ; la paire
-credential reste sans donnée réelle. Son
+credential possède une frontière de scellement G5 testable sans clé privée. Son
 [cycle de vie](docs/security/imt-sync-credential-lifecycle.md) interdit tout
-ciphertext dans un état révoqué ou invalide. `autonomous` reste indisponible, le feature
-flag associé est fermé et aucune route ne stocke de mot de passe. L'architecture
-cible et son [modèle de menace](docs/security/autonomous-sync-threat-model.md)
-sont documentés séparément ; ils ne décrivent pas une protection déjà active.
+ciphertext dans un état révoqué ou invalide. `autonomous` reste indisponible et
+le flag d'enrôlement est refusé en production : aucune option visible ne stocke
+de mot de passe et la production conserve zéro credential. L'architecture cible
+et son [modèle de menace](docs/security/autonomous-sync-threat-model.md) sont
+documentés séparément ; G6 et G7 restent nécessaires avant toute utilisation
+autonome.
 
 Avant toute exposition Internet, l'administrateur doit adapter les exemples de `deploy/`, isoler les secrets hors Git, tester une restauration de sauvegarde chiffrée et limiter l'administration à une identité réseau privée.
 
@@ -89,6 +91,9 @@ Le frontend masque les commandes incompatibles et explique la reconnexion néces
 | Lancer une synchronisation PASS/HUB | `POST /api/v1/sync` | Propriétaire primaire | L'opération utilise une capacité PASS/HUB conservée pour le titulaire ; une délégation ne peut pas la déclencher |
 | Autoriser l'actualisation automatique | `PATCH /api/v1/settings/auto-sync` ou `PUT /api/v1/settings/sync-setup` avec `enabled=true` | Propriétaire primaire | Le consentement rend durable l'utilisation planifiée de la session PASS/HUB. Une session `owner` déléguée peut toujours désactiver l'automatisation immédiatement |
 | Choisir explicitement le mode de synchronisation | `PATCH /api/v1/settings/sync-mode` | Propriétaire primaire | Seuls `manual` et `session_only` sont acceptés ; `autonomous` échoue sans mutation tant que son architecture n'est pas complète |
+| Enrôler ou remplacer un credential IMT | `POST /api/v1/settings/sync-credential/enroll` | Propriétaire primaire, Origin, CSRF et vérification du mot de passe IMT | La route est fermée en production G5 ; en test elle scelle sans jamais exposer l'enveloppe et ne change pas le mode |
+| Révoquer un credential IMT | `DELETE /api/v1/settings/sync-credential` | Propriétaire primaire, Origin et CSRF | La suppression locale reste disponible même lorsque l'enrôlement est fermé et conserve la session PASS/HUB |
+| Supprimer tout accès PASS/HUB | `POST /api/v1/settings/pass-access/purge` | Propriétaire primaire, Origin et CSRF | Révoque credential et sessions techniques, puis repasse en mode manuel sans supprimer les données académiques |
 | Publier ou retirer les données de classement | `POST` ou `DELETE /api/v1/leaderboard/*` | Toute session `owner`, avec Origin et CSRF | Le retrait et l'effacement doivent rester immédiats. La publication est candidate à un step-up récent, sans changement de comportement dans ce correctif |
 | Supprimer une simulation | `DELETE /api/v1/simulations/{id}`, `DELETE /api/v1/note-simulations/{id}` | Propriétaire primaire | Données privées modifiables uniquement par le titulaire |
 | Remplacer le mot de passe administrateur | `POST /api/v1/admin/auth/password` | Réseau privé, mot de passe actuel, CSRF, MFA et step-up passkey récent après l'initialisation | Toutes les anciennes sessions admin sont révoquées |

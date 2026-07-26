@@ -51,8 +51,7 @@ def test_web_can_share_only_the_account_lock_boundary() -> None:
     assert "ReadWritePaths=/run/botnote-sync-locks" in unit
     assert unit.count("LoadCredential=") == 1
     assert (
-        "LoadCredential=pass-service-session-public:"
-        "/etc/botnote/sync-hpke/pass-service-session-v1.public.raw"
+        "LoadCredential=pass-service-session-public:/etc/botnote/sync-hpke/pass-service-session-v1.public.raw"
     ) in unit
     for forbidden_name in (
         "pass-service-session-private",
@@ -72,9 +71,7 @@ def test_other_runtime_units_mask_hpke_sources_and_receive_no_credentials() -> N
 
 def test_postgres_peer_identity_is_limited_to_the_application_database() -> None:
     rules = [
-        line.split()
-        for line in PG_HBA_RULES.read_text().splitlines()
-        if line and not line.startswith("#")
+        line.split() for line in PG_HBA_RULES.read_text().splitlines() if line and not line.startswith("#")
     ]
     assert rules == [
         ["local", "botnote", "botnote-sync", "peer"],
@@ -111,9 +108,7 @@ def test_hpke_runtime_context_is_limited_to_the_explicit_sync_pipeline() -> None
         assert "SyncRuntimeContext" in source
     assert "app.crypto" not in (application / "services" / "pass_sessions.py").read_text()
     pass_sessions = (application / "services" / "pass_sessions.py").read_text()
-    runtime_context = (
-        application / "services" / "sync_worker_credentials.py"
-    ).read_text()
+    runtime_context = (application / "services" / "sync_worker_credentials.py").read_text()
     pass_gateway = (application / "services" / "pass_gateway.py").read_text()
     assert "legacy_pass_session_migration" not in pass_sessions
     assert "LegacySessionCipher" not in pass_sessions
@@ -121,10 +116,16 @@ def test_hpke_runtime_context_is_limited_to_the_explicit_sync_pipeline() -> None
     assert "CredentialCipher" not in runtime_context
     assert "cipher_for" not in runtime_context
     assert "legacy_session_cipher" not in pass_gateway
-    assert "ImtSyncCredential(" not in "\n".join(
-        path.read_text()
-        for path in sorted((application / "services").glob("*.py"))
-    )
+    for relative_path in (
+        "services/pass_gateway.py",
+        "services/sync.py",
+        "services/jobs.py",
+        "services/worker_runtime.py",
+        "services/sync_worker_credentials.py",
+    ):
+        source = (application / relative_path).read_text()
+        assert "from app.models import ImtSyncCredential" not in source
+        assert "imt_sync_credentials" not in source
     tracked = subprocess.check_output(
         ["git", "ls-files"],
         cwd=ROOT,

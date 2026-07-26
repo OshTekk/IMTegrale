@@ -235,7 +235,17 @@ class BusinessHoursResponse(ApiModel):
 
 class AutonomousSyncSettingsResponse(ApiModel):
     available: Literal[False]
-    configured: Literal[False]
+    enrollment_available: bool
+    configured: bool
+    state: Literal["active", "invalid", "revoked"] | None
+    activation_pending: bool
+    consent_version: int | None
+    consented_at: datetime | None
+    verified_at: datetime | None
+    last_used_at: datetime | None
+    last_success_at: datetime | None
+    last_failure_at: datetime | None
+    needs_reenrollment: bool
 
 
 class SyncSettingsResponse(ApiModel):

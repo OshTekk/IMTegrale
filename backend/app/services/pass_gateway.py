@@ -9,7 +9,7 @@ import threading
 from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import requests
 from sqlalchemy import and_, delete, func, or_, select
@@ -345,7 +345,7 @@ def reserve_pass_operation(
             )
         if (
             state.circuit_state == "half_open"
-            and kind in {"registration", "imt_login"}
+            and kind in {"registration", "imt_login", "sync-credential-enroll"}
             and not force_probe
         ):
             _reject(
@@ -477,8 +477,7 @@ def complete_pass_operation(
             state.quiet_until = (
                 None
                 if error_class == "authentication"
-                else current
-                + timedelta(seconds=get_settings().pass_quiet_period_seconds)
+                else current + timedelta(seconds=get_settings().pass_quiet_period_seconds)
             )
         if state.probe_operation_id == lease.id:
             state.probe_operation_id = None
@@ -575,10 +574,7 @@ def _close_client_session(client: object) -> None:
 
 
 def _has_service_cookie(client: ImtPassClient, host: str) -> bool:
-    return any(
-        (cookie.domain or "").lstrip(".").casefold() == host
-        for cookie in client.session.cookies
-    )
+    return any((cookie.domain or "").lstrip(".").casefold() == host for cookie in client.session.cookies)
 
 
 def perform_login_operation(
@@ -588,6 +584,12 @@ def perform_login_operation(
     account_id: str | None,
     raw_client_identity: str,
     initial_import: bool,
+    operation_kind: Literal[
+        "registration",
+        "imt_login",
+        "sync-credential-enroll",
+    ]
+    | None = None,
 ) -> GatewayResult:
     from app.services.auth_protection import (
         assert_auth_allowed,
@@ -597,10 +599,11 @@ def perform_login_operation(
     target_ref = target_reference(username)
     client_ref = client_reference(raw_client_identity)
     assert_auth_allowed(target_ref=target_ref, client_ref=client_ref)
+    quota_ref = target_ref if operation_kind == "sync-credential-enroll" else client_ref
     lease = reserve_pass_operation(
         account_id=account_id,
-        target_ref=client_ref,
-        kind="registration" if initial_import else "imt_login",
+        target_ref=quota_ref,
+        kind=operation_kind or ("registration" if initial_import else "imt_login"),
         actor="owner",
         enforce_fairness=True,
     )
@@ -652,8 +655,7 @@ def perform_login_operation(
                 finally:
                     request_count += client.request_count
         if get_settings().environment == "test" and not any(
-            (cookie.domain or "").lstrip(".").casefold()
-            == "pass.imt-atlantique.fr"
+            (cookie.domain or "").lstrip(".").casefold() == "pass.imt-atlantique.fr"
             for cookie in client.session.cookies
         ):
             client.session.cookies.set(
@@ -732,9 +734,7 @@ def perform_sync_operation(
     lease = reserve_pass_operation(
         account_id=account.id,
         target_ref=target_ref,
-        kind={"automatic": "automatic_sync", "admin": "admin_sync"}.get(
-            actor, "manual_sync"
-        ),
+        kind={"automatic": "automatic_sync", "admin": "admin_sync"}.get(actor, "manual_sync"),
         actor=actor,
         quota_bypass=quota_bypass,
         bypass_reason=bypass_reason,
@@ -912,21 +912,13 @@ def metrics_view(db: Session, *, hours: int) -> dict:
     if hours not in {24, 24 * 7, 24 * 30}:
         raise ValueError("Fenêtre de métriques invalide")
     since = utcnow() - timedelta(hours=hours)
-    operations = list(
-        db.scalars(select(PassOperation).where(PassOperation.started_at >= since))
-    )
-    durations = sorted(
-        operation.duration_ms for operation in operations if operation.duration_ms is not None
-    )
+    operations = list(db.scalars(select(PassOperation).where(PassOperation.started_at >= since)))
+    durations = sorted(operation.duration_ms for operation in operations if operation.duration_ms is not None)
     successful = [operation for operation in operations if operation.status == "succeeded"]
     reused = sum(operation.session_reused for operation in successful)
     full_sso = sum(operation.full_sso_performed for operation in operations)
     p95_index = max(0, math.ceil(len(durations) * 0.95) - 1) if durations else 0
-    denial_counts = Counter(
-        db.scalars(
-            select(PassDenial.reason).where(PassDenial.created_at >= since)
-        )
-    )
+    denial_counts = Counter(db.scalars(select(PassDenial.reason).where(PassDenial.created_at >= since)))
     return {
         "window_hours": hours,
         "from": since,
@@ -951,11 +943,7 @@ def metrics_view(db: Session, *, hours: int) -> dict:
         },
         "by_kind": dict(Counter(operation.kind for operation in operations)),
         "errors": dict(
-            Counter(
-                operation.error_class
-                for operation in operations
-                if operation.error_class is not None
-            )
+            Counter(operation.error_class for operation in operations if operation.error_class is not None)
         ),
         "denials": dict(denial_counts),
         "circuit": pass_status_view(db)["circuit"],

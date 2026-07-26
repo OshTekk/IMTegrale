@@ -1,16 +1,17 @@
 # Isolation du worker de synchronisation
 
-## Portée G3 et G4
+## Portée G3 à G5
 
-G3 crée la frontière d'exécution dédiée. G4 y branche uniquement les sessions
-techniques PASS/HUB :
+G3 crée la frontière d'exécution dédiée. G4 y branche les sessions techniques
+PASS/HUB. G5 ajoute uniquement la frontière web d'enrôlement :
 
 - toute nouvelle session PASS/HUB est scellée en HPKE ;
 - les anciennes sessions sont migrées hors réseau ;
-- aucun mot de passe multi-compte n'est conservé ;
-- `imt_sync_credentials` reste vide ;
+- aucun mot de passe multi-compte n'est conservé en production ;
+- `imt_sync_credentials` reste vide en production ;
 - `autonomous` reste indisponible ;
-- la paire credential reste limitée au self-test synthétique.
+- le worker ne lit toujours pas la table credential et ne réalise aucun
+  fallback autonome.
 
 ## Identités et accès
 
@@ -113,10 +114,11 @@ L'unité dédiée utilise `LoadCredential=` avec exactement quatre noms logiques
 - `pass-service-session-private` ;
 - `pass-service-session-public`.
 
-L'unité web reçoit séparément et exclusivement
-`pass-service-session-public`. Elle ne reçoit ni clé privée ni paire credential.
-Le loader web refuse tout autre nom et réalise un scellement synthétique avant
-l'écoute.
+L'unité web de production reçoit séparément et exclusivement
+`pass-service-session-public`. Elle ne reçoit ni clé privée ni clé publique
+credential en G5. En test ou développement, le flag d'enrôlement exige les deux
+clés publiques sous leurs noms fixes ; les loaders refusent tout autre nom et
+réalisent un scellement synthétique avant l'écoute.
 
 Le code lit uniquement le dossier absolu indiqué par
 `CREDENTIALS_DIRECTORY`. Il n'accepte aucun chemin de clé, fallback cwd, home,
@@ -241,6 +243,7 @@ Ne pas downgrader la base et ne jamais réécrire une enveloppe HPKE en legacy.
 - L'exception propriétaire historique reste compatible avec l'ancien runtime.
 - Root dans le LXC compromet toutes les clés.
 - Une RCE dans le worker sync compromet les futures clés privées.
-- Les sessions PASS/HUB sont protégées par HPKE ; aucun mot de passe ne l'est.
+- Les sessions PASS/HUB sont protégées par HPKE. Le sealer credential est
+  testable, mais aucune enveloppe réelle n'est attendue en production G5.
 - Rotation et sauvegarde hors machine des clés ne sont pas encore livrées.
 - `autonomous` reste indisponible.

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import stat
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,14 +21,14 @@ from app.crypto import (
     parse_envelope,
     seal_envelope,
 )
+from app.services.systemd_public_credentials import (
+    PublicCredentialUnavailable,
+    read_public_credential,
+)
 
 PASS_SESSION_PUBLIC_CREDENTIAL = "pass-service-session-public"  # noqa: S105 - public systemd name
-_RAW_PUBLIC_KEY_BYTES = 32
 # Public, synthetic test material corresponding to the private test fixture.
-_TEST_PUBLIC_KEY = bytes.fromhex(
-    "132c442be010fbd57e72603328aa76e71"
-    "fccc1503aae219327d14d9c9993f472"
-)
+_TEST_PUBLIC_KEY = bytes.fromhex("132c442be010fbd57e72603328aa76e71fccc1503aae219327d14d9c9993f472")
 
 
 class PassSessionCryptoError(RuntimeError):
@@ -168,55 +167,6 @@ class PassSessionOpener:
         return "PassSessionOpener(<private-keyring>)"
 
 
-def _read_web_public_key(directory: Path) -> bytes:
-    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_CLOEXEC", 0)
-    flags |= getattr(os, "O_NOFOLLOW", 0)
-    try:
-        directory_fd = os.open(directory, flags)
-    except (OSError, ValueError):
-        raise PassSessionEncryptionUnavailable from None
-    try:
-        metadata = os.fstat(directory_fd)
-        names = set(os.listdir(directory_fd))
-        if (
-            not stat.S_ISDIR(metadata.st_mode)
-            or stat.S_IMODE(metadata.st_mode) & 0o077
-            or names != {PASS_SESSION_PUBLIC_CREDENTIAL}
-        ):
-            raise PassSessionEncryptionUnavailable
-        file_flags = (
-            os.O_RDONLY
-            | getattr(os, "O_CLOEXEC", 0)
-            | getattr(os, "O_NOFOLLOW", 0)
-            | getattr(os, "O_NONBLOCK", 0)
-        )
-        try:
-            file_fd = os.open(
-                PASS_SESSION_PUBLIC_CREDENTIAL,
-                file_flags,
-                dir_fd=directory_fd,
-            )
-        except OSError:
-            raise PassSessionEncryptionUnavailable from None
-        try:
-            file_metadata = os.fstat(file_fd)
-            if (
-                not stat.S_ISREG(file_metadata.st_mode)
-                or file_metadata.st_nlink != 1
-                or stat.S_IMODE(file_metadata.st_mode) != 0o400
-                or file_metadata.st_size != _RAW_PUBLIC_KEY_BYTES
-            ):
-                raise PassSessionEncryptionUnavailable
-            value = os.read(file_fd, _RAW_PUBLIC_KEY_BYTES + 1)
-            if len(value) != _RAW_PUBLIC_KEY_BYTES:
-                raise PassSessionEncryptionUnavailable
-            return value
-        finally:
-            os.close(file_fd)
-    finally:
-        os.close(directory_fd)
-
-
 def load_web_pass_session_sealer(
     credentials_directory: str | os.PathLike[str] | None = None,
 ) -> PassSessionSealer:
@@ -229,7 +179,25 @@ def load_web_pass_session_sealer(
         directory = Path(configured)
         if not directory.is_absolute():
             raise PassSessionEncryptionUnavailable
-        raw_public_key = _read_web_public_key(directory)
+        expected_names = {PASS_SESSION_PUBLIC_CREDENTIAL}
+        if getattr(
+            get_settings(),
+            "autonomous_sync_enrollment_enabled",
+            False,
+        ):
+            from app.services.imt_sync_credential_crypto import (
+                IMT_SYNC_CREDENTIAL_PUBLIC_CREDENTIAL,
+            )
+
+            expected_names.add(IMT_SYNC_CREDENTIAL_PUBLIC_CREDENTIAL)
+        try:
+            raw_public_key = read_public_credential(
+                directory,
+                credential_name=PASS_SESSION_PUBLIC_CREDENTIAL,
+                expected_names=expected_names,
+            )
+        except PublicCredentialUnavailable:
+            raise PassSessionEncryptionUnavailable from None
     try:
         sealer = PassSessionSealer(RecipientPublicKey.from_raw_bytes(raw_public_key))
         sealer.seal(

@@ -43,12 +43,18 @@ from app.routers import (
     tokens,
 )
 from app.security import get_auth_context, require_action
+from app.services.imt_sync_credential_crypto import (
+    load_web_imt_sync_credential_sealer,
+)
 from app.services.operations import readiness_checks
 from app.services.pass_session_crypto import load_web_pass_session_sealer
 
 settings_config = get_settings()
 settings_config.validate_for_runtime(RuntimeRole.WEB)
 web_pass_session_sealer = load_web_pass_session_sealer()
+web_imt_sync_credential_sealer = (
+    load_web_imt_sync_credential_sealer() if settings_config.autonomous_sync_enrollment_enabled else None
+)
 
 COMMON_API_ERROR_RESPONSES = {
     code: {"model": ApiErrorEnvelope, "description": description}
@@ -121,6 +127,7 @@ app = FastAPI(
     generate_unique_id_function=stable_operation_id,
 )
 app.state.pass_session_sealer = web_pass_session_sealer
+app.state.imt_sync_credential_sealer = web_imt_sync_credential_sealer
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings_config.allowed_hosts)
 app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings_config.max_request_bytes)
 
@@ -134,11 +141,7 @@ def _is_api_surface(path: str) -> bool:
 
 
 def _is_learning_surface(path: str) -> bool:
-    return (
-        _is_learning_api_surface(path)
-        or path == "/parcours"
-        or path.startswith("/parcours/")
-    )
+    return _is_learning_api_surface(path) or path == "/parcours" or path.startswith("/parcours/")
 
 
 @app.middleware("http")

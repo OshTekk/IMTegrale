@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     scheduler_poll_seconds: int = Field(default=60, ge=15, le=900)
     worker_heartbeat_ttl_seconds: int = Field(default=180, ge=60, le=900)
     autonomous_sync_enabled: bool = False
+    autonomous_sync_enrollment_enabled: bool = False
     sync_runtime_profile: Literal["normal", "migration"] = "normal"
     sync_lock_dir: Path = Path("/run/botnote-sync-locks")
     trusted_proxy_ips: list[str] = Field(default_factory=lambda: ["127.0.0.1"])
@@ -149,9 +150,7 @@ class Settings(BaseSettings):
                 or not identity.startswith(("lan:", "tailnet:"))
                 or any(ord(character) < 33 or ord(character) >= 127 for character in identity)
             ):
-                raise ValueError(
-                    "Learning ingress identities must be exact LAN or Tailnet identities"
-                )
+                raise ValueError("Learning ingress identities must be exact LAN or Tailnet identities")
             if identity not in normalized:
                 normalized.append(identity)
         return normalized
@@ -176,18 +175,17 @@ class Settings(BaseSettings):
                 or not audience_suffix
                 or not audience_suffix[0].isalnum()
             ):
-                raise ValueError(
-                    "Personal learning mode requires a distinct personal:<id> audience"
-                )
+                raise ValueError("Personal learning mode requires a distinct personal:<id> audience")
         return self
 
     @model_validator(mode="after")
     def reject_unimplemented_autonomous_sync(self) -> Settings:
         if self.autonomous_sync_enabled:
             raise ValueError(
-                "BOTNOTE_AUTONOMOUS_SYNC_ENABLED cannot be enabled: "
-                "the autonomous runtime is not implemented"
+                "BOTNOTE_AUTONOMOUS_SYNC_ENABLED cannot be enabled: the autonomous runtime is not implemented"
             )
+        if self.environment == "production" and self.autonomous_sync_enrollment_enabled:
+            raise ValueError("AUTONOMOUS_SYNC_ENROLLMENT_NOT_ACTIVATABLE_IN_G5")
         return self
 
     def validate_for_runtime(self, role: RuntimeRole | str) -> None:
@@ -197,17 +195,9 @@ class Settings(BaseSettings):
             raise RuntimeError("Unknown runtime role") from None
         if runtime_role is RuntimeRole.WEB:
             self.validate_learning_content_boundary()
-        if (
-            runtime_role is RuntimeRole.SYNC_MIGRATION
-            and self.sync_runtime_profile != "migration"
-        ):
-            raise RuntimeError(
-                "BOTNOTE_SYNC_RUNTIME_PROFILE=migration is required"
-            )
-        if (
-            runtime_role is RuntimeRole.SYNC
-            and self.sync_runtime_profile != "normal"
-        ):
+        if runtime_role is RuntimeRole.SYNC_MIGRATION and self.sync_runtime_profile != "migration":
+            raise RuntimeError("BOTNOTE_SYNC_RUNTIME_PROFILE=migration is required")
+        if runtime_role is RuntimeRole.SYNC and self.sync_runtime_profile != "normal":
             raise RuntimeError("The normal sync worker requires its normal profile")
         legacy_sync_environment_present = any(
             name in os.environ
@@ -217,9 +207,7 @@ class Settings(BaseSettings):
             )
         )
         if runtime_role is RuntimeRole.SYNC and (
-            legacy_sync_environment_present
-            or self.credential_key
-            or self.credential_previous_keys
+            legacy_sync_environment_present or self.credential_key or self.credential_previous_keys
         ):
             raise RuntimeError("SYNC_LEGACY_CREDENTIAL_KEY_FORBIDDEN")
 
@@ -263,8 +251,7 @@ class Settings(BaseSettings):
                         or database_target.fragment
                     ):
                         raise RuntimeError(
-                            "Sync production requires local peer PostgreSQL access "
-                            "to the botnote database"
+                            "Sync production requires local peer PostgreSQL access to the botnote database"
                         )
                     if not self.sync_lock_dir.is_absolute():
                         raise RuntimeError("BOTNOTE_SYNC_LOCK_DIR must be an absolute path")
@@ -274,10 +261,7 @@ class Settings(BaseSettings):
                         raise RuntimeError(
                             "BOTNOTE_SYNC_LOCK_DIR must be provisioned before startup"
                         ) from None
-                    if (
-                        stat.S_ISLNK(lock_metadata.st_mode)
-                        or not stat.S_ISDIR(lock_metadata.st_mode)
-                    ):
+                    if stat.S_ISLNK(lock_metadata.st_mode) or not stat.S_ISDIR(lock_metadata.st_mode):
                         raise RuntimeError("BOTNOTE_SYNC_LOCK_DIR must be a real directory")
                     expected_lock_mode = 0o2770 if sys.platform.startswith("linux") else 0o770
                     if stat.S_IMODE(lock_metadata.st_mode) != expected_lock_mode:

@@ -138,8 +138,7 @@ def test_sql_metadata_tampering_and_ciphertext_tampering_are_rejected() -> None:
             key_id="0" * 64,
         ),
         PassSessionEnvelopeMetadata(
-            envelope=metadata.envelope[:-1]
-            + bytes([metadata.envelope[-1] ^ 1]),
+            envelope=metadata.envelope[:-1] + bytes([metadata.envelope[-1] ^ 1]),
             version=metadata.version,
             key_id=metadata.key_id,
         ),
@@ -324,7 +323,10 @@ def test_web_loader_rejects_missing_environment_and_short_read(
         tmp_path,
         private.public_key.to_raw_bytes(),
     )
-    monkeypatch.setattr("app.services.pass_session_crypto.os.read", lambda *_args: b"x")
+    monkeypatch.setattr(
+        "app.services.systemd_public_credentials.os.read",
+        lambda *_args: b"x",
+    )
     with pytest.raises(PassSessionEncryptionUnavailable):
         load_web_pass_session_sealer(directory)
 

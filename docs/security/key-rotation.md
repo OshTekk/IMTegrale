@@ -36,6 +36,19 @@ d'exécuter la révocation globale confirmée qui impose une reconnexion.
 
 En cas d'échec, conserver la nouvelle clé active et toutes les anciennes clés de lecture, corriger la cause, puis relancer. Ne jamais retirer une ancienne clé pour forcer la fin d'une rotation.
 
+## Clé HPKE des credentials IMT
+
+G5 peut sceller une enveloppe credential dans les tests, mais ne livre aucune
+rotation opérationnelle et conserve l'enrôlement fermé en production. Le
+`key_id` stocké permet un inventaire agrégé sans exposer la clé.
+
+G6 devra définir une clé publique active, un keyring privé de lecture et une
+rotation qui ne retire jamais une ancienne clé avant inventaire à zéro. Une clé
+perdue ne doit pas être remplacée silencieusement : les enveloppes concernées
+sont révoquées avec la commande hors réseau, puis les utilisateurs se
+réenrôlent. Après restauration d'une base, la révocation globale utilise la
+raison `database_restored` avant tout redémarrage normal.
+
 ## Pepper HMAC
 
 `BOTNOTE_TOKEN_PEPPER` signe toute nouvelle empreinte. `BOTNOTE_TOKEN_PREVIOUS_PEPPERS` permet une coexistence explicite pendant la rotation.

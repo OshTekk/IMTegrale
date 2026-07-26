@@ -14,6 +14,8 @@ from app.models import Account, ImtSyncCredential
 from app.services.imt_sync_credentials import (
     credential_metadata_is_valid,
     credential_status,
+    invalidate_sync_credential,
+    revoke_all_sync_credentials_operation,
 )
 from app.services.operations import operational_alert_codes
 
@@ -110,3 +112,81 @@ def test_g5a_operations_alerts_on_unexpected_active_credential() -> None:
     assert "SYNC_CREDENTIAL_UNEXPECTED_WHILE_ENROLLMENT_DISABLED" in alerts
     assert "SYNC_CREDENTIAL_WITH_AUTONOMOUS_DISABLED" in alerts
     assert "SYNC_CREDENTIAL_METADATA_INVALID" not in alerts
+
+
+def test_invalidation_clears_envelope_and_increments_generation() -> None:
+    with SessionLocal() as db:
+        account = Account(
+            imt_username="invalidate-credential@example.test",
+            display_name="Invalidation fictive",
+        )
+        db.add(account)
+        db.flush()
+        credential = _active_credential(account.id)
+        db.add(credential)
+        db.commit()
+
+        assert invalidate_sync_credential(
+            db,
+            account_id=account.id,
+            actor="system",
+        )
+        db.commit()
+
+        assert credential.state == "invalid"
+        assert credential.encrypted_envelope is None
+        assert credential.envelope_version is None
+        assert credential.key_id is None
+        assert credential.credential_generation == 2
+        assert credential.failure_count == 1
+        assert credential.revoked_reason == "credential_invalid"
+
+
+def test_revoke_all_supports_safe_dry_run_and_reconciles_injected_mode() -> None:
+    with SessionLocal() as db:
+        account = Account(
+            imt_username="restore-credential@example.test",
+            display_name="Restauration fictive",
+            auto_sync_enabled=True,
+            auto_sync_mode="autonomous",
+        )
+        db.add(account)
+        db.flush()
+        credential = _active_credential(account.id)
+        db.add(credential)
+        db.commit()
+
+        preview = revoke_all_sync_credentials_operation(
+            db,
+            reason=ImtSyncCredentialRevocationReason.DATABASE_RESTORED,
+            dry_run=True,
+            confirmed=False,
+        )
+        assert preview == {
+            "active_found": 1,
+            "revoked": 0,
+            "already_inactive": 0,
+            "affected_accounts": 1,
+        }
+        db.refresh(credential)
+        assert credential.state == "active"
+
+        result = revoke_all_sync_credentials_operation(
+            db,
+            reason=ImtSyncCredentialRevocationReason.DATABASE_RESTORED,
+            dry_run=False,
+            confirmed=True,
+        )
+        assert result == {
+            "active_found": 1,
+            "revoked": 1,
+            "already_inactive": 0,
+            "affected_accounts": 1,
+        }
+        db.refresh(account)
+        db.refresh(credential)
+        assert credential.state == "revoked"
+        assert credential.encrypted_envelope is None
+        assert credential.credential_generation == 2
+        assert account.auto_sync_enabled is False
+        assert account.auto_sync_mode == "manual"

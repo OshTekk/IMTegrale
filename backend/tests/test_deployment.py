@@ -152,7 +152,10 @@ def test_encrypted_backup_restore_is_isolated_and_never_writes_plaintext() -> No
     assert '.dump"' not in restore
     assert 'current --check-heads' in restore
     assert "pass-sessions-revoke-all" in restore
+    assert "sync-credentials-revoke-all" in restore
     assert "--reason database_restored" in restore
+    assert "REVOKE-ALL-SYNC-CREDENTIALS" in restore
+    assert "imt_sync_credentials" in restore
     assert "--confirm REVOKE-ALL-PASS-SESSIONS" in restore
     assert "REMAINING_SERVICE_SESSIONS" in restore
     assert 'User=botnote-restore' in service

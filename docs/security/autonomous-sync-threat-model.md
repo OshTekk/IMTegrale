@@ -3,8 +3,9 @@
 ## Portée
 
 Ce document distingue la fondation G1, la primitive HPKE G2, la frontière
-worker G3, la migration de sessions G4 et l'architecture autonome future. Aucun
-mot de passe IMT n'est conservé et la table de credentials reste vide. Les
+worker G3, la migration de sessions G4, la frontière serveur G5 et
+l'architecture autonome future. G5 sait sceller un credential dans les tests,
+mais son enrôlement est refusé en production et la table y reste vide. Les
 seules capacités distantes actives restent les cookies PASS/HUB protégés par
 HPKE et décrits dans la politique actuelle.
 
@@ -18,36 +19,36 @@ Les actifs futurs à protéger seront :
 
 ## Frontières de confiance
 
-| Composant | G3 | Cible autonome |
+| Composant | G5 | Cible autonome |
 | --- | --- | --- |
-| Navigateur | Transmet le mot de passe uniquement à l'authentification | Saisie distincte et consentie lors de l'enrôlement |
-| API web | Reçoit uniquement la clé publique des sessions et ne persiste aucun mot de passe | Chiffre avec une clé publique, sans capacité de lecture |
-| PostgreSQL | Enveloppes de sessions et table credential vide | Enveloppes uniquement, jamais de clé privée |
+| Navigateur | Aucun écran autonome ; l'API de test exige une saisie distincte et un consentement explicite | UX de consentement G7 |
+| API web | Peut sceller un credential lorsque le flag non-production est ouvert, sans capacité de lecture | Même frontière avec activation canary |
+| PostgreSQL | Enveloppes de sessions ; zéro credential en production | Enveloppes uniquement, jamais de clé privée |
 | Scheduler | Planifie `session_only` depuis le booléen historique | Ne reçoit aucune clé privée |
-| Worker sync | Identité dédiée, ouvre les sessions PASS/HUB | Seul processus autorisé à ouvrir une enveloppe métier |
+| Worker sync | Ouvre les sessions PASS/HUB mais ne lit pas la table credential | Seul futur processus autorisé à ouvrir un credential |
 | Workers calendar/outbox | Aucun accès au mot de passe | Aucun accès à la clé privée |
 | systemd | Credentials privés limités à l'unité sync | Même frontière avec rotation |
 
 ## Scénarios
 
-| Incident | Effet dans G1 | Contrôle G1 | Exigence avant autonomie |
+| Incident | Effet dans G5 | Contrôle G5 | Exigence avant autonomie |
 | --- | --- | --- | --- |
-| Lecture de PostgreSQL ou fuite d'un dump | Aucun mot de passe présent ; sessions sous enveloppes | Clé privée absente de PostgreSQL et table credential vide | Enveloppe inutilisable sans clé privée |
-| RCE dans le web | Peut voir un mot de passe pendant une connexion directe et sceller une session, mais ne peut pas ouvrir une session persistée | Web limité à la clé publique session ; mode autonome inexécutable | Même séparation pour les futurs credentials |
-| RCE scheduler/calendar/outbox | Aucun mot de passe stocké | Aucun chemin de lecture | Clé privée absente de leurs unités |
-| RCE worker sync | Cookies actuels accessibles selon l'environnement | Aucun credential autonome | Risque résiduel accepté et fortement isolé |
-| Token `owner` volé | Ne peut pas changer le mode via la nouvelle route | Propriétaire primaire requis | Enrôlement et suppression sous le même garde |
-| Session web primaire volée | Peut choisir `manual` ou `session_only` | Origin, CSRF et révocation existants | Saisie et vérification IMT obligatoires pour enrôler |
-| Compte administrateur compromis | Ne peut pas créer de credential | Aucune route admin | L'admin futur ne voit que des états agrégés |
+| Lecture de PostgreSQL ou fuite d'un dump | Une enveloppe de test ou future peut être copiée | Clé privée absente de PostgreSQL ; contexte lié au compte | Revérification du mode et de la génération par G6 |
+| RCE dans le web | Peut capturer le mot de passe pendant une saisie et produire des enveloppes | Aucune clé privée ni méthode d'ouverture ; production fermée | Le risque pendant la saisie reste irréductible |
+| RCE scheduler/calendar/outbox | Ne peut ni ouvrir ni enrôler un credential | Aucun chemin de lecture, aucune clé privée | Frontière inchangée |
+| RCE worker sync | Possède déjà la clé privée, mais son rôle et son chemin runtime ne lisent pas la table | Refus PostgreSQL et tests structurels | G6 ajoutera une lecture strictement bornée |
+| Token `owner` volé | Reçoit une vue neutre et ne peut ni enrôler, ni supprimer, ni purger | Propriétaire primaire requis | Frontière inchangée |
+| Session web primaire volée | Peut révoquer ou purger ; enrôler exige encore le mot de passe IMT | Origin, CSRF, rate limits et vérification IMT | Step-up récent à étudier séparément |
+| Compte administrateur compromis | Ne peut pas créer, lire ou ouvrir un credential | Aucune route admin ; révocation d'urgence par CLI locale | L'admin futur reste limité aux agrégats |
 | Accès root au LXC | Contrôle total du runtime et de la mémoire | Hors protection applicative | Risque résiduel non supprimable, durcissement hôte requis |
 | Fuite de `/etc/botnote` | Dépend des fichiers obtenus | Clés privées root-only et injectées uniquement au worker | Clé privée credential séparée des secrets généraux |
-| Logs, traceback ou télémétrie | Aucun secret autonome à fuiter | Paramètres SQL masqués, payloads sûrs | Corps sensibles jamais journalisés |
-| Inspection `/proc`, core dump ou swap | Aucun secret autonome durable | Aucun mot de passe en argument ou environnement | `LoadCredential`, `LimitCORE=0`, durée mémoire minimale |
-| Substitution entre comptes | Sans objet dans G1 | FK et relation one-to-one | Liaison cryptographique au compte et à la génération |
+| Logs, traceback ou télémétrie | Le secret peut exister brièvement en mémoire web de test | `SecretStr`, validation redacted, événements et réponses sans secret | Corps sensibles jamais journalisés |
+| Inspection `/proc`, core dump ou swap | Le secret peut exister brièvement pendant l'enrôlement | Aucun mot de passe en argument, environnement, job ou événement | `LimitCORE=0` et durée mémoire minimale |
+| Substitution entre comptes | L'ouverture échoue avec un autre contexte | Liaison compte, login, génération et consentement dans `info` | Revérification transactionnelle par G6 |
 | Changement du login IMT | Invalide la session HPKE liée à l'ancien login | Ciphertext effacé et reconnexion requise | Ancien credential invalide, réenrôlement requis |
 | Rollback d'une sauvegarde | Peut ressusciter une session révoquée | Révocation globale obligatoire avant remise en service | Génération et consentement vérifiés avant déchiffrement |
 | Perte de clé privée | Sessions préservées mais worker fermé | Alerte agrégée, restauration de clé ou révocation humaine | Réenrôlement, aucune perte de note |
-| Rotation incomplète | Aucun impact G1 | Aucune clé créée | Inventaire par `key_id`, anciennes clés de lecture bornées |
+| Rotation incomplète | G5 ne tourne aucune clé | Inventaire agrégé et révocation globale | Rotation opérationnelle G6 |
 | Révocation pendant un job | Le worker revérifie le booléen et le consentement | Garde avant appel | Nouvelle vérification génération/mode juste avant ouverture |
 
 ## Invariants G1
@@ -100,6 +101,21 @@ Les actifs futurs à protéger seront :
 - la clé historique et le module legacy restent accessibles uniquement à la
   commande hors réseau sous le profil explicite `migration`.
 
+## Invariants G5
+
+- l'enrôlement exige propriétaire primaire, Origin, CSRF, trois acquittements
+  et vérification du mot de passe IMT ;
+- le flag d'enrôlement est fermé par défaut et interdit en production ;
+- le web peut sceller mais ne possède ni clé privée, ni méthode d'ouverture ;
+- l'appel PASS précède la transaction SQL et ne déclenche aucun import
+  académique ;
+- credential, session technique et profil vérifié sont commités ensemble ;
+- révocation, purge et transitions vers `manual` ou `session_only` effacent
+  immédiatement l'enveloppe ;
+- viewers et tokens owner ne révèlent pas l'existence d'un credential ;
+- le scheduler et le worker n'utilisent toujours aucun credential ;
+- la restauration exige une révocation globale hors réseau avant redémarrage.
+
 ## Risques résiduels
 
 Le worker sync normal ne possède plus la clé symétrique générale. Le web
@@ -114,6 +130,7 @@ inspection de sa mémoire pendant un futur SSO resteront des risques
 irréductibles. L'enveloppe asymétrique réduira la surface de déchiffrement, mais
 ne rendra jamais l'exploitation d'un mot de passe sans risque.
 
-La présence d'une table vide et d'une primitive isolée ne constitue pas une
-capacité autonome. Toute activation avant G5 à G7 doit être considérée comme
-une erreur de configuration. G4 est terminé ; G5 à G7 restent fermés.
+La présence d'une API fermée et d'un cycle de vie ne constitue pas une capacité
+autonome. Toute activation avant G6 et G7 doit être considérée comme une erreur
+de configuration. G5 est terminé ; le fallback, la rotation réelle et l'UX
+restent fermés.

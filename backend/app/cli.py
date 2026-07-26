@@ -108,6 +108,17 @@ def main() -> None:
         "--confirm",
         choices=("REVOKE-ALL-PASS-SESSIONS",),
     )
+    revoke_credentials = subparsers.add_parser("sync-credentials-revoke-all")
+    revoke_credentials.add_argument(
+        "--reason",
+        choices=("database_restored", "operator_revoked"),
+        required=True,
+    )
+    revoke_credentials.add_argument("--dry-run", action="store_true")
+    revoke_credentials.add_argument(
+        "--confirm",
+        choices=("REVOKE-ALL-SYNC-CREDENTIALS",),
+    )
 
     args = parser.parse_args()
     configure_json_logging()
@@ -233,6 +244,25 @@ def main() -> None:
                 dry_run=args.dry_run,
                 confirmed=args.confirm == "REVOKE-ALL-PASS-SESSIONS",
             )
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        print(json.dumps(result, sort_keys=True))
+    elif args.command == "sync-credentials-revoke-all":
+        from app.imt_sync_credential_contract import (
+            ImtSyncCredentialRevocationReason,
+        )
+        from app.services.imt_sync_credentials import (
+            revoke_all_sync_credentials_operation,
+        )
+
+        try:
+            with SessionLocal() as db:
+                result = revoke_all_sync_credentials_operation(
+                    db,
+                    reason=ImtSyncCredentialRevocationReason(args.reason),
+                    dry_run=args.dry_run,
+                    confirmed=args.confirm == "REVOKE-ALL-SYNC-CREDENTIALS",
+                )
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
         print(json.dumps(result, sort_keys=True))

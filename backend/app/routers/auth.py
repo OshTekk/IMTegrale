@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import hashlib
-import threading
-
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
@@ -50,6 +47,8 @@ from app.security import (
 from app.services.auth_protection import AuthProtectionRejected
 from app.services.events import record_event
 from app.services.imt import ImtAuthenticationError, ImtFetchError
+from app.services.login_rate_limits import _rate_key as _shared_rate_key
+from app.services.login_rate_limits import check_login_limits
 from app.services.pass_gateway import (
     PassAccessRejected,
     attach_operation_account,
@@ -73,7 +72,7 @@ from app.services.sync import apply_competency_ues, apply_pass_entries, apply_pa
 from app.services.sync_control import set_login_sync_cooldown
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
-_LOGIN_LIMITS_LOCK = threading.Lock()
+_rate_key = _shared_rate_key
 _GENERIC_IMT_LOGIN_ERROR = "Connexion IMT impossible avec ces informations."
 
 
@@ -111,26 +110,21 @@ def _session_payload(
     }
 
 
-def _rate_key(value: str) -> str:
-    return hashlib.sha256(value.encode()).hexdigest()
-
-
 def _check_login_limits(
     request: Request,
     kind: str,
     _target: str | None,
     settings: Settings,
 ) -> tuple[str, str | None]:
-    identity = client_identity(request, settings)
-    client_key = _rate_key(f"{identity}|{kind}")
-    checks = [(login_rate_limiter, client_key)]
-    checks.append((login_global_rate_limiter, "all-logins"))
-    with _LOGIN_LIMITS_LOCK:
-        for limiter, key in checks:
-            limiter.check(key, consume=False)
-        for limiter, key in checks:
-            limiter.check(key)
-    return client_key, None
+    reservation = check_login_limits(
+        request,
+        kind=kind,
+        settings=settings,
+        shared_password_bucket=False,
+        client_limiter=login_rate_limiter,
+        global_limiter=login_global_rate_limiter,
+    )
+    return reservation.primary_key, None
 
 
 @router.get("/session", response_model=SessionResponse)
@@ -154,7 +148,7 @@ async def login_imt(
     settings: Settings = Depends(get_settings),
     pass_session_sealer: PassSessionSealer = Depends(_pass_session_sealer),
 ) -> Response:
-    limiter_key, _ = _check_login_limits(request, "imt", payload.username, settings)
+    limiter = check_login_limits(request, kind="imt", settings=settings)
     account = db.scalar(select(Account).where(Account.imt_username == payload.username))
     is_new = account is None
     if account is not None and account.is_disabled:
@@ -254,7 +248,7 @@ async def login_imt(
     record_event(db, account_id=account.id, kind="auth:login", actor="owner", payload={"method": "imt"})
     db.commit()
     attach_operation_account(gateway.operation_id, account.id)
-    login_rate_limiter.reset(limiter_key)
+    limiter.reset_after_success()
 
     session_payload = await run_in_threadpool(
         _session_payload,
@@ -281,12 +275,7 @@ async def reconnect_pass(
     settings: Settings = Depends(get_settings),
     pass_session_sealer: PassSessionSealer = Depends(_pass_session_sealer),
 ) -> dict:
-    limiter_key, _ = _check_login_limits(
-        request,
-        "pass-reconnect",
-        auth.account.imt_username,
-        settings,
-    )
+    limiter = check_login_limits(request, kind="pass-reconnect", settings=settings)
     try:
         gateway = await run_in_threadpool(
             perform_login_operation,
@@ -347,7 +336,7 @@ async def reconnect_pass(
         payload={"beta": True},
     )
     db.commit()
-    login_rate_limiter.reset(limiter_key)
+    limiter.reset_after_success()
     return {"ok": True, "service_session": service_session_view(db, auth.account)}
 
 
@@ -359,7 +348,7 @@ def login_token(
     settings: Settings = Depends(get_settings),
 ) -> Response:
     prefix = share_token_prefix(payload.token)
-    limiter_key, _ = _check_login_limits(request, "token", prefix, settings)
+    limiter = check_login_limits(request, kind="token", settings=settings)
     if not prefix:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token invalide")
     share = db.scalar(select(ShareToken).where(ShareToken.prefix == prefix))
@@ -372,11 +361,7 @@ def login_token(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token invalide ou expiré")
 
     account = db.get(Account, share.account_id)
-    if (
-        account is None
-        or account.is_disabled
-        or share.access_generation != account.access_generation
-    ):
+    if account is None or account.is_disabled or share.access_generation != account.access_generation:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Accès révoqué")
     active_digest = token_digest(payload.token, settings)
     if not secure_compare(share.digest, active_digest):
@@ -401,7 +386,7 @@ def login_token(
         payload={"method": "token", "name": share.name},
     )
     db.commit()
-    login_rate_limiter.reset(limiter_key)
+    limiter.reset_after_success()
 
     session_payload = _session_payload(
         AuthContext(account=account, session=web_session),
@@ -424,7 +409,7 @@ def passkey_login_options(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> dict:
-    _check_login_limits(request, "passkey", None, settings)
+    check_login_limits(request, kind="passkey", settings=settings)
     result = authentication_options(db)
     db.commit()
     return result
@@ -582,14 +567,10 @@ def delete_passkey(
         )
     )
     db.execute(
-        update(WebSession)
-        .where(WebSession.account_id == account.id)
-        .values(access_generation=generation)
+        update(WebSession).where(WebSession.account_id == account.id).values(access_generation=generation)
     )
     db.execute(
-        update(ShareToken)
-        .where(ShareToken.account_id == account.id)
-        .values(access_generation=generation)
+        update(ShareToken).where(ShareToken.account_id == account.id).values(access_generation=generation)
     )
     db.execute(
         update(PasskeyCredential)

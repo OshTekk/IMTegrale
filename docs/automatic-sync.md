@@ -17,14 +17,16 @@ comportementale compatible avec l'ancienne release. La colonne
 effectif est donc dérivé du booléen jusqu'à la fermeture documentée de la
 fenêtre de rollback.
 
-La migration crée également `imt_sync_credentials`, mais cette table reste vide
-et aucune route G5A ne peut y écrire. `0027` impose avant sa première utilisation
-une enveloppe exacte de 3 172 octets, un `key_id` strict et des états de
-révocation sans ciphertext. G2 fournit la
+La migration crée également `imt_sync_credentials`. `0027` impose avant sa
+première utilisation une enveloppe exacte de 3 172 octets, un `key_id` strict
+et des états de révocation sans ciphertext. G5 expose une API de consentement,
+d'enrôlement, de révocation et de purge uniquement derrière un flag
+non-production. La production conserve ce flag fermé, aucune clé publique
+credential dans le web et zéro credential. G2 fournit la
 [primitive HPKE générique](security/hpke-envelope-format.md), G3 isole le worker
-sync et G4 migre les seules sessions PASS/HUB vers ce worker. Cette protection
-n'est branchée ni à la table credential, ni à une API de mot de passe. Aucun mot
-de passe ou fallback autonome n'est implémenté. Le détail des gates se trouve dans
+sync et G4 migre les sessions PASS/HUB vers ce worker. Le worker ne lit pas
+encore la table credential et aucun fallback autonome n'est implémenté. Le
+détail des gates se trouve dans
 [`security/autonomous-sync-architecture.md`](security/autonomous-sync-architecture.md).
 
 ## Consentement
@@ -41,7 +43,8 @@ Les connexions explicitement déclenchées par une connexion IMT, le bouton de s
 
 ## Session technique bêta
 
-Le mot de passe IMT n'est jamais conservé. Après une authentification réussie,
+Dans les deux modes disponibles, le mot de passe IMT n'est jamais conservé.
+Après une authentification réussie,
 seuls les cookies appartenant exactement à PASS et au Hub COMPETENCES sont
 retenus. PASS pouvant encore émettre un cookie historique sans attribut
 `Secure`, IMTégrale ne le réutilise que vers les origines HTTPS autorisées et le
@@ -96,8 +99,10 @@ Les jobs réussis sont conservés 7 jours, les notifications livrées 30 jours e
 
 Le portail administrateur affiche l'état et la fréquence choisis pour faciliter le support, sans proposer d'activation administrateur. Les événements `sync:auto_enabled` et `sync:auto_disabled` assurent la traçabilité du choix du propriétaire.
 
-Dans la release G5A, `BOTNOTE_AUTONOMOUS_SYNC_ENABLED` doit rester
-absent ou valoir `false`. Une valeur `true` fait échouer le démarrage. Si une
+Dans la release G5, `BOTNOTE_AUTONOMOUS_SYNC_ENABLED` et
+`BOTNOTE_AUTONOMOUS_SYNC_ENROLLMENT_ENABLED` doivent rester absents ou valoir
+`false` en production. Une activation du runtime autonome échoue partout ; une
+activation de l'enrôlement est explicitement refusée en production. Si une
 ligne `autonomous` est injectée manuellement en base, le scheduler l'ignore,
 émet une alerte agrégée sans identité et le worker la refuse avant tout appel
 PASS.

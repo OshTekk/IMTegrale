@@ -4,8 +4,13 @@ from datetime import datetime
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
+from app.imt_sync_credential_contract import (
+    IMT_SYNC_CREDENTIAL_CONSENT_VERSION,
+    IMT_SYNC_CREDENTIAL_PASSWORD_MAX_BYTES,
+    IMT_SYNC_CREDENTIAL_PASSWORD_MAX_CHARACTERS,
+)
 from app.sync_modes import SyncMode
 
 
@@ -86,6 +91,38 @@ class SyncModeUpdate(BaseModel):
     mode: SyncMode
     interval_hours: Literal[2, 4, 6, 8, 12, 24] = 2
     adaptive: bool = True
+
+
+class SyncCredentialEnrollRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    password: SecretStr = Field(
+        min_length=1,
+        max_length=IMT_SYNC_CREDENTIAL_PASSWORD_MAX_CHARACTERS,
+        json_schema_extra={"writeOnly": True},
+    )
+    consent_version: int
+    acknowledge_encrypted_storage: Literal[True]
+    acknowledge_worker_risk: Literal[True]
+    acknowledge_irreversible_deletion: Literal[True]
+
+    @field_validator("password")
+    @classmethod
+    def validate_password_size(cls, value: SecretStr) -> SecretStr:
+        try:
+            encoded_size = len(value.get_secret_value().encode("utf-8"))
+        except UnicodeEncodeError:
+            raise ValueError("Mot de passe invalide") from None
+        if encoded_size > IMT_SYNC_CREDENTIAL_PASSWORD_MAX_BYTES:
+            raise ValueError("Mot de passe trop long")
+        return value
+
+    @field_validator("consent_version")
+    @classmethod
+    def validate_consent_version(cls, value: int) -> int:
+        if value != IMT_SYNC_CREDENTIAL_CONSENT_VERSION:
+            raise ValueError("Version de consentement non prise en charge")
+        return value
 
 
 class TelegramUpdate(BaseModel):

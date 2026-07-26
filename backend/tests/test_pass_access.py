@@ -187,7 +187,8 @@ def test_upstream_retry_after_opens_then_probe_closes_circuit() -> None:
         assert pass_status_view(db)["circuit"]["state"] == "closed"
 
 
-def test_anonymous_login_cannot_consume_a_half_open_probe() -> None:
+@pytest.mark.parametrize("kind", ("registration", "sync-credential-enroll"))
+def test_password_verification_cannot_consume_a_half_open_probe(kind: str) -> None:
     with SessionLocal() as db:
         state = pass_gateway._system_state(db)
         state.circuit_state = "half_open"
@@ -199,7 +200,7 @@ def test_anonymous_login_cannot_consume_a_half_open_probe() -> None:
         reserve_pass_operation(
             account_id=None,
             target_ref=client_reference("anonymous-client"),
-            kind="registration",
+            kind=kind,
             actor="owner",
         )
     assert rejected.value.code == "PASS_PROBE_RESTRICTED"
@@ -279,6 +280,31 @@ class FakePassClient:
             else None
         )
         return [PassEntry("SIT130", "Examen", 15, 1, False)]
+
+
+def test_credential_enrollment_uses_the_linked_account_quota(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(pass_gateway, "ImtPassClient", FakePassClient)
+    FakePassClient.instances.clear()
+    username = "credential-quota@example.test"
+    account = create_account(username)
+
+    result = pass_gateway.perform_login_operation(
+        username=username,
+        password="synthetic-password",
+        account_id=account.id,
+        raw_client_identity="peer:192.0.2.65",
+        initial_import=False,
+        operation_kind="sync-credential-enroll",
+    )
+
+    assert result.entries == []
+    with SessionLocal() as db:
+        operation = db.get(PassOperation, result.operation_id)
+        assert operation is not None
+        assert operation.kind == "sync-credential-enroll"
+        assert operation.target_ref == target_reference(username)
 
 
 def seed_service_session(
