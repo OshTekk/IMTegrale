@@ -90,6 +90,12 @@ La révision `0017` supprime physiquement les anciennes colonnes de mot de passe
    sync G4A pour le rollback, retirer les deux variables symétriques du fichier
    actif, puis vérifier le heartbeat `isolated-sync-v2`, l'inventaire legacy à
    zéro et `operations-check` avant de redémarrer le scheduler.
+   Pour G5A, vérifier d'abord que `imt_sync_credentials` est vide, arrêter le
+   scheduler dans une fenêtre sans job ni lease, puis appliquer `0027`. La
+   migration resserre uniquement les contraintes et ne charge aucune clé. Après
+   bascule, contrôler `active=invalid=revoked=autonomous=0`, les sessions HPKE
+   inchangées et `operations-check` vert. G5A devient alors le rollback
+   applicatif de G5B, sans downgrade de la base.
 9. Créer le répertoire dédié avec `install -d -o botnote -g botnote -m 0700 /var/lib/botnote-admin`, puis amorcer le premier compte avec `botnote admin-bootstrap --username <nom> --output /var/lib/botnote-admin/initial-credentials.txt`. Le fichier doit rester `0600`, être supprimé après lecture et le mot de passe doit être changé à la première connexion. La première session permet ensuite d'enrôler une passkey pendant dix minutes. Après cet enrôlement, toute nouvelle session admin exige cette passkey et les mutations sensibles exigent un step-up de moins de dix minutes. Conserver au moins deux passkeys administrateur sur des dispositifs distincts ; la dernière ne peut pas être supprimée depuis l'interface. Ne pas relâcher les permissions du répertoire legacy `/var/lib/botnote`.
 
 Un redémarrage Nginx complet est volontaire lors d'un changement d'upstream : un reload gracieux peut conserver un ancien worker tant qu'une connexion SSE reste ouverte.
@@ -224,6 +230,9 @@ production.
   en G4B. Le worker sync normal ne doit contenir aucune variable symétrique. Ni
   l'API ni l'administration ne doivent exposer le format, le `key_id` ou
   l'enveloppe.
+- Après `0027`, une enveloppe credential active aurait exactement 3 172 octets
+  et un `key_id` hexadécimal minuscule de 64 caractères. En G5A, les agrégats
+  `active`, `invalid`, `revoked` et `autonomous` doivent tous rester à zéro.
 - `systemctl --failed` doit être vide sur PVE et LXC.
 - Depuis le LAN, `/api/v1/admin/auth/session` doit répondre `404`. Depuis l'identité Tailscale autorisée, il doit répondre sans révéler de compte tant que l'authentification admin n'est pas faite.
 - Vérifier qu'une session admin obtenue par mot de passe seul ne peut pas ouvrir le portail après l'enrôlement initial, qu'une passkey est exigée et qu'une mutation sensible refuse un step-up vieux de plus de dix minutes avec `ADMIN_STEP_UP_REQUIRED`. Une lecture non destructive doit rester disponible après expiration du step-up.
@@ -252,6 +261,7 @@ Les migrations historiques restent additives sauf mention contraire. `0017`
 supprime irréversiblement les mots de passe stockés ; `0020` introduit les jobs
 durables ; `0021` le MFA admin ; `0022` l'observabilité ; `0023` les décimaux ;
 `0024` retire les index redondants ; `0025` ajoute le miroir de mode et la table
-credential vide ; `0026` ajoute le stockage HPKE des sessions. Un rollback
+credential vide ; `0026` ajoute le stockage HPKE des sessions ; `0027` durcit
+le cycle de vie credential avant toute première écriture. Un rollback
 applicatif conserve la base migrée. Ne pas downgrader `0017` en production et
 révoquer toutes les sessions avant tout retour antérieur à G4.

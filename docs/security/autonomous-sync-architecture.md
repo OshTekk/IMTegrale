@@ -2,7 +2,8 @@
 
 ## État de cette release
 
-Cette release termine les gates **G1** à **G4**. G1 introduit le vocabulaire de
+Cette release G5A termine les gates **G1** à **G4** et prépare G5 sans l'ouvrir.
+G1 introduit le vocabulaire de
 domaine, le schéma additif et les gardes. G2 ajoute un
 [format d'enveloppe HPKE](hpke-envelope-format.md) générique, versionné et
 entièrement isolé. G3 ajoute la
@@ -13,7 +14,10 @@ reçoit que leur clé publique ; le worker sync isolé reçoit le keyring privé
 Le runtime sync normal est HPKE-only et refuse toute clé symétrique legacy.
 HPKE reste sans lien avec la table de credentials et aucune enveloppe n'est
 exposée par une API. La release ne conserve toujours aucun mot de passe IMT et
-ne permet aucune reconnexion autonome.
+ne permet aucune reconnexion autonome. La migration `0027` resserre désormais
+la table credential encore vide selon le
+[cycle de vie G5](imt-sync-credential-lifecycle.md), sans endpoint ni clé
+publique supplémentaire dans le web.
 
 Les modes cibles sont :
 
@@ -98,12 +102,12 @@ autonome fermé. Elle n'expose aucune donnée cryptographique.
 ## Table de préparation
 
 `imt_sync_credentials` est une table one-to-one séparée de `accounts`. Elle est
-créée vide et aucune route de cette release ne peut y écrire.
+créée vide et aucune route G5A ne peut y écrire.
 
 Elle prépare les métadonnées minimales d'un futur credential :
 
-- enveloppe binaire versionnée et bornée ;
-- `key_id` ASCII borné ;
+- enveloppe binaire credential v1 de taille exacte 3 172 octets ;
+- `key_id` SHA-256 hexadécimal minuscule de 64 caractères ;
 - génération du credential ;
 - état `active`, `invalid` ou `revoked` ;
 - version et date de consentement ;
@@ -118,7 +122,8 @@ Les contraintes imposent notamment :
 - génération et consentement strictement positifs ;
 - compteur d'échecs positif ou nul ;
 - enveloppe présente seulement pour l'état actif ;
-- enveloppe absente pour un état invalide ou révoqué ;
+- enveloppe, version et `key_id` absents pour un état invalide ou révoqué ;
+- date et raison de révocation obligatoires pour les états inactifs ;
 - aucune colonne de mot de passe, hash, empreinte, longueur ou métadonnée libre.
 
 La table n'est pas un stockage utilisable tant que les gates suivants ne sont
@@ -197,7 +202,7 @@ ne la transforme pas en credential et ne l'associe pas au mode
 | G2 | Module HPKE versionné avec clés entièrement fictives | Terminé |
 | G3 | Worker sync dédié et clé privée isolée | Terminé |
 | G4 | Cookies PASS/HUB migrés vers l'isolation worker-only | Terminé |
-| G5 | API d'enrôlement, renouvellement et suppression | Non terminé |
+| G5 | API d'enrôlement, renouvellement et suppression | G5A terminé, G5B non terminé |
 | G6 | Fallback autonome, révocation et rotation | Non terminé |
 | G7 | UX, consentement distinct et activation canary | Non terminé |
 

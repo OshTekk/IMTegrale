@@ -9,6 +9,12 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings
 from app.database import utcnow
+from app.imt_sync_credential_contract import (
+    IMT_SYNC_CREDENTIAL_ENVELOPE_BYTES,
+    IMT_SYNC_CREDENTIAL_REVOCATION_REASONS,
+    ImtSyncCredentialState,
+    valid_imt_sync_credential_key_id,
+)
 from app.models import (
     Account,
     CalendarFetchAttempt,
@@ -23,7 +29,7 @@ from app.observability import runtime_metrics
 from app.pass_session_contract import PASS_SERVICE_SESSION_ENVELOPE_BYTES
 from app.services.sync_control import ensure_utc
 
-EXPECTED_DATABASE_REVISION = "0026"
+EXPECTED_DATABASE_REVISION = "0027"
 REQUIRED_RUNTIME_COMPONENTS = ("scheduler", "sync", "calendar", "outbox")
 ISOLATED_SYNC_PROFILE = {
     "runtime_profile": "isolated-sync-v2",
@@ -238,6 +244,59 @@ def operations_metrics(db: Session, settings: Settings) -> dict:
     }
 
 
+def _sync_credential_alert_codes(db: Session) -> set[str]:
+    alerts: set[str] = set()
+    rows = db.execute(
+        text(
+            "SELECT state, encrypted_envelope, envelope_version, key_id, "
+            "credential_generation, consent_version, consented_at, verified_at, "
+            "failure_count, revoked_at, revoked_reason "
+            "FROM imt_sync_credentials"
+        )
+    ).mappings()
+    for row in rows:
+        state = row["state"]
+        envelope = row["encrypted_envelope"]
+        metadata_valid = (
+            isinstance(row["credential_generation"], int)
+            and row["credential_generation"] >= 1
+            and isinstance(row["consent_version"], int)
+            and row["consent_version"] >= 1
+            and isinstance(row["failure_count"], int)
+            and row["failure_count"] >= 0
+        )
+        if state == ImtSyncCredentialState.ACTIVE:
+            metadata_valid = metadata_valid and (
+                isinstance(envelope, bytes)
+                and len(envelope) == IMT_SYNC_CREDENTIAL_ENVELOPE_BYTES
+                and isinstance(row["envelope_version"], int)
+                and row["envelope_version"] >= 1
+                and valid_imt_sync_credential_key_id(row["key_id"])
+                and row["consented_at"] is not None
+                and row["verified_at"] is not None
+                and row["revoked_at"] is None
+                and row["revoked_reason"] is None
+            )
+            alerts.add("SYNC_CREDENTIAL_UNEXPECTED_WHILE_ENROLLMENT_DISABLED")
+            alerts.add("SYNC_CREDENTIAL_WITH_AUTONOMOUS_DISABLED")
+        elif state in {
+            ImtSyncCredentialState.INVALID,
+            ImtSyncCredentialState.REVOKED,
+        }:
+            metadata_valid = metadata_valid and (
+                envelope is None
+                and row["envelope_version"] is None
+                and row["key_id"] is None
+                and row["revoked_at"] is not None
+                and row["revoked_reason"] in IMT_SYNC_CREDENTIAL_REVOCATION_REASONS
+            )
+        else:
+            metadata_valid = False
+        if not metadata_valid:
+            alerts.add("SYNC_CREDENTIAL_METADATA_INVALID")
+    return alerts
+
+
 def operational_alert_codes(db: Session, settings: Settings) -> list[str]:
     now = utcnow()
     metrics = operations_metrics(db, settings)
@@ -293,6 +352,7 @@ def operational_alert_codes(db: Session, settings: Settings) -> list[str]:
             or (row.state != "active" and (has_legacy or has_hpke))
         ):
             alerts.add("PASS_SESSION_HPKE_METADATA_INVALID")
+    alerts.update(_sync_credential_alert_codes(db))
     for queue in metrics["queues"]:
         name = str(queue["name"]).upper()
         if queue["dead_letter"]:

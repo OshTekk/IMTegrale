@@ -8,6 +8,7 @@ from threading import Barrier
 from alembic import command
 from alembic.config import Config
 from app.database import SessionLocal, engine
+from app.imt_sync_credential_contract import IMT_SYNC_CREDENTIAL_ENVELOPE_BYTES
 from app.models import Account, ImtSyncCredential
 from app.services.sync_preferences import set_sync_mode
 from app.sync_modes import SyncMode, effective_sync_mode
@@ -88,9 +89,9 @@ def test_postgres_enforces_credential_constraints_and_cascade() -> None:
         db.flush()
         credential = ImtSyncCredential(
             account_id=account.id,
-            encrypted_envelope=os.urandom(64),
+            encrypted_envelope=os.urandom(IMT_SYNC_CREDENTIAL_ENVELOPE_BYTES),
             envelope_version=1,
-            key_id="fictional-postgres-key",
+            key_id="c" * 64,
             credential_generation=1,
             state="active",
             consent_version=1,
@@ -103,9 +104,9 @@ def test_postgres_enforces_credential_constraints_and_cascade() -> None:
 
         duplicate = ImtSyncCredential(
             account_id=account.id,
-            encrypted_envelope=os.urandom(64),
+            encrypted_envelope=os.urandom(IMT_SYNC_CREDENTIAL_ENVELOPE_BYTES),
             envelope_version=1,
-            key_id="fictional-postgres-key",
+            key_id="c" * 64,
             credential_generation=1,
             state="active",
             consent_version=1,

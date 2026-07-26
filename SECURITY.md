@@ -34,10 +34,13 @@ donnée.
 Une instance auto-hébergée peut réserver à son unique compte propriétaire un mot de passe local hors base, hors dépôt et lisible uniquement par l'utilisateur système du service. Cette exception est désactivée par défaut, ne doit jamais être proposée à un compte public et augmente explicitement le risque accepté par cet exploitant.
 
 La fondation de synchronisation autonome ajoute un mode de domaine, une table
-vide, une [primitive HPKE isolée](docs/security/hpke-envelope-format.md) et une
+vide durcie par `0027`, une
+[primitive HPKE isolée](docs/security/hpke-envelope-format.md) et une
 [frontière worker dédiée](docs/security/sync-worker-isolation.md). La paire
 `pass-service-session` protège désormais les sessions PASS/HUB ; la paire
-credential reste sans donnée réelle. `autonomous` reste indisponible, le feature
+credential reste sans donnée réelle. Son
+[cycle de vie](docs/security/imt-sync-credential-lifecycle.md) interdit tout
+ciphertext dans un état révoqué ou invalide. `autonomous` reste indisponible, le feature
 flag associé est fermé et aucune route ne stocke de mot de passe. L'architecture
 cible et son [modèle de menace](docs/security/autonomous-sync-threat-model.md)
 sont documentés séparément ; ils ne décrivent pas une protection déjà active.

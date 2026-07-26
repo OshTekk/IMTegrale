@@ -7,6 +7,7 @@ from uuid import uuid4
 import pytest
 from app.config import Settings, get_settings
 from app.database import SessionLocal
+from app.imt_sync_credential_contract import IMT_SYNC_CREDENTIAL_ENVELOPE_BYTES
 from app.models import (
     Account,
     DurableJob,
@@ -110,19 +111,22 @@ def _install_session(
 
 def _valid_credential(account_id: str, *, state: str = "active") -> ImtSyncCredential:
     now = datetime(2026, 7, 25, 12, 0, tzinfo=UTC)
+    active = state == "active"
     return ImtSyncCredential(
         account_id=account_id,
-        encrypted_envelope=os.urandom(64) if state == "active" else None,
-        envelope_version=1,
-        key_id="fictional-key-id",
+        encrypted_envelope=(
+            os.urandom(IMT_SYNC_CREDENTIAL_ENVELOPE_BYTES) if active else None
+        ),
+        envelope_version=1 if active else None,
+        key_id="a" * 64 if active else None,
         credential_generation=1,
         state=state,
         consent_version=1,
         consented_at=now,
-        verified_at=now if state == "active" else None,
+        verified_at=now if active else None,
         failure_count=0,
-        revoked_at=now if state == "revoked" else None,
-        revoked_reason="manual_mode" if state == "revoked" else None,
+        revoked_at=None if active else now,
+        revoked_reason=None if active else "manual_mode",
     )
 
 
@@ -516,7 +520,7 @@ def test_credential_relation_is_one_to_one_and_cascades() -> None:
         {"credential_generation": 0},
         {"consent_version": 0},
         {"failure_count": -1},
-        {"encrypted_envelope": os.urandom(4097)},
+        {"encrypted_envelope": os.urandom(IMT_SYNC_CREDENTIAL_ENVELOPE_BYTES + 1)},
         {"encrypted_envelope": None},
         {"envelope_version": 0},
     ],
@@ -547,7 +551,9 @@ def test_inactive_credential_cannot_retain_an_envelope(state: str) -> None:
         db.add(account)
         db.flush()
         credential = _valid_credential(account.id, state=state)
-        credential.encrypted_envelope = os.urandom(64)
+        credential.encrypted_envelope = os.urandom(
+            IMT_SYNC_CREDENTIAL_ENVELOPE_BYTES
+        )
         db.add(credential)
         with pytest.raises(IntegrityError):
             db.commit()
@@ -567,6 +573,8 @@ def test_simulated_revocation_removes_envelope_and_no_secret_is_serialized() -> 
 
         credential.state = "revoked"
         credential.encrypted_envelope = None
+        credential.envelope_version = None
+        credential.key_id = None
         credential.revoked_at = datetime(2026, 7, 25, 13, 0, tzinfo=UTC)
         credential.revoked_reason = "manual_mode"
         db.commit()
@@ -581,9 +589,11 @@ def test_simulated_revocation_removes_envelope_and_no_secret_is_serialized() -> 
 
 
 def test_credential_key_id_rejects_non_ascii_and_whitespace() -> None:
-    with pytest.raises(ValueError, match="ASCII identifier"):
+    with pytest.raises(ValueError, match="lowercase SHA-256"):
         _valid_credential("fictional-account").key_id = "clé-fictive"
-    with pytest.raises(ValueError, match="ASCII identifier"):
+    with pytest.raises(ValueError, match="lowercase SHA-256"):
         _valid_credential("fictional-account").key_id = "fictional key"
-    with pytest.raises(ValueError, match="ASCII identifier"):
+    with pytest.raises(ValueError, match="lowercase SHA-256"):
         _valid_credential("fictional-account").key_id = "fictional/key"
+    with pytest.raises(ValueError, match="lowercase SHA-256"):
+        _valid_credential("fictional-account").key_id = "A" * 64

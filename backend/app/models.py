@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from datetime import datetime
 from decimal import Decimal
 
@@ -23,6 +22,12 @@ from sqlalchemy.ext.mutable import MutableList
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from app.database import Base, utcnow
+from app.imt_sync_credential_contract import (
+    IMT_SYNC_CREDENTIAL_ENVELOPE_BYTES,
+    IMT_SYNC_CREDENTIAL_REVOCATION_REASONS,
+    IMT_SYNC_CREDENTIAL_STATES,
+    valid_imt_sync_credential_key_id,
+)
 from app.model_helpers import new_id
 from app.models_operations import (
     DurableJob as DurableJob,
@@ -655,8 +660,10 @@ class ImtSyncCredential(Base):
     __tablename__ = "imt_sync_credentials"
     __table_args__ = (
         UniqueConstraint("account_id", name="uq_imt_sync_credentials_account"),
+        Index("ix_imt_sync_credentials_key_id", "key_id"),
+        Index("ix_imt_sync_credentials_state", "state"),
         CheckConstraint(
-            "state IN ('active', 'invalid', 'revoked')",
+            f"state IN ({', '.join(repr(state) for state in IMT_SYNC_CREDENTIAL_STATES)})",
             name="ck_imt_sync_credentials_state",
         ),
         CheckConstraint(
@@ -673,7 +680,7 @@ class ImtSyncCredential(Base):
         ),
         CheckConstraint(
             "encrypted_envelope IS NULL "
-            "OR length(encrypted_envelope) BETWEEN 48 AND 4096",
+            f"OR length(encrypted_envelope) = {IMT_SYNC_CREDENTIAL_ENVELOPE_BYTES}",
             name="ck_imt_sync_credentials_envelope_size",
         ),
         CheckConstraint(
@@ -681,28 +688,40 @@ class ImtSyncCredential(Base):
             name="ck_imt_sync_credentials_envelope_version",
         ),
         CheckConstraint(
-            "key_id IS NULL OR length(key_id) BETWEEN 1 AND 64",
+            "key_id IS NULL OR length(key_id) = 64",
             name="ck_imt_sync_credentials_key_id_size",
         ),
         CheckConstraint(
             "revoked_reason IS NULL OR revoked_reason IN ("
-            "'manual_mode', 'session_only_mode', 'pass_access_purged', "
-            "'credential_replaced', 'credential_invalid', 'key_unavailable'"
-            ")",
+            + ", ".join(repr(reason) for reason in IMT_SYNC_CREDENTIAL_REVOCATION_REASONS)
+            + ")",
             name="ck_imt_sync_credentials_revoked_reason",
         ),
         CheckConstraint(
             "state != 'active' OR ("
             "encrypted_envelope IS NOT NULL "
+            f"AND length(encrypted_envelope) = {IMT_SYNC_CREDENTIAL_ENVELOPE_BYTES} "
+            "AND envelope_version IS NOT NULL "
             "AND envelope_version >= 1 "
             "AND key_id IS NOT NULL "
-            "AND verified_at IS NOT NULL"
+            "AND length(key_id) = 64 "
+            "AND consent_version >= 1 "
+            "AND consented_at IS NOT NULL "
+            "AND verified_at IS NOT NULL "
+            "AND revoked_at IS NULL "
+            "AND revoked_reason IS NULL"
             ")",
             name="ck_imt_sync_credentials_active_fields",
         ),
         CheckConstraint(
-            "state = 'active' OR encrypted_envelope IS NULL",
-            name="ck_imt_sync_credentials_inactive_envelope",
+            "state = 'active' OR ("
+            "encrypted_envelope IS NULL "
+            "AND envelope_version IS NULL "
+            "AND key_id IS NULL "
+            "AND revoked_at IS NOT NULL "
+            "AND revoked_reason IS NOT NULL"
+            ")",
+            name="ck_imt_sync_credentials_inactive_fields",
         ),
     )
 
@@ -737,9 +756,12 @@ class ImtSyncCredential(Base):
 
     @validates("key_id")
     def validate_key_id(self, _attribute: str, value: str | None) -> str | None:
-        if value is not None and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,63}", value) is None:
-            raise ValueError("key_id must be a non-empty ASCII identifier")
+        if value is not None and not valid_imt_sync_credential_key_id(value):
+            raise ValueError("key_id must be a lowercase SHA-256 hexadecimal digest")
         return value
+
+    def __repr__(self) -> str:
+        return "ImtSyncCredential(<redacted>)"
 
 
 class PassServiceSession(Base):
