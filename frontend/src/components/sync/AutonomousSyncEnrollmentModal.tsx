@@ -119,7 +119,6 @@ export function AutonomousSyncEnrollmentModal({
           throw new ActivationPendingError(error);
         }
       } finally {
-        password = "";
         if (passwordRef.current) passwordRef.current.value = "";
         setHasPassword(false);
       }
