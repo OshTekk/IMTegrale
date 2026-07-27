@@ -16,6 +16,7 @@ from app.models import (
 )
 from app.security import cipher_for
 from app.services import jobs, sync_control
+from app.services import sync as sync_service
 from app.services.jobs import (
     JOB_LEASES,
     OUTBOX_LEASE,
@@ -219,6 +220,84 @@ def test_job_recovers_when_domain_commit_happened_before_queue_ack(
         job = db.get(DurableJob, recovered.id)
         assert request is not None and request.status == "succeeded"
         assert job is not None and job.status == "succeeded"
+
+
+@pytest.mark.parametrize("failure_mode", ["raise", "return"])
+def test_sync_job_retries_when_domain_status_was_not_persisted(
+    monkeypatch,
+    caplog,
+    pass_session_runtime,
+    failure_mode: str,
+) -> None:
+    account_id = create_account(f"unfinalized-{failure_mode}.test")
+    reservation = reserve_sync_request(
+        account_id,
+        actor="owner",
+        idempotency_key=f"durable-unfinalized-{failure_mode}-0001",
+        enforce_cooldown=False,
+    )
+
+    def leave_request_active(*_args, **_kwargs):  # noqa: ANN002, ANN003, ANN202
+        if failure_mode == "raise":
+            raise RuntimeError("synthetic detail must not be logged")
+        return {"synthetic": True}
+
+    monkeypatch.setattr(sync_service, "execute_sync_request", leave_request_active)
+    assert jobs.process_one("sync", sync_runtime=pass_session_runtime) is True
+
+    with SessionLocal() as db:
+        request = db.get(SyncRequest, reservation.request_id)
+        job = db.scalar(select(DurableJob).where(DurableJob.account_id == account_id))
+        assert request is not None and request.status == "queued"
+        assert job is not None
+        assert job.status == "queued"
+        assert job.attempts == 1
+        assert job.error_code == "JOB_HANDLER_FAILED"
+    assert any(
+        getattr(record, "error_type", None) == "SyncRequestNotFinalized"
+        for record in caplog.records
+    )
+    assert "synthetic detail must not be logged" not in caplog.text
+    assert account_id not in caplog.text
+
+
+def test_sync_job_can_ack_an_exception_after_domain_status_was_persisted(
+    monkeypatch,
+    pass_session_runtime,
+) -> None:
+    account_id = create_account("finalized-exception.test")
+    reservation = reserve_sync_request(
+        account_id,
+        actor="automatic",
+        idempotency_key="durable-finalized-exception-0001",
+        enforce_cooldown=False,
+    )
+
+    def finalize_then_stop(_account_id, request_id, **_kwargs) -> None:  # noqa: ANN003
+        with SessionLocal() as db:
+            request = db.get(SyncRequest, request_id)
+            account = db.get(Account, _account_id)
+            assert request is not None and account is not None
+            sync_control.finalize_sync_request(
+                db,
+                account,
+                request,
+                status="skipped",
+                error_code="SYNC_AUTO_NOT_DUE",
+            )
+            db.commit()
+        raise sync_service.AutomaticSyncNotAllowed
+
+    monkeypatch.setattr(sync_service, "execute_sync_request", finalize_then_stop)
+    assert jobs.process_one("sync", sync_runtime=pass_session_runtime) is True
+
+    with SessionLocal() as db:
+        request = db.get(SyncRequest, reservation.request_id)
+        job = db.scalar(select(DurableJob).where(DurableJob.account_id == account_id))
+        account = db.get(Account, account_id)
+        assert request is not None and request.status == "skipped"
+        assert job is not None and job.status == "succeeded"
+        assert account is not None and account.sync_active_request_id is None
 
 
 def test_calendar_jobs_are_idempotent_per_due_generation() -> None:

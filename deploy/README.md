@@ -113,6 +113,9 @@ La révision `0017` supprime physiquement les anciennes colonnes de mot de passe
    arrêter le scheduler sans supprimer de job, appliquer `0028`, puis
    reprovisionner `botnote-sync` avec `SELECT` sur
    `imt_sync_credentials` et `UPDATE` limité aux colonnes de cycle de vie.
+   Le script de provisionnement accorde aussi les séquences strictement
+   nécessaires aux écritures autorisées dans `auth_attempts`, `events` et
+   `pass_denials`; leur absence doit faire échouer la validation du rôle.
    `INSERT`, `DELETE`, les colonnes de consentement et le DDL doivent rester
    refusés. Déployer ensuite l'artefact round-trip avec les deux flags fermés,
    redémarrer le worker et vérifier le heartbeat `isolated-sync-v3`. Cette

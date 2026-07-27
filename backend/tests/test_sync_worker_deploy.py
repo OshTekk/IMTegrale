@@ -115,6 +115,26 @@ def test_sync_role_receives_only_bounded_credential_table_permissions() -> None:
     assert "DELETE ON TABLE imt_sync_credentials" not in source
 
 
+def test_sync_role_receives_only_the_sequences_used_by_its_write_paths() -> None:
+    source = POSTGRES_ROLE.read_text()
+    sequence_grant = source.split("GRANT USAGE, SELECT ON SEQUENCE", 1)[1].split(
+        'TO "botnote-sync";',
+        1,
+    )[0]
+    for required in (
+        "auth_attempts_id_seq",
+        "events_id_seq",
+        "pass_denials_id_seq",
+    ):
+        assert required in sequence_grant
+    for forbidden in (
+        "admin_audit_logs_id_seq",
+        "calendar_fetch_attempts_id_seq",
+        "pass_system_state_id_seq",
+    ):
+        assert forbidden not in sequence_grant
+
+
 def test_sync_environment_example_contains_no_hpke_or_unrelated_secrets() -> None:
     example = (ROOT / "deploy" / "botnote-sync.env.example").read_text()
     assert "BOTNOTE_AUTONOMOUS_SYNC_ENABLED=false" in example

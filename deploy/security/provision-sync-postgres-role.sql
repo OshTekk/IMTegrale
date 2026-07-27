@@ -70,4 +70,8 @@ GRANT UPDATE (
     revoked_reason,
     updated_at
 ) ON TABLE imt_sync_credentials TO "botnote-sync";
-GRANT USAGE, SELECT ON SEQUENCE auth_attempts_id_seq TO "botnote-sync";
+GRANT USAGE, SELECT ON SEQUENCE
+    auth_attempts_id_seq,
+    events_id_seq,
+    pass_denials_id_seq
+TO "botnote-sync";

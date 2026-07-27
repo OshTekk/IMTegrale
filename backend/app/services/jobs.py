@@ -31,7 +31,7 @@ from app.observability import (
 )
 from app.services.dashboard import calculate_ues
 from app.services.events import record_event
-from app.services.sync_control import ensure_utc
+from app.services.sync_control import ACTIVE_SYNC_STATUSES, ensure_utc
 from app.services.telegram import TelegramError, build_new_notes_message, send_telegram
 
 if TYPE_CHECKING:
@@ -77,6 +77,10 @@ class SyncExecution:
     quota_bypass: bool
     bypass_reason: str | None
     force_probe: bool
+
+
+class SyncRequestNotFinalized(RuntimeError):
+    pass
 
 
 def _worker_id(kind: str) -> str:
@@ -578,11 +582,20 @@ def _renew_sync_request(claim: JobClaim) -> SyncExecution | None:
         )
 
 
+def _sync_request_is_terminal(request_id: str) -> bool:
+    # A queue acknowledgement is valid only after the domain lease is released.
+    with SessionLocal() as db:
+        request_status = db.scalar(
+            select(SyncRequest.status).where(SyncRequest.id == request_id)
+        )
+    return request_status is None or request_status not in ACTIVE_SYNC_STATUSES
+
+
 def _process_sync_job(claim: JobClaim, sync_runtime: SyncRuntimeContext) -> None:
     target = _renew_sync_request(claim)
     if target is None:
         return
-    from app.services.sync import AutomaticSyncNotAllowed, execute_sync_request
+    from app.services.sync import execute_sync_request
 
     try:
         execute_sync_request(
@@ -594,12 +607,12 @@ def _process_sync_job(claim: JobClaim, sync_runtime: SyncRuntimeContext) -> None
             force_probe=target.force_probe,
             sync_runtime=sync_runtime,
         )
-    except AutomaticSyncNotAllowed:
-        return
     except Exception:
-        # execute_sync_request persists a stable terminal domain status. The
-        # durable job has therefore completed even when the synchronization failed.
-        return
+        if _sync_request_is_terminal(target.request_id):
+            return
+        raise SyncRequestNotFinalized from None
+    if not _sync_request_is_terminal(target.request_id):
+        raise SyncRequestNotFinalized
 
 
 def _process_calendar_job(claim: JobClaim) -> None:
