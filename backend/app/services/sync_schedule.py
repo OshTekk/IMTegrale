@@ -3,8 +3,12 @@ from __future__ import annotations
 from datetime import UTC, datetime, time, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from app.config import Settings, get_settings
 from app.database import utcnow
 from app.models import Account
+from app.services.autonomous_sync_availability import (
+    autonomous_sync_execution_allowed_for,
+)
 from app.sync_modes import (
     AVAILABLE_SYNC_MODES,
     SyncMode,
@@ -38,14 +42,29 @@ def in_business_window(account: Account, now: datetime | None = None) -> bool:
     )
 
 
-def auto_sync_is_due(account: Account, now: datetime | None = None) -> bool:
+def _autonomous_runtime_enabled_for(
+    account: Account,
+    settings: Settings,
+) -> bool:
+    return autonomous_sync_execution_allowed_for(account, settings)
+
+
+def auto_sync_is_due(
+    account: Account,
+    now: datetime | None = None,
+    *,
+    settings: Settings | None = None,
+) -> bool:
     current = ensure_utc(now or utcnow())
-    from app.config import get_settings
+    resolved_settings = settings or get_settings()
 
     if (
         not stored_sync_mode_is_supported(
             account,
-            autonomous_runtime_enabled=get_settings().autonomous_sync_enabled,
+            autonomous_runtime_enabled=_autonomous_runtime_enabled_for(
+                account,
+                resolved_settings,
+            ),
         )
         or not account.auto_sync_enabled
         or account.auto_sync_consented_at is None
@@ -54,7 +73,7 @@ def auto_sync_is_due(account: Account, now: datetime | None = None) -> bool:
         or not in_business_window(account, current)
     ):
         return False
-    return next_auto_sync_at(account, current) <= current
+    return next_auto_sync_at(account, current, settings=resolved_settings) <= current
 
 
 def next_business_time(account: Account, candidate: datetime) -> datetime:
@@ -74,13 +93,20 @@ def next_business_time(account: Account, candidate: datetime) -> datetime:
     raise RuntimeError("Impossible de calculer la prochaine fenêtre de synchronisation")
 
 
-def next_auto_sync_at(account: Account, now: datetime | None = None) -> datetime | None:
-    from app.config import get_settings
-
+def next_auto_sync_at(
+    account: Account,
+    now: datetime | None = None,
+    *,
+    settings: Settings | None = None,
+) -> datetime | None:
+    resolved_settings = settings or get_settings()
     if (
         not stored_sync_mode_is_supported(
             account,
-            autonomous_runtime_enabled=get_settings().autonomous_sync_enabled,
+            autonomous_runtime_enabled=_autonomous_runtime_enabled_for(
+                account,
+                resolved_settings,
+            ),
         )
         or not account.auto_sync_enabled
         or account.auto_sync_consented_at is None
@@ -172,12 +198,18 @@ def defer_automatic_sync(
     return account.auto_sync_next_at
 
 
-def auto_sync_view(account: Account) -> dict:
-    from app.config import get_settings
-
+def auto_sync_view(
+    account: Account,
+    *,
+    settings: Settings | None = None,
+) -> dict:
+    resolved_settings = settings or get_settings()
     mode = effective_sync_mode(
         account,
-        autonomous_runtime_enabled=get_settings().autonomous_sync_enabled,
+        autonomous_runtime_enabled=_autonomous_runtime_enabled_for(
+            account,
+            resolved_settings,
+        ),
     )
     if mode is None:
         stored_mode = stored_sync_mode(account)
@@ -199,7 +231,7 @@ def auto_sync_view(account: Account) -> dict:
         "consented_at": account.auto_sync_consented_at,
         "paused_reason": account.auto_sync_paused_reason,
         "paused_at": account.auto_sync_paused_at,
-        "next_eligible_at": next_auto_sync_at(account),
+        "next_eligible_at": next_auto_sync_at(account, settings=resolved_settings),
         "allowed_intervals": list(AUTO_SYNC_INTERVALS),
         "business_hours": {
             "weekdays": "monday-friday",

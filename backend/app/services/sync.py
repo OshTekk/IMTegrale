@@ -801,6 +801,7 @@ def sync_due_accounts() -> list[dict]:
             accounts,
             runtime_enabled=settings.autonomous_sync_enabled,
             now=now,
+            settings=settings,
         )
         if schedule_state_changed:
             db.commit()
@@ -819,7 +820,11 @@ def sync_due_accounts() -> list[dict]:
                     "count": unsupported_count,
                 },
             )
-        due_accounts = [account for account in accounts if auto_sync_is_due(account, now)]
+        due_accounts = [
+            account
+            for account in accounts
+            if auto_sync_is_due(account, now, settings=settings)
+        ]
         due_accounts.sort(
             key=lambda account: (
                 -automatic_lateness_ratio(account, now),

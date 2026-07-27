@@ -2,8 +2,8 @@
 
 ## État de cette release
 
-Cette release termine les gates **G1** à **G6** sans
-rendre la synchronisation autonome utilisable. G1 introduit le vocabulaire de
+Cette release termine les gates **G1** à **G7A** sans activer la
+synchronisation autonome en production. G1 introduit le vocabulaire de
 domaine, le schéma additif et les gardes. G2 ajoute un
 [format d'enveloppe HPKE](hpke-envelope-format.md) générique, versionné et
 entièrement isolé. G3 ajoute la
@@ -21,7 +21,9 @@ l'opener credential worker-only, les droits PostgreSQL bornés et
 l'observabilité nécessaire. G6B branche ensuite le
 [runtime session-first](autonomous-sync-runtime.md), les revérifications de
 génération et la [rotation hors réseau](hpke-operational-rotation.md).
-La capacité reste fermée en production et invisible jusqu'à G7.
+G7A ajoute l'[expérience produit](../product/sync-modes.md), le consentement
+visible et le [rollout serveur](autonomous-sync-rollout.md). La production
+reste fermée jusqu'au canary séparé G7B.
 
 Les modes cibles sont :
 
@@ -29,19 +31,19 @@ Les modes cibles sont :
 | --- | --- | --- | --- |
 | `manual` | Oui | Session PASS/HUB facultative | Aucun travail planifié |
 | `session_only` | Oui | Cookies PASS/HUB chiffrés existants | Planifié tant que la session distante reste valide |
-| `autonomous` | Non | Futur credential sous enveloppe | Refusé avant toute mutation dans cette release |
+| `autonomous` | Conditionnel | Credential sous enveloppe | Proposé seulement à un propriétaire primaire autorisé lorsque le runtime est prêt |
 
-`BOTNOTE_AUTONOMOUS_SYNC_ENABLED` vaut `false` par défaut. Il peut être activé
-uniquement dans les tests et un développement explicitement configuré. Une
-valeur `true` en production échoue avec
-`AUTONOMOUS_SYNC_RUNTIME_NOT_ACTIVATABLE_IN_G6`.
+`BOTNOTE_AUTONOMOUS_SYNC_ROLLOUT` vaut `off` par défaut et impose alors
+`BOTNOTE_AUTONOMOUS_SYNC_ENABLED=false`,
+`BOTNOTE_AUTONOMOUS_SYNC_ENROLLMENT_ENABLED=false` et une allowlist vide. Le
+mode `canary` exige les deux capacités et au moins un UUID interne canonique ;
+le mode `all` exige les deux capacités et une allowlist vide. Toute combinaison
+incohérente fait échouer le démarrage en production.
 
-`BOTNOTE_AUTONOMOUS_SYNC_ENROLLMENT_ENABLED` vaut également `false`. Il permet
-uniquement les tests et le développement explicitement configuré. Une valeur
-`true` en production fait échouer le démarrage avec
-`AUTONOMOUS_SYNC_ENROLLMENT_NOT_ACTIVATABLE_IN_G5`. Lorsque ce flag est fermé,
-le web ne charge pas la clé publique credential et l'endpoint d'enrôlement
-répond avant tout quota ou appel réseau.
+La production G7A conserve le rollout `off`, les deux flags à `false`, aucune
+allowlist et aucune clé publique credential dans le web. Lorsque l'enrôlement
+est fermé, l'endpoint répond avant tout quota ou appel réseau. G7B et G7C
+suivent des procédures distinctes documentées dans le guide de rollout.
 
 ## Expansion compatible avec le rollback
 
@@ -104,12 +106,15 @@ service :
 - `PATCH /api/v1/settings/auto-sync` ;
 - `PUT /api/v1/settings/sync-setup`.
 
-Une demande `autonomous` reçoit `409 AUTONOMOUS_SYNC_UNAVAILABLE` avant toute
-mutation. Aucun consentement, événement d'activation, job ou credential n'est
-créé.
+Une demande `autonomous` reçoit `409 AUTONOMOUS_SYNC_UNAVAILABLE` sans mutation
+hors rollout. Dans un rollout autorisé, elle exige un heartbeat worker prêt, le
+sealer public côté web et un credential actif cohérent. Elle ne déchiffre pas
+le credential, ne crée pas de job immédiat et ne contacte pas PASS.
 
-La lecture expose le mode effectif, les deux modes disponibles et l'état
-autonome fermé. Elle n'expose aucune donnée cryptographique.
+La lecture expose le mode effectif et seulement les modes disponibles pour la
+session courante. Elle n'expose aucune donnée cryptographique, aucun UUID
+canary et aucun détail opérationnel du worker. Les viewers et tokens reçoivent
+une vue autonome neutre.
 
 G5 ajoute trois routes réservées à un propriétaire primaire, avec Origin et
 CSRF :
@@ -156,20 +161,22 @@ Les contraintes imposent notamment :
 - date et raison de révocation obligatoires pour les états inactifs ;
 - aucune colonne de mot de passe, hash, empreinte, longueur ou métadonnée libre.
 
-Une enveloppe active est consommée uniquement par les tests synthétiques G6
-lorsque le runtime est explicitement activé. La production conserve zéro ligne.
+Une enveloppe active ne peut être consommée que par le worker sync lorsque le
+runtime et le rollout serveur autorisent encore le compte. G7A production
+conserve zéro ligne.
 
 ## Défense du scheduler et du worker
 
 Pendant l'expansion, le booléen reste l'autorité de compatibilité. Une seconde
 barrière refuse toute valeur inconnue. `autonomous` n'est reconnu par le
-scheduler que lorsque le runtime est explicitement activé et qu'un credential
-actif existe.
+scheduler que lorsque le runtime et le rollout autorisent encore le compte et
+qu'un credential actif existe.
 
 Si une modification SQL manuelle injecte ce mode :
 
-1. runtime fermé, le scheduler l'écarte et produit une alerte agrégée ;
-2. runtime de test ouvert, il exige un credential actif sans lire l'enveloppe ;
+1. runtime fermé ou compte hors rollout, le scheduler le met en pause et
+   produit une alerte agrégée ;
+2. runtime autorisé, il exige un credential actif sans lire l'enveloppe ;
 3. le worker essaie toujours la session avant de charger le credential ;
 4. il revérifie compte, consentement, génération et leases avant et après SSO.
 
@@ -202,7 +209,7 @@ Deux paires X25519 distinctes existent hors Git sous un répertoire root-only.
 systemd les copie sous quatre noms fixes uniquement dans
 `CREDENTIALS_DIRECTORY` de l'unité `botnote-sync-worker.service`. Le worker
 possède une identité Unix, un environnement et un rôle PostgreSQL dédiés.
-Le web reçoit uniquement `pass-service-session-public` en production.
+Le web reçoit uniquement `pass-service-session-public` en production G7A.
 Scheduler, calendar, outbox et le web ne reçoivent aucune clé privée. Le
 chargeur public credential G5 est strict, accepte uniquement un nom fixe et
 n'est appelé que lorsque le flag d'enrôlement est ouvert en test ou
@@ -238,8 +245,10 @@ ne la transforme pas en credential et ne l'associe pas au mode
 | G4 | Cookies PASS/HUB migrés vers l'isolation worker-only | Terminé |
 | G5 | API d'enrôlement, renouvellement, révocation et purge, fermée en production | Terminé |
 | G6 | Fallback autonome, révocation et rotation | Terminé, fermé en production |
-| G7 | UX, consentement distinct et activation canary | Non terminé |
+| G7A | UX, consentement distinct et mécanisme de rollout | Terminé, production fermée |
+| G7B | Canary d'un propriétaire principal | Non terminé |
+| G7C | Ouverture contrôlée après observation | Non terminé |
 
-`autonomous` reste indisponible tant que G7 n'est pas validé. Chaque
-gate doit conserver un rollback documenté et employer uniquement des secrets
-fictifs en test.
+`autonomous` reste indisponible en production tant que G7B n'est pas
+explicitement engagé. Chaque gate conserve un rollback documenté et emploie
+uniquement des secrets fictifs en test.

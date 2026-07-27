@@ -3,11 +3,12 @@
 ## Portée
 
 Ce document distingue la fondation G1, la primitive HPKE G2, la frontière
-worker G3, la migration de sessions G4, la frontière serveur G5 et le runtime
-G6. G5 sait sceller un credential dans les tests,
-mais son enrôlement est refusé en production et la table y reste vide. Les
-seules capacités distantes actives restent les cookies PASS/HUB protégés par
-HPKE et décrits dans la politique actuelle.
+worker G3, la migration de sessions G4, la frontière serveur G5, le runtime
+G6 et le produit fermé G7A. G7A sait présenter, enrôler et activer le mode
+autonome uniquement lorsque le rollout serveur l'autorise. En production, le
+rollout, le runtime et l'enrôlement restent fermés et la table credential reste
+vide. Les seules capacités distantes actives restent donc les cookies PASS/HUB
+protégés par HPKE.
 
 Les actifs futurs à protéger seront :
 
@@ -19,13 +20,13 @@ Les actifs futurs à protéger seront :
 
 ## Frontières de confiance
 
-| Composant | G5 | Cible autonome |
+| Composant | G7A | Cible G7B/G7C |
 | --- | --- | --- |
-| Navigateur | Aucun écran autonome ; l'API de test exige une saisie distincte et un consentement explicite | UX de consentement G7 |
-| API web | Peut sceller un credential lorsque le flag non-production est ouvert, sans capacité de lecture | Même frontière avec activation canary |
+| Navigateur | Trois modes conditionnels, saisie distincte et consentement explicite ; production n'en affiche que deux | Même UX pour le canary |
+| API web | Peut sceller lorsque rollout, enrôlement, session primaire et readiness l'autorisent, sans capacité de lecture | Même frontière avec un UUID canary privé |
 | PostgreSQL | Enveloppes de sessions ; zéro credential en production | Enveloppes uniquement, jamais de clé privée |
 | Scheduler | Planifie `session_only` depuis le booléen historique | Ne reçoit aucune clé privée |
-| Worker sync | Ouvre les sessions PASS/HUB et, en runtime G6 explicitement activé, les credentials actifs | Seul processus autorisé à ouvrir un credential |
+| Worker sync | Ouvre les sessions PASS/HUB ; le rollout production fermé interdit tout credential réel | Seul processus autorisé à ouvrir un credential canary |
 | Workers calendar/outbox | Aucun accès au mot de passe | Aucun accès à la clé privée |
 | systemd | Credentials privés limités à l'unité sync | Même frontière avec rotation |
 
@@ -36,7 +37,7 @@ Les actifs futurs à protéger seront :
 | Lecture de PostgreSQL ou fuite d'un dump | Une enveloppe de test ou future peut être copiée | Clé privée absente de PostgreSQL ; contexte lié au compte | Revérification du mode et de la génération par G6 |
 | RCE dans le web | Peut capturer le mot de passe pendant une saisie et produire des enveloppes | Aucune clé privée ni méthode d'ouverture ; production fermée | Le risque pendant la saisie reste irréductible |
 | RCE scheduler/calendar/outbox | Ne peut ni ouvrir ni enrôler un credential | Aucun chemin de lecture, aucune clé privée | Frontière inchangée |
-| RCE worker sync | Peut ouvrir les credentials actifs lisibles | Rôle PostgreSQL borné, clé isolée, runtime production fermé | Risque critique accepté seulement lors du futur canary |
+| RCE worker sync | Peut ouvrir les credentials actifs lisibles | Rôle PostgreSQL borné, clé isolée, rollout production fermé | Risque critique accepté seulement lors du futur canary |
 | Token `owner` volé | Reçoit une vue neutre et ne peut ni enrôler, ni supprimer, ni purger | Propriétaire primaire requis | Frontière inchangée |
 | Session web primaire volée | Peut révoquer ou purger ; enrôler exige encore le mot de passe IMT | Origin, CSRF, rate limits et vérification IMT | Step-up récent à étudier séparément |
 | Compte administrateur compromis | Ne peut pas créer, lire ou ouvrir un credential | Aucune route admin ; révocation d'urgence par CLI locale | L'admin futur reste limité aux agrégats |
@@ -133,6 +134,26 @@ Les actifs futurs à protéger seront :
 - runtime et enrôlement restent fermés en production, avec zéro credential et
   zéro compte autonome.
 
+## Invariants G7A
+
+- le rollout vaut `off`, `canary` ou `all` et toute configuration production
+  incohérente échoue au démarrage ;
+- l'allowlist canary contient seulement des UUID internes canoniques, au plus
+  25, et n'est jamais renvoyée ;
+- disponibilité, activation, scheduler et worker vérifient le rollout côté
+  serveur ;
+- le heartbeat worker doit confirmer le profil isolé, les clés et l'opener ;
+- seuls un propriétaire primaire IMT ou passkey peuvent voir l'état réel,
+  enrôler, activer, révoquer ou purger ;
+- les viewers et tokens reçoivent une vue neutre ;
+- le mot de passe frontend n'est pas stocké dans le state persistant, les URL,
+  le stockage web ou le cache de requêtes ;
+- une activation incomplète reste explicitement pending et n'est pas exécutée ;
+- quitter `autonomous` ou employer une route historique révoque le credential
+  dans le même commit ;
+- la production G7A reste `rollout=off`, runtime et enrôlement à `false`, sans
+  clé publique credential dans le web.
+
 ## Risques résiduels
 
 Le worker sync normal ne possède plus la clé symétrique générale. Le web
@@ -147,6 +168,7 @@ inspection de sa mémoire pendant un futur SSO resteront des risques
 irréductibles. L'enveloppe asymétrique réduira la surface de déchiffrement, mais
 ne rendra jamais l'exploitation d'un mot de passe sans risque.
 
-Le moteur G6 est prêt mais ne constitue pas une activation produit. Toute
-activation avant G7 doit être considérée comme une erreur de configuration.
-L'UX, le consentement visible et le canary restent fermés.
+G7A fournit l'UX et les contrôles mais ne constitue pas un canary. Toute
+activation production avant la procédure G7B doit être considérée comme une
+erreur de configuration. Un canary réussi ne supprimera aucun des risques
+root, RCE worker ou mémoire décrits ici.

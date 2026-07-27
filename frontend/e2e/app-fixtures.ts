@@ -5,6 +5,10 @@ export const SYNTHETIC_APP_FIXTURE_ONLY = true as const;
 export type AppSessionMode = "anonymous" | "imt" | "passkey" | "token" | "viewer";
 
 export interface FakeAppState {
+  autonomousAvailable: boolean;
+  autonomousConfigured: boolean;
+  autonomousNeedsReenrollment: boolean;
+  autonomousState: "active" | "invalid" | "revoked" | null;
   calendarConnectRequests: string[];
   calendarDisconnects: number;
   calendarEvents: Array<Record<string, unknown>>;
@@ -15,13 +19,19 @@ export interface FakeAppState {
   dashboard: Record<string, unknown>;
   dashboardError: boolean;
   dashboardRequests: number;
+  credentialDeletes: number;
+  credentialEnrollmentFields: string[][];
+  credentialEnrollments: number;
   externalRequests: string[];
   loginError: boolean;
   loginRequests: Array<Record<string, unknown>>;
   passkeyCreates: number;
   passkeyDeletes: string[];
   session: Record<string, unknown>;
+  syncMode: "manual" | "session_only" | "autonomous";
+  syncModeUpdates: Array<Record<string, unknown>>;
   syncRequests: number;
+  passAccessPurges: number;
   tokenCreates: Array<Record<string, unknown>>;
   trainingCalendar: Record<string, unknown>;
   trainingCalendarError: boolean;
@@ -444,6 +454,27 @@ export const syntheticDashboard = {
 function settings(state: FakeAppState) {
   const role = state.session.role === "viewer" ? "viewer" : "owner";
   const authMethod = typeof state.session.auth_method === "string" ? state.session.auth_method : "imt";
+  const primaryOwner = role === "owner" && (authMethod === "imt" || authMethod === "passkey");
+  const autonomousAvailable = primaryOwner && state.autonomousAvailable;
+  const serviceSessionView =
+    state.passAccessPurges > 0
+      ? {
+          ...serviceSession,
+          state: "reauth_required",
+          reauth_required: true,
+          established_at: null,
+          expires_at: null,
+          last_used_at: null,
+          pass_last_success_at: null,
+          hub_state: "unavailable",
+          hub_last_attempt_at: null,
+          hub_last_success_at: null,
+        }
+      : serviceSession;
+  const passAccessView = {
+    ...passAccess,
+    service_session: serviceSessionView,
+  };
   return {
     account: {
       display_name: account.display_name,
@@ -463,7 +494,43 @@ function settings(state: FakeAppState) {
     },
     telegram: { configured: false, enabled: false, last_test_at: null, last_test_status: null },
     sync: {
-      enabled: false,
+      enabled: state.syncMode !== "manual",
+      mode: state.syncMode,
+      available_modes: autonomousAvailable ? ["manual", "session_only", "autonomous"] : ["manual", "session_only"],
+      autonomous: primaryOwner
+        ? {
+            available: autonomousAvailable,
+            enrollment_available: autonomousAvailable,
+            runtime_ready: autonomousAvailable,
+            unavailable_reason: autonomousAvailable ? null : "unavailable",
+            configured: state.autonomousConfigured,
+            state: state.autonomousState,
+            activation_pending: state.autonomousConfigured && state.syncMode !== "autonomous",
+            consent_version: state.autonomousConfigured ? 1 : null,
+            consented_at: state.autonomousConfigured ? "2026-07-27T10:00:00Z" : null,
+            verified_at: state.autonomousConfigured ? "2026-07-27T10:00:00Z" : null,
+            last_used_at: state.syncMode === "autonomous" && state.autonomousConfigured ? "2026-07-27T10:15:00Z" : null,
+            last_success_at:
+              state.syncMode === "autonomous" && state.autonomousConfigured ? "2026-07-27T10:16:00Z" : null,
+            last_failure_at: state.autonomousNeedsReenrollment ? "2026-07-27T10:20:00Z" : null,
+            needs_reenrollment: state.autonomousNeedsReenrollment,
+          }
+        : {
+            available: false,
+            enrollment_available: false,
+            runtime_ready: false,
+            unavailable_reason: "unavailable",
+            configured: false,
+            state: null,
+            activation_pending: false,
+            consent_version: null,
+            consented_at: null,
+            verified_at: null,
+            last_used_at: null,
+            last_success_at: null,
+            last_failure_at: null,
+            needs_reenrollment: false,
+          },
       interval_hours: 2,
       adaptive: true,
       current_interval_hours: 2,
@@ -474,8 +541,8 @@ function settings(state: FakeAppState) {
       next_eligible_at: null,
       allowed_intervals: [2, 4, 6, 8, 12, 24],
       business_hours: { weekdays: "monday-friday", start: "08:00", end: "20:00", timezone: "Europe/Paris" },
-      pass_access: passAccess,
-      service_session: serviceSession,
+      pass_access: passAccessView,
+      service_session: role === "owner" ? serviceSessionView : null,
     },
     access: {
       role,
@@ -509,6 +576,10 @@ function recordCsrf(route: Route, state: FakeAppState) {
 
 export async function installFakeAppApi(page: Page, mode: AppSessionMode = "imt"): Promise<FakeAppState> {
   const state: FakeAppState = {
+    autonomousAvailable: false,
+    autonomousConfigured: false,
+    autonomousNeedsReenrollment: false,
+    autonomousState: null,
     calendarConnectRequests: [],
     calendarDisconnects: 0,
     calendarEvents: structuredClone(syntheticCalendarEvents),
@@ -519,12 +590,18 @@ export async function installFakeAppApi(page: Page, mode: AppSessionMode = "imt"
     dashboard: structuredClone(syntheticDashboard),
     dashboardError: false,
     dashboardRequests: 0,
+    credentialDeletes: 0,
+    credentialEnrollmentFields: [],
+    credentialEnrollments: 0,
     externalRequests: [],
     loginError: false,
     loginRequests: [],
     passkeyCreates: 0,
     passkeyDeletes: [],
+    passAccessPurges: 0,
     session: session(mode),
+    syncMode: "manual",
+    syncModeUpdates: [],
     syncRequests: 0,
     tokenCreates: [],
     trainingCalendar: structuredClone(syntheticTrainingCalendar),
@@ -631,6 +708,122 @@ export async function installFakeAppApi(page: Page, mode: AppSessionMode = "imt"
       return;
     }
     if (url.pathname === "/api/v1/settings" && request.method() === "GET") {
+      await json(route, settings(state));
+      return;
+    }
+    if (url.pathname === "/api/v1/settings/sync-credential/enroll" && request.method() === "POST") {
+      recordCsrf(route, state);
+      if (!state.autonomousAvailable) {
+        await json(
+          route,
+          {
+            detail: {
+              code: "AUTONOMOUS_SYNC_ENROLLMENT_UNAVAILABLE",
+              message: "L'enrôlement autonome n'est pas disponible.",
+            },
+          },
+          409,
+        );
+        return;
+      }
+      const body = request.postDataJSON() as Record<string, unknown>;
+      state.credentialEnrollments += 1;
+      state.credentialEnrollmentFields.push(Object.keys(body).sort());
+      state.autonomousConfigured = true;
+      state.autonomousNeedsReenrollment = false;
+      state.autonomousState = "active";
+      await json(route, settings(state));
+      return;
+    }
+    if (url.pathname === "/api/v1/settings/sync-mode" && request.method() === "PATCH") {
+      recordCsrf(route, state);
+      const body = request.postDataJSON() as Record<string, unknown>;
+      state.syncModeUpdates.push(structuredClone(body));
+      const requestedMode = body.mode;
+      if (requestedMode === "autonomous" && !state.autonomousAvailable) {
+        await json(
+          route,
+          {
+            detail: {
+              code: "AUTONOMOUS_SYNC_UNAVAILABLE",
+              message: "La synchronisation autonome n'est pas encore disponible.",
+            },
+          },
+          409,
+        );
+        return;
+      }
+      if (requestedMode === "autonomous" && !state.autonomousConfigured) {
+        await json(
+          route,
+          {
+            detail: {
+              code: "SYNC_CREDENTIAL_REQUIRED",
+              message: "Un mot de passe IMT protégé est requis pour ce mode.",
+            },
+          },
+          409,
+        );
+        return;
+      }
+      if (requestedMode === "autonomous" && state.autonomousNeedsReenrollment) {
+        await json(
+          route,
+          {
+            detail: {
+              code: "SYNC_CREDENTIAL_REENROLLMENT_REQUIRED",
+              message: "Le mot de passe IMT protégé doit être renouvelé.",
+            },
+          },
+          409,
+        );
+        return;
+      }
+      if (requestedMode === "manual" || requestedMode === "session_only" || requestedMode === "autonomous") {
+        if (state.syncMode === "autonomous" && requestedMode !== "autonomous") {
+          state.autonomousConfigured = false;
+          state.autonomousState = "revoked";
+        }
+        state.syncMode = requestedMode;
+      }
+      await json(route, settings(state));
+      return;
+    }
+    if (url.pathname === "/api/v1/settings/sync-credential" && request.method() === "DELETE") {
+      recordCsrf(route, state);
+      state.credentialDeletes += 1;
+      state.autonomousConfigured = false;
+      state.autonomousNeedsReenrollment = false;
+      state.autonomousState = "revoked";
+      if (state.syncMode === "autonomous") state.syncMode = "session_only";
+      await json(route, settings(state));
+      return;
+    }
+    if (url.pathname === "/api/v1/settings/pass-access/purge" && request.method() === "POST") {
+      recordCsrf(route, state);
+      state.passAccessPurges += 1;
+      state.syncMode = "manual";
+      state.autonomousConfigured = false;
+      state.autonomousNeedsReenrollment = false;
+      state.autonomousState = "revoked";
+      await json(route, settings(state));
+      return;
+    }
+    if (url.pathname === "/api/v1/settings/auto-sync" && request.method() === "PATCH") {
+      recordCsrf(route, state);
+      const body = request.postDataJSON() as Record<string, unknown>;
+      state.syncMode = body.enabled ? "session_only" : "manual";
+      state.autonomousConfigured = false;
+      state.autonomousState = "revoked";
+      await json(route, settings(state));
+      return;
+    }
+    if (url.pathname === "/api/v1/settings/sync-setup" && request.method() === "PUT") {
+      recordCsrf(route, state);
+      const body = request.postDataJSON() as Record<string, unknown>;
+      state.syncMode = body.enabled ? "session_only" : "manual";
+      state.autonomousConfigured = false;
+      state.autonomousState = "revoked";
       await json(route, settings(state));
       return;
     }

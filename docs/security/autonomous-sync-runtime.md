@@ -1,18 +1,22 @@
 # Runtime de synchronisation autonome
 
-## Portée G6
+## Portée G6 et garde G7A
 
-G6 termine le moteur serveur sans ouvrir le produit. En production :
+G6 termine le moteur serveur. G7A ajoute l'interface et un rollout serveur sans
+ouvrir la production :
 
 - `BOTNOTE_AUTONOMOUS_SYNC_ENABLED=false` ;
 - `BOTNOTE_AUTONOMOUS_SYNC_ENROLLMENT_ENABLED=false` ;
+- `BOTNOTE_AUTONOMOUS_SYNC_ROLLOUT=off` ;
+- allowlist canary vide ;
 - l'API refuse toujours `autonomous` avec `409` ;
 - aucun écran autonome n'est visible ;
 - aucun compte ni credential réel n'est créé.
 
-Le chemin est activable uniquement dans les tests et environnements de
-développement explicitement autorisés. G7 reste requis pour le consentement
-visible, l'activation et un canary.
+Le chemin devient techniquement activable uniquement sous une configuration
+cohérente `canary` ou `all`, avec un propriétaire primaire autorisé, le
+heartbeat worker prêt et le sealer public disponible. G7B reste requis pour
+toute première activation réelle.
 
 ## Flux session-first
 
@@ -22,8 +26,8 @@ Le worker sync suit cet ordre :
 2. essayer la session PASS/HUB HPKE ;
 3. si elle fonctionne, ne jamais lire `imt_sync_credentials` ;
 4. si elle est absente ou rejetée, vérifier le mode brut du compte ;
-5. refuser `manual`, `session_only`, un runtime fermé et tout acteur non
-   propriétaire ou automatique ;
+5. refuser `manual`, `session_only`, un runtime fermé, un compte hors rollout
+   et tout acteur non propriétaire ou automatique ;
 6. charger une photographie immuable de l'enveloppe active dans une transaction
    courte ;
 7. relâcher les verrous SQL, ouvrir l'enveloppe dans le worker puis revérifier
@@ -68,6 +72,7 @@ données.
 | Clé absente | Enveloppe conservée | Pause `credential_key_unavailable` | Non |
 | Réseau, TLS ou PASS indisponible | Enveloppe et génération conservées, compteur d'échec augmenté si le secret a été transmis | Différé par les règles existantes | Non |
 | Runtime fermé | Credential non lu | Pause `autonomous_runtime_unavailable` | Non |
+| Compte hors rollout | Credential non lu | Pause `autonomous_runtime_unavailable` | Non |
 | Révocation, remplacement ou lease perdu | Remplacement intact | Erreur `SYNC_AUTONOMOUS_STATE_CHANGED` | Non |
 
 L'exception locale propriétaire reste après la session et après un credential
@@ -104,7 +109,9 @@ comptent :
 - pauses par raison et durées.
 
 Elles ne contiennent aucun login, compte, `key_id`, génération, taille
-d'enveloppe, cookie ou longueur de mot de passe.
+d'enveloppe, cookie ou longueur de mot de passe. G7A ajoute au portail
+administrateur privé les seuls agrégats utiles au futur canary ; leur heure est
+arrondie pour limiter l'identification indirecte d'un canary unique.
 
 ## Restauration
 

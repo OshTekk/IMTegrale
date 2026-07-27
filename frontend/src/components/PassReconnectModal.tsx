@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Eye, EyeOff, KeyRound, LockKeyhole, RefreshCw, ShieldCheck } from "lucide-react";
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import { authReconnectPass } from "../generated/api/sdk.gen";
 import { apiData, throwOnApiError } from "../lib/generatedApi";
 import { queryKeys } from "../lib/queries";
@@ -13,6 +13,7 @@ interface PassReconnectModalProps {
   onClose: () => void;
   onRenewed?: () => void;
   purpose?: "sync" | "learning";
+  autonomousConfigured?: boolean;
 }
 
 export function PassReconnectModal({
@@ -21,37 +22,49 @@ export function PassReconnectModal({
   onClose,
   onRenewed,
   purpose = "sync",
+  autonomousConfigured = false,
 }: PassReconnectModalProps) {
   const queryClient = useQueryClient();
   const { showToast } = useToast();
-  const [password, setPassword] = useState("");
+  const passwordRef = useRef<HTMLInputElement>(null);
+  const [hasPassword, setHasPassword] = useState(false);
   const [visible, setVisible] = useState(false);
   useEffect(() => {
     if (!open) {
-      setPassword("");
+      if (passwordRef.current) passwordRef.current.value = "";
+      setHasPassword(false);
       setVisible(false);
     }
   }, [open]);
   const reconnect = useMutation({
-    mutationFn: () =>
-      apiData(
-        authReconnectPass({
-          body: { password },
-          throwOnError: throwOnApiError,
-        }),
-      ),
+    mutationFn: async () => {
+      const password = passwordRef.current?.value ?? "";
+      try {
+        return await apiData(
+          authReconnectPass({
+            body: { password },
+            throwOnError: throwOnApiError,
+          }),
+        );
+      } finally {
+        if (passwordRef.current) passwordRef.current.value = "";
+        setHasPassword(false);
+      }
+    },
     onSuccess: () => {
-      setPassword("");
       void queryClient.invalidateQueries({ queryKey: queryKeys.account });
       showToast(purpose === "learning" ? "Statut étudiant vérifié" : "Session PASS renouvelée");
       onClose();
       onRenewed?.();
     },
-    onError: (error) => showToast(error.message, "error"),
+    onError: (error) => {
+      showToast(error.message, "error");
+      window.requestAnimationFrame(() => passwordRef.current?.focus());
+    },
   });
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (password) reconnect.mutate();
+    if (hasPassword) reconnect.mutate();
   };
 
   return (
@@ -66,6 +79,7 @@ export function PassReconnectModal({
       onClose={onClose}
       size="small"
       className="pass-reconnect-modal"
+      initialFocusRef={passwordRef}
     >
       <form className="pass-reconnect-form" onSubmit={submit}>
         <div className="pass-reconnect-identity">
@@ -81,11 +95,14 @@ export function PassReconnectModal({
           Mot de passe IMT
           <div className="password-field">
             <input
+              ref={passwordRef}
               type={visible ? "text" : "password"}
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
+              onInput={() => setHasPassword(Boolean(passwordRef.current?.value))}
               autoComplete="current-password"
               name="imt-password"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
               maxLength={512}
               required
             />
@@ -108,6 +125,15 @@ export function PassReconnectModal({
               : "Il sert uniquement à ouvrir une session technique PASS/HUB, chiffrée et conservée au maximum 30 jours."}
           </p>
         </div>
+        {purpose === "sync" && autonomousConfigured && (
+          <div className="pass-reconnect-distinction">
+            <KeyRound size={16} />
+            <p>
+              Cette reconnexion renouvelle uniquement la session PASS/HUB. Elle ne remplace pas le mot de passe autonome
+              conservé ; sa mise à jour reste une action séparée dans les paramètres.
+            </p>
+          </div>
+        )}
         <div className="pass-reconnect-beta">
           <LockKeyhole size={15} />
           <span>
@@ -119,7 +145,7 @@ export function PassReconnectModal({
           <button className="secondary-button" type="button" onClick={onClose}>
             Annuler
           </button>
-          <button className="primary-button" type="submit" disabled={!password || reconnect.isPending}>
+          <button className="primary-button" type="submit" disabled={!hasPassword || reconnect.isPending}>
             {reconnect.isPending ? <span className="spinner" /> : <RefreshCw size={17} />}{" "}
             {purpose === "learning" ? "Vérifier" : "Renouveler"}
           </button>

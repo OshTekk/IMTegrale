@@ -189,7 +189,8 @@ describe("LearningPage access states", () => {
     const trigger = screen.getByRole("button", { name: "Vérifier avec mon compte IMT" });
     await user.click(trigger);
     const dialog = screen.getByRole("dialog", { name: "Vérifier mon statut étudiant" });
-    await waitFor(() => expect(document.activeElement).toBe(dialog));
+    const password = screen.getByLabelText("Mot de passe IMT");
+    await waitFor(() => expect(document.activeElement).toBe(password));
     await expectNoSeriousLearningViolations(dialog);
 
     const close = screen.getByRole("button", { name: "Fermer" });

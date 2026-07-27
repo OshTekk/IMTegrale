@@ -455,7 +455,12 @@ def test_metrics_are_aggregate_and_do_not_expose_raw_identity() -> None:
     assert account.id not in serialized
     assert metrics["operations"] == 1
     assert metrics["real_requests"] == 1
+    assert metrics["autonomous"]["rollout_authorized_accounts"] == 0
+    assert metrics["autonomous"]["active_accounts"] == 0
+    assert metrics["autonomous"]["active_credentials"] == 0
+    assert metrics["autonomous"]["invalid_credentials"] == 0
     assert metrics["autonomous"]["credentials_invalidated"] == 0
     assert metrics["autonomous"]["sessions_recreated"] == 0
     assert metrics["autonomous"]["session_reuse_after_autonomous_sso"] == 0
     assert metrics["autonomous"]["owner_local_full_sso"] == 1
+    assert metrics["autonomous"]["last_event_at"] is None

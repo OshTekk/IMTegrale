@@ -240,8 +240,14 @@ class BusinessHoursResponse(ApiModel):
 
 
 class AutonomousSyncSettingsResponse(ApiModel):
-    available: Literal[False]
+    available: bool
     enrollment_available: bool
+    runtime_ready: bool
+    unavailable_reason: Literal[
+        "unavailable",
+        "maintenance",
+        "reenrollment_required",
+    ] | None
     configured: bool
     state: Literal["active", "invalid", "revoked"] | None
     activation_pending: bool
@@ -1289,6 +1295,10 @@ class AdminProfileMetricsResponse(ApiModel):
 
 
 class AdminAutonomousSyncMetricsResponse(ApiModel):
+    rollout_authorized_accounts: int
+    active_accounts: int
+    active_credentials: int
+    invalid_credentials: int
     credential_operations: int
     succeeded: int
     authentication_failures: int
@@ -1299,6 +1309,7 @@ class AdminAutonomousSyncMetricsResponse(ApiModel):
     full_sso_performed: int
     owner_local_full_sso: int
     pauses_by_reason: dict[str, int]
+    last_event_at: datetime | None
 
 
 class AdminCompletedDurationResponse(ApiModel):

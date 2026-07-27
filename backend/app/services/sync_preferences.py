@@ -6,15 +6,34 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import utcnow
-from app.imt_sync_credential_contract import ImtSyncCredentialRevocationReason
-from app.models import Account
+from app.imt_sync_credential_contract import (
+    IMT_SYNC_CREDENTIAL_CONSENT_VERSION,
+    ImtSyncCredentialRevocationReason,
+    ImtSyncCredentialState,
+)
+from app.models import Account, ImtSyncCredential
 from app.services.events import record_event
-from app.services.imt_sync_credentials import revoke_sync_credential
+from app.services.imt_sync_credentials import (
+    credential_metadata_is_valid,
+    revoke_sync_credential,
+)
 from app.services.pass_sessions import service_session_view
 from app.sync_modes import SyncMode
 
 
 class AutonomousSyncUnavailable(RuntimeError):
+    pass
+
+
+class AutonomousSyncTemporarilyUnavailable(RuntimeError):
+    pass
+
+
+class SyncCredentialRequired(RuntimeError):
+    pass
+
+
+class SyncCredentialReenrollmentRequired(RuntimeError):
     pass
 
 
@@ -28,28 +47,56 @@ def set_sync_mode(
     actor: str,
     complete_setup: bool = False,
     now: datetime | None = None,
+    autonomous_available: bool = False,
+    autonomous_runtime_ready: bool = False,
 ) -> Account:
-    if mode is SyncMode.AUTONOMOUS:
-        raise AutonomousSyncUnavailable("La synchronisation autonome n'est pas encore disponible.")
+    if mode is SyncMode.AUTONOMOUS and not autonomous_available:
+        if autonomous_runtime_ready:
+            raise AutonomousSyncUnavailable(
+                "La synchronisation autonome n'est pas disponible pour ce compte."
+            )
+        raise AutonomousSyncTemporarilyUnavailable(
+            "La synchronisation autonome est temporairement indisponible."
+        )
 
     locked_account = db.scalar(select(Account).where(Account.id == account.id).with_for_update())
     if locked_account is None:
         raise LookupError("Compte introuvable")
+    if mode is SyncMode.AUTONOMOUS and locked_account.is_disabled:
+        raise AutonomousSyncUnavailable(
+            "La synchronisation autonome n'est pas disponible pour ce compte."
+        )
 
     current = now or utcnow()
-    revoke_sync_credential(
-        db,
-        account_id=locked_account.id,
-        reason=(
-            ImtSyncCredentialRevocationReason.MANUAL_MODE
-            if mode is SyncMode.MANUAL
-            else ImtSyncCredentialRevocationReason.SESSION_ONLY_MODE
-        ),
-        actor=actor,
-        now=current,
-        locked_account=locked_account,
-    )
-    enabled = mode is SyncMode.SESSION_ONLY
+    if mode is SyncMode.AUTONOMOUS:
+        credential = db.scalar(
+            select(ImtSyncCredential)
+            .where(ImtSyncCredential.account_id == locked_account.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if credential is None or credential.state == ImtSyncCredentialState.REVOKED:
+            raise SyncCredentialRequired
+        if (
+            credential.state != ImtSyncCredentialState.ACTIVE
+            or not credential_metadata_is_valid(credential)
+            or credential.consent_version != IMT_SYNC_CREDENTIAL_CONSENT_VERSION
+        ):
+            raise SyncCredentialReenrollmentRequired
+    else:
+        revoke_sync_credential(
+            db,
+            account_id=locked_account.id,
+            reason=(
+                ImtSyncCredentialRevocationReason.MANUAL_MODE
+                if mode is SyncMode.MANUAL
+                else ImtSyncCredentialRevocationReason.SESSION_ONLY_MODE
+            ),
+            actor=actor,
+            now=current,
+            locked_account=locked_account,
+        )
+    enabled = mode is not SyncMode.MANUAL
     was_enabled = locked_account.auto_sync_enabled
     locked_account.auto_sync_enabled = enabled
     locked_account.auto_sync_mode = mode.value
@@ -68,15 +115,28 @@ def set_sync_mode(
 
     locked_account.auto_sync_paused_reason = None
     locked_account.auto_sync_paused_at = None
-    if enabled and service_session_view(db, locked_account)["state"] == "reauth_required":
+    if (
+        mode is SyncMode.SESSION_ONLY
+        and service_session_view(db, locked_account)["state"] == "reauth_required"
+    ):
         locked_account.auto_sync_paused_reason = "reauth_required"
         locked_account.auto_sync_paused_at = current
+    elif mode is SyncMode.AUTONOMOUS:
+        from app.services.sync_schedule import next_business_time
+
+        locked_account.auto_sync_next_at = next_business_time(locked_account, current)
 
     if complete_setup:
         locked_account.sync_setup_completed_at = current
     locked_account.updated_at = current
 
-    if complete_setup:
+    if mode is SyncMode.AUTONOMOUS:
+        event_kind = "sync:autonomous_enabled"
+        event_payload = {
+            "interval_hours": interval_hours,
+            "adaptive": adaptive,
+        }
+    elif complete_setup:
         event_kind = "sync:setup_completed"
         event_payload = {
             "enabled": enabled,

@@ -466,6 +466,14 @@ export type AdminAuthenticatedSessionResponse = {
  */
 export type AdminAutonomousSyncMetricsResponse = {
     /**
+     * Active Accounts
+     */
+    active_accounts: number;
+    /**
+     * Active Credentials
+     */
+    active_credentials: number;
+    /**
      * Authentication Failures
      */
     authentication_failures: number;
@@ -482,6 +490,14 @@ export type AdminAutonomousSyncMetricsResponse = {
      */
     full_sso_performed: number;
     /**
+     * Invalid Credentials
+     */
+    invalid_credentials: number;
+    /**
+     * Last Event At
+     */
+    last_event_at: string | null;
+    /**
      * Owner Local Full Sso
      */
     owner_local_full_sso: number;
@@ -491,6 +507,10 @@ export type AdminAutonomousSyncMetricsResponse = {
     pauses_by_reason: {
         [key: string]: number;
     };
+    /**
+     * Rollout Authorized Accounts
+     */
+    rollout_authorized_accounts: number;
     /**
      * Session Reuse After Autonomous Sso
      */
@@ -1339,7 +1359,7 @@ export type AutonomousSyncSettingsResponse = {
     /**
      * Available
      */
-    available: false;
+    available: boolean;
     /**
      * Configured
      */
@@ -1373,9 +1393,17 @@ export type AutonomousSyncSettingsResponse = {
      */
     needs_reenrollment: boolean;
     /**
+     * Runtime Ready
+     */
+    runtime_ready: boolean;
+    /**
      * State
      */
     state: 'active' | 'invalid' | 'revoked' | null;
+    /**
+     * Unavailable Reason
+     */
+    unavailable_reason: 'unavailable' | 'maintenance' | 'reenrollment_required' | null;
     /**
      * Verified At
      */

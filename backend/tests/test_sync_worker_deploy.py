@@ -118,6 +118,9 @@ def test_sync_role_receives_only_bounded_credential_table_permissions() -> None:
 def test_sync_environment_example_contains_no_hpke_or_unrelated_secrets() -> None:
     example = (ROOT / "deploy" / "botnote-sync.env.example").read_text()
     assert "BOTNOTE_AUTONOMOUS_SYNC_ENABLED=false" in example
+    assert "BOTNOTE_AUTONOMOUS_SYNC_ENROLLMENT_ENABLED=false" in example
+    assert "BOTNOTE_AUTONOMOUS_SYNC_ROLLOUT=off" in example
+    assert "BOTNOTE_AUTONOMOUS_SYNC_CANARY_ACCOUNT_IDS=[]" in example
     assert "BOTNOTE_CREDENTIAL_KEY" not in example
     assert "BOTNOTE_CREDENTIAL_PREVIOUS_KEYS" not in example
     assert "PRIVATE" not in example

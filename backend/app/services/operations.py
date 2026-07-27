@@ -7,7 +7,7 @@ from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
-from app.config import Settings
+from app.config import AutonomousSyncRollout, Settings
 from app.database import utcnow
 from app.imt_sync_credential_contract import (
     IMT_SYNC_CREDENTIAL_ENVELOPE_BYTES,
@@ -28,6 +28,7 @@ from app.models import (
 )
 from app.observability import runtime_metrics
 from app.pass_session_contract import PASS_SERVICE_SESSION_ENVELOPE_BYTES
+from app.services.autonomous_sync_availability import autonomous_runtime_status
 from app.services.sync_control import ensure_utc
 
 EXPECTED_DATABASE_REVISION = "0028"
@@ -127,6 +128,8 @@ def readiness_checks(db: Session, settings: Settings) -> dict[str, bool]:
         and all(sync_heartbeat.details.get(key) == value for key, value in ISOLATED_SYNC_PROFILE.items())
     )
     checks["workers"] = checks["workers"] and checks["sync_isolated"]
+    if settings.autonomous_sync_rollout is not AutonomousSyncRollout.OFF:
+        checks["autonomous_sync"] = autonomous_runtime_status(db, settings).ready
     return checks
 
 

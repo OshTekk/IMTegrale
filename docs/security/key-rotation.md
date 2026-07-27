@@ -38,12 +38,14 @@ En cas d'échec, conserver la nouvelle clé active et toutes les anciennes clés
 
 ## Clé HPKE des credentials IMT
 
-G6 fournit la même rotation pour les credentials IMT. L'enrôlement reste fermé
-en production et l'inventaire attendu est donc nul. Une clé perdue ne doit pas
-être remplacée silencieusement : les enveloppes concernées sont révoquées avec
-la commande hors réseau, puis les utilisateurs se réenrôlent. Après
-restauration d'une base, la révocation globale utilise la raison
-`database_restored` avant tout redémarrage normal.
+G6 fournit la même rotation pour les credentials IMT. G7A conserve le rollout
+et l'enrôlement fermés en production ; l'inventaire attendu est donc nul. Un
+futur canary G7B doit conserver les anciennes clés privées jusqu'à ce que
+l'inventaire par `key_id` source atteigne zéro. Une clé perdue ne doit pas être
+remplacée silencieusement : les enveloppes concernées sont révoquées avec la
+commande hors réseau, puis les utilisateurs se réenrôlent. Après restauration
+d'une base, la révocation globale utilise la raison `database_restored` avant
+tout redémarrage normal.
 
 ## Pepper HMAC
 

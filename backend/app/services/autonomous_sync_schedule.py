@@ -5,7 +5,11 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import Settings
 from app.models import Account, ImtSyncCredential
+from app.services.autonomous_sync_availability import (
+    autonomous_sync_execution_allowed_for,
+)
 from app.sync_modes import SyncMode
 
 
@@ -14,9 +18,14 @@ def autonomous_fallback_is_available(
     account: Account,
     *,
     runtime_enabled: bool,
+    settings: Settings | None = None,
 ) -> bool:
+    account_runtime_enabled = runtime_enabled and (
+        settings is None
+        or autonomous_sync_execution_allowed_for(account, settings)
+    )
     if (
-        not runtime_enabled
+        not account_runtime_enabled
         or account.is_disabled
         or not account.auto_sync_enabled
         or account.auto_sync_mode != SyncMode.AUTONOMOUS
@@ -42,8 +51,18 @@ def reconcile_autonomous_schedule_state(
     *,
     runtime_enabled: bool,
     now: datetime,
+    settings: Settings | None = None,
 ) -> bool:
-    autonomous_ids = [account.id for account in accounts if account.auto_sync_mode == SyncMode.AUTONOMOUS]
+    autonomous_ids = [
+        account.id
+        for account in accounts
+        if account.auto_sync_mode == SyncMode.AUTONOMOUS
+        and runtime_enabled
+        and (
+            settings is None
+            or autonomous_sync_execution_allowed_for(account, settings)
+        )
+    ]
     credential_states = (
         dict(
             db.execute(
@@ -60,7 +79,11 @@ def reconcile_autonomous_schedule_state(
     for account in accounts:
         if account.auto_sync_mode != SyncMode.AUTONOMOUS:
             continue
-        if not runtime_enabled:
+        account_runtime_enabled = runtime_enabled and (
+            settings is None
+            or autonomous_sync_execution_allowed_for(account, settings)
+        )
+        if not account_runtime_enabled:
             reason = "autonomous_runtime_unavailable"
         elif credential_states.get(account.id) != "active":
             reason = "credential_invalid"

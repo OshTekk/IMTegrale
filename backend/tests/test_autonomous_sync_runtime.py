@@ -7,7 +7,7 @@ from unittest.mock import Mock
 
 import pytest
 import requests
-from app.config import get_settings
+from app.config import AutonomousSyncRollout, get_settings
 from app.crypto import RecipientPrivateKeyring
 from app.database import SessionLocal, utcnow
 from app.imt_sync_credential_contract import ImtSyncCredentialRevocationReason
@@ -131,6 +131,13 @@ def _seed_autonomous_account(
 def _configure_runtime(monkeypatch) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "autonomous_sync_enabled", True)
+    monkeypatch.setattr(settings, "autonomous_sync_enrollment_enabled", True)
+    monkeypatch.setattr(
+        settings,
+        "autonomous_sync_rollout",
+        AutonomousSyncRollout.ALL,
+    )
+    monkeypatch.setattr(settings, "autonomous_sync_canary_account_ids", [])
     monkeypatch.setattr(settings, "environment", "test")
     monkeypatch.setattr(pass_gateway, "ImtPassClient", SyntheticPassClient)
     monkeypatch.setattr(
@@ -461,6 +468,41 @@ def test_runtime_disabled_scheduler_does_not_query_credentials() -> None:
         [account],
         runtime_enabled=False,
         now=now,
+    )
+
+    assert changed is True
+    assert account.auto_sync_paused_reason == "autonomous_runtime_unavailable"
+    db.execute.assert_not_called()
+
+
+def test_canary_scheduler_does_not_query_credentials_outside_allowlist() -> None:
+    now = utcnow()
+    account = Account(
+        id="00000000-0000-4000-8000-000000000002",
+        imt_username="outside-canary@example.test",
+        display_name="Compte hors canary fictif",
+        auto_sync_enabled=True,
+        auto_sync_mode="autonomous",
+        auto_sync_consented_at=now,
+    )
+    settings = get_settings().model_copy(
+        update={
+            "autonomous_sync_enabled": True,
+            "autonomous_sync_enrollment_enabled": True,
+            "autonomous_sync_rollout": AutonomousSyncRollout.CANARY,
+            "autonomous_sync_canary_account_ids": [
+                "00000000-0000-4000-8000-000000000001"
+            ],
+        }
+    )
+    db = Mock()
+
+    changed = reconcile_autonomous_schedule_state(
+        db,
+        [account],
+        runtime_enabled=True,
+        now=now,
+        settings=settings,
     )
 
     assert changed is True

@@ -1,12 +1,12 @@
 # Cycle de vie du credential IMT
 
-## État G6 fermé
+## État G7A fermé
 
 La migration additive `0027` a durci le cycle de vie avant sa première
 écriture. G5 ajoute les opérations serveur. G6 relie le credential au worker
-sync isolé et ajoute les revérifications de génération, sans ouvrir le produit.
-L'enrôlement et le runtime restent fermés en production ; la production attend
-donc toujours :
+sync isolé et ajoute les revérifications de génération. G7A ajoute le produit
+et le rollout sans ouvrir la production. Rollout, enrôlement et runtime restent
+fermés ; la production attend donc toujours :
 
 ```text
 active = 0
@@ -74,6 +74,12 @@ scellement, de stockage de session ou de commit conserve intégralement l'ancien
 credential et l'ancienne session. L'enrôlement ne change jamais le mode de
 synchronisation.
 
+Si l'enrôlement réussit mais que l'activation échoue, le credential actif reste
+scellé avec `activation_pending=true`. Il est inutilisé tant que le mode du
+compte n'est pas `autonomous`. Le propriétaire primaire peut terminer
+l'activation sans nouvelle vérification si tous les invariants restent valides,
+remplacer le credential ou le supprimer.
+
 ## Révocation et purge
 
 La révocation est locale, immédiate et idempotente. Elle met à `null`
@@ -93,7 +99,8 @@ passkeys, ni la session web courante.
 
 Le gateway essaie d'abord la session PASS/HUB. Il ne charge le credential que
 si cette session est absente ou expirée, que le compte est réellement
-`autonomous`, que le runtime de test est actif et que l'acteur est autorisé.
+`autonomous`, que runtime et rollout autorisent toujours ce compte et que
+l'acteur est autorisé.
 Après réservation des quotas et de l'opération, le worker :
 
 1. charge un snapshot scellé sans mot de passe ;
@@ -135,7 +142,7 @@ G1. Cette dernière fenêtre fermée empêche qu'une ligne d'un format ambigu so
 interprétée comme un credential G5. Le downgrade est également refusé dès
 qu'une ligne de cycle de vie existe.
 
-G6A est la cible de rollback immédiate de G6B : la base reste en `0028` et les
+G6B est la cible de rollback immédiate de G7A : la base reste en `0028` et les
 mappings HPKE restent sur la génération v2. Aucun downgrade de production n'est
 prévu après la première enveloppe, même révoquée.
 

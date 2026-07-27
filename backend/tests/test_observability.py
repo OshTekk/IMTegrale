@@ -8,7 +8,7 @@ from pathlib import Path
 
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-from app.config import Settings
+from app.config import AutonomousSyncRollout, Settings
 from app.database import SessionLocal, utcnow
 from app.models import Account, DurableJob, NotificationOutbox, RuntimeHeartbeat, SyncRequest
 from app.observability import (
@@ -152,6 +152,26 @@ def test_production_readiness_requires_current_migration_and_fresh_workers() -> 
             "workers": True,
             "sync_isolated": True,
         }
+
+        rollout_settings = settings.model_copy(
+            update={
+                "autonomous_sync_enabled": True,
+                "autonomous_sync_enrollment_enabled": True,
+                "autonomous_sync_rollout": AutonomousSyncRollout.CANARY,
+                "autonomous_sync_canary_account_ids": [
+                    "00000000-0000-4000-8000-000000000001"
+                ],
+            }
+        )
+        assert readiness_checks(db, rollout_settings)["autonomous_sync"] is True
+        sync_worker = db.get(RuntimeHeartbeat, "sync")
+        assert sync_worker is not None
+        sync_worker.state = "starting"
+        db.commit()
+        degraded = readiness_checks(db, rollout_settings)
+        assert degraded["workers"] is True
+        assert degraded["autonomous_sync"] is False
+        sync_worker.state = "ok"
 
         stale = db.get(RuntimeHeartbeat, "scheduler")
         assert stale is not None

@@ -57,9 +57,9 @@ test("une passkey expirée affiche la revérification sans audience interne et p
   await trigger.focus();
   await page.keyboard.press("Enter");
   const dialog = page.getByRole("dialog", { name: "Vérifier mon statut étudiant" });
-  await expect(dialog).toBeFocused();
+  await expect(dialog.getByLabel("Mot de passe IMT", { exact: true })).toBeFocused();
   await expectNoSeriousA11yViolations(page);
-  await page.keyboard.press("Tab");
+  await page.keyboard.press("Shift+Tab");
   await expect(page.getByRole("button", { name: "Fermer" })).toBeFocused();
   await page.keyboard.press("Shift+Tab");
   await expect(page.getByRole("button", { name: "Annuler" })).toBeFocused();

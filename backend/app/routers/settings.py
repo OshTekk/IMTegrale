@@ -34,6 +34,12 @@ from app.security import (
     require_primary_owner_action,
 )
 from app.services.auth_protection import AuthProtectionRejected
+from app.services.autonomous_sync_availability import (
+    AutonomousRuntimeStatus,
+    autonomous_runtime_status,
+    autonomous_sync_available_for,
+    autonomous_sync_rollout_allows,
+)
 from app.services.events import record_event
 from app.services.imt import ImtAuthenticationError, ImtFetchError
 from app.services.imt_sync_credential_crypto import (
@@ -63,7 +69,10 @@ from app.services.pass_sessions import (
 )
 from app.services.sync import apply_pass_profile
 from app.services.sync_preferences import (
+    AutonomousSyncTemporarilyUnavailable,
     AutonomousSyncUnavailable,
+    SyncCredentialReenrollmentRequired,
+    SyncCredentialRequired,
     set_sync_mode,
 )
 from app.services.sync_schedule import auto_sync_view
@@ -78,6 +87,8 @@ def _neutral_credential_view() -> dict:
     return {
         "available": False,
         "enrollment_available": False,
+        "runtime_ready": False,
+        "unavailable_reason": "unavailable",
         "configured": False,
         "state": None,
         "activation_pending": False,
@@ -91,6 +102,50 @@ def _neutral_credential_view() -> dict:
     }
 
 
+def _neutral_service_session_view(settings: Settings | None) -> dict:
+    return {
+        "state": "reauth_required",
+        "reauth_required": True,
+        "beta": True,
+        "retention_days": settings.pass_session_max_days if settings is not None else 30,
+        "established_at": None,
+        "expires_at": None,
+        "last_used_at": None,
+        "pass_last_success_at": None,
+        "hub_state": "unknown",
+        "hub_last_attempt_at": None,
+        "hub_last_success_at": None,
+    }
+
+
+def _autonomous_product_state(
+    auth: AuthContext,
+    db: Session,
+    *,
+    request: Request,
+    settings: Settings,
+) -> tuple[AutonomousRuntimeStatus, bool, bool, bool]:
+    runtime = autonomous_runtime_status(db, settings)
+    enrollment_key_ready = isinstance(
+        getattr(request.app.state, "imt_sync_credential_sealer", None),
+        ImtSyncCredentialSealer,
+    )
+    rollout_eligible = bool(
+        is_primary_owner(auth)
+        and settings.autonomous_sync_enabled
+        and settings.autonomous_sync_enrollment_enabled
+        and autonomous_sync_rollout_allows(auth.account, settings)
+    )
+    available = autonomous_sync_available_for(
+        auth.account,
+        settings,
+        primary_owner=is_primary_owner(auth),
+        runtime_status=runtime,
+        enrollment_key_ready=enrollment_key_ready,
+    )
+    return runtime, enrollment_key_ready, rollout_eligible, available
+
+
 def _credential_settings_view(
     auth: AuthContext,
     db: Session | None,
@@ -98,22 +153,36 @@ def _credential_settings_view(
     request: Request | None,
     settings: Settings | None,
 ) -> dict:
-    if db is None or not is_primary_owner(auth):
+    if (
+        db is None
+        or not is_primary_owner(auth)
+        or request is None
+        or settings is None
+    ):
         return _neutral_credential_view()
+    runtime, enrollment_key_ready, rollout_eligible, available = (
+        _autonomous_product_state(
+            auth,
+            db,
+            request=request,
+            settings=settings,
+        )
+    )
     status_view = credential_status(db, account_id=auth.account.id)
-    enrollment_available = bool(
-        settings is not None
-        and settings.environment in {"test", "development"}
-        and settings.autonomous_sync_enrollment_enabled
-        and request is not None
-        and isinstance(
-            getattr(request.app.state, "imt_sync_credential_sealer", None),
-            ImtSyncCredentialSealer,
+    unavailable_reason = (
+        "reenrollment_required"
+        if status_view.needs_reenrollment
+        else (
+            "maintenance"
+            if rollout_eligible and (not runtime.ready or not enrollment_key_ready)
+            else (None if available else "unavailable")
         )
     )
     return {
-        "available": False,
-        "enrollment_available": enrollment_available,
+        "available": available,
+        "enrollment_available": available,
+        "runtime_ready": bool(rollout_eligible and runtime.ready),
+        "unavailable_reason": unavailable_reason,
         "configured": status_view.configured,
         "state": status_view.state,
         "activation_pending": (status_view.configured and auth.account.auto_sync_mode != SyncMode.AUTONOMOUS),
@@ -135,6 +204,47 @@ def settings_view(
     settings: Settings | None = None,
 ) -> dict:
     account = auth.account
+    primary_owner = is_primary_owner(auth)
+    autonomous = _credential_settings_view(
+        auth,
+        db,
+        request=request,
+        settings=settings,
+    )
+    sync = auto_sync_view(account, settings=settings)
+    if not primary_owner:
+        if sync["mode"] == SyncMode.AUTONOMOUS.value:
+            sync["mode"] = SyncMode.SESSION_ONLY.value
+        if sync["paused_reason"] in {
+            "credential_invalid",
+            "credential_key_unavailable",
+            "autonomous_runtime_unavailable",
+        }:
+            sync["paused_reason"] = None
+            sync["paused_at"] = None
+    if autonomous["available"]:
+        sync["available_modes"] = [
+            *sync["available_modes"],
+            SyncMode.AUTONOMOUS.value,
+        ]
+    pass_access = (
+        pass_status_view(
+            db,
+            account,
+            include_service_session=primary_owner,
+        )
+        if db is not None
+        else None
+    )
+    if pass_access is not None and not primary_owner:
+        pass_access["service_session"] = _neutral_service_session_view(settings)
+    service_session = None
+    if db is not None and auth.role == "owner":
+        service_session = (
+            service_session_view(db, account)
+            if primary_owner
+            else _neutral_service_session_view(settings)
+        )
     return {
         "account": {
             "display_name": account.display_name,
@@ -163,17 +273,10 @@ def settings_view(
             "last_test_status": account.telegram_last_test_status if auth.role == "owner" else None,
         },
         "sync": {
-            **auto_sync_view(account),
-            "autonomous": _credential_settings_view(
-                auth,
-                db,
-                request=request,
-                settings=settings,
-            ),
-            "pass_access": pass_status_view(db, account) if db is not None else None,
-            "service_session": (
-                service_session_view(db, account) if db is not None and auth.role == "owner" else None
-            ),
+            **sync,
+            "autonomous": autonomous,
+            "pass_access": pass_access,
+            "service_session": service_session,
         },
         "access": {
             "role": auth.role,
@@ -231,6 +334,34 @@ def update_sync_mode(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_runtime_settings),
 ) -> dict:
+    autonomous_available = False
+    runtime_ready = False
+    if payload.mode is SyncMode.AUTONOMOUS:
+        runtime, enrollment_key_ready, rollout_eligible, autonomous_available = (
+            _autonomous_product_state(
+                auth,
+                db,
+                request=request,
+                settings=settings,
+            )
+        )
+        runtime_ready = runtime.ready and enrollment_key_ready
+        if not rollout_eligible:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "AUTONOMOUS_SYNC_UNAVAILABLE",
+                    "message": "La synchronisation autonome n'est pas encore disponible.",
+                },
+            )
+        if not runtime_ready:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "AUTONOMOUS_SYNC_TEMPORARILY_UNAVAILABLE",
+                    "message": "La synchronisation autonome est temporairement indisponible.",
+                },
+            )
     try:
         set_sync_mode(
             db,
@@ -239,7 +370,37 @@ def update_sync_mode(
             interval_hours=payload.interval_hours,
             adaptive=payload.adaptive,
             actor=auth.actor,
+            complete_setup=(
+                payload.mode is SyncMode.AUTONOMOUS
+                and auth.account.sync_setup_completed_at is None
+            ),
+            autonomous_available=autonomous_available,
+            autonomous_runtime_ready=runtime_ready,
         )
+    except SyncCredentialRequired as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "SYNC_CREDENTIAL_REQUIRED",
+                "message": "Un mot de passe IMT protégé est requis pour ce mode.",
+            },
+        ) from exc
+    except SyncCredentialReenrollmentRequired as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "SYNC_CREDENTIAL_REENROLLMENT_REQUIRED",
+                "message": "Le mot de passe IMT protégé doit être renouvelé.",
+            },
+        ) from exc
+    except AutonomousSyncTemporarilyUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "AUTONOMOUS_SYNC_TEMPORARILY_UNAVAILABLE",
+                "message": str(exc),
+            },
+        ) from exc
     except AutonomousSyncUnavailable as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -309,12 +470,28 @@ async def enroll_sync_credential(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_runtime_settings),
 ) -> dict:
-    if not settings.autonomous_sync_enrollment_enabled:
+    runtime, _enrollment_key_ready, rollout_eligible, _available = (
+        _autonomous_product_state(
+            auth,
+            db,
+            request=request,
+            settings=settings,
+        )
+    )
+    if not rollout_eligible:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "code": "AUTONOMOUS_SYNC_ENROLLMENT_UNAVAILABLE",
                 "message": "L'enrôlement autonome n'est pas disponible.",
+            },
+        )
+    if not runtime.ready:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "AUTONOMOUS_SYNC_TEMPORARILY_UNAVAILABLE",
+                "message": "La synchronisation autonome est temporairement indisponible.",
             },
         )
     credential_sealer = _credential_sealer(request)

@@ -886,6 +886,14 @@
       "AdminAutonomousSyncMetricsResponse": {
         "additionalProperties": false,
         "properties": {
+          "active_accounts": {
+            "title": "Active Accounts",
+            "type": "integer"
+          },
+          "active_credentials": {
+            "title": "Active Credentials",
+            "type": "integer"
+          },
           "authentication_failures": {
             "title": "Authentication Failures",
             "type": "integer"
@@ -902,6 +910,22 @@
             "title": "Full Sso Performed",
             "type": "integer"
           },
+          "invalid_credentials": {
+            "title": "Invalid Credentials",
+            "type": "integer"
+          },
+          "last_event_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Event At"
+          },
           "owner_local_full_sso": {
             "title": "Owner Local Full Sso",
             "type": "integer"
@@ -912,6 +936,10 @@
             },
             "title": "Pauses By Reason",
             "type": "object"
+          },
+          "rollout_authorized_accounts": {
+            "title": "Rollout Authorized Accounts",
+            "type": "integer"
           },
           "session_reuse_after_autonomous_sso": {
             "title": "Session Reuse After Autonomous Sso",
@@ -931,6 +959,10 @@
           }
         },
         "required": [
+          "rollout_authorized_accounts",
+          "active_accounts",
+          "active_credentials",
+          "invalid_credentials",
           "credential_operations",
           "succeeded",
           "authentication_failures",
@@ -940,7 +972,8 @@
           "session_reuse_after_autonomous_sso",
           "full_sso_performed",
           "owner_local_full_sso",
-          "pauses_by_reason"
+          "pauses_by_reason",
+          "last_event_at"
         ],
         "title": "AdminAutonomousSyncMetricsResponse",
         "type": "object"
@@ -2460,7 +2493,6 @@
             "type": "boolean"
           },
           "available": {
-            "const": false,
             "title": "Available",
             "type": "boolean"
           },
@@ -2535,6 +2567,10 @@
             "title": "Needs Reenrollment",
             "type": "boolean"
           },
+          "runtime_ready": {
+            "title": "Runtime Ready",
+            "type": "boolean"
+          },
           "state": {
             "anyOf": [
               {
@@ -2550,6 +2586,22 @@
               }
             ],
             "title": "State"
+          },
+          "unavailable_reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "unavailable",
+                  "maintenance",
+                  "reenrollment_required"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unavailable Reason"
           },
           "verified_at": {
             "anyOf": [
@@ -2567,6 +2619,8 @@
         "required": [
           "available",
           "enrollment_available",
+          "runtime_ready",
+          "unavailable_reason",
           "configured",
           "state",
           "activation_pending",

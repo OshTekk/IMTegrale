@@ -25,6 +25,9 @@ from app.models import (
     PassSystemState,
     SyncRequest,
 )
+from app.services.autonomous_sync_availability import (
+    autonomous_sync_execution_allowed_for,
+)
 from app.services.events import record_event
 from app.services.imt_sync_credential_crypto import (
     ImtSyncCredentialEnvelopeMetadata,
@@ -252,7 +255,8 @@ def load_autonomous_credential_snapshot(
     pass_operation_id: str,
     actor: str,
 ) -> AutonomousCredentialSnapshot:
-    if not get_settings().autonomous_sync_enabled:
+    settings = get_settings()
+    if not settings.autonomous_sync_enabled:
         pause_autonomous_account(
             account_id,
             reason=AutonomousSyncRuntimeUnavailable.pause_reason or "",
@@ -261,7 +265,11 @@ def load_autonomous_credential_snapshot(
     with SessionLocal() as db:
         now = utcnow()
         account = db.get(Account, account_id)
-        if account is None or not _account_allows_autonomous(account, actor=actor):
+        if (
+            account is None
+            or not autonomous_sync_execution_allowed_for(account, settings)
+            or not _account_allows_autonomous(account, actor=actor)
+        ):
             raise AutonomousSyncStateChanged
         if not _request_is_current(
             db,

@@ -557,6 +557,7 @@ def service_session_view(db: Session, account: Account) -> dict:
             db,
             account,
             runtime_enabled=get_settings().autonomous_sync_enabled,
+            settings=get_settings(),
         )
         if account.auto_sync_mode == "autonomous"
         else owner_autonomous_sync_available(account)

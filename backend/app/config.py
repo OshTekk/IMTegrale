@@ -10,6 +10,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
+from uuid import UUID
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -24,6 +25,15 @@ class RuntimeRole(StrEnum):
     OUTBOX = "outbox"
     SCHEDULER = "scheduler"
     CLI = "cli"
+
+
+class AutonomousSyncRollout(StrEnum):
+    OFF = "off"
+    CANARY = "canary"
+    ALL = "all"
+
+
+AUTONOMOUS_SYNC_CANARY_MAX_ACCOUNTS = 25
 
 
 class Settings(BaseSettings):
@@ -59,6 +69,8 @@ class Settings(BaseSettings):
     worker_heartbeat_ttl_seconds: int = Field(default=180, ge=60, le=900)
     autonomous_sync_enabled: bool = False
     autonomous_sync_enrollment_enabled: bool = False
+    autonomous_sync_rollout: AutonomousSyncRollout = AutonomousSyncRollout.OFF
+    autonomous_sync_canary_account_ids: list[str] = Field(default_factory=list)
     sync_runtime_profile: Literal["normal", "migration"] = "normal"
     sync_lock_dir: Path = Path("/run/botnote-sync-locks")
     trusted_proxy_ips: list[str] = Field(default_factory=lambda: ["127.0.0.1"])
@@ -156,6 +168,38 @@ class Settings(BaseSettings):
                 normalized.append(identity)
         return normalized
 
+    @field_validator("autonomous_sync_canary_account_ids", mode="before")
+    @classmethod
+    def parse_autonomous_sync_canary_accounts(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [] if value == "" else value.split(",")
+        return value
+
+    @field_validator("autonomous_sync_canary_account_ids")
+    @classmethod
+    def normalize_autonomous_sync_canary_accounts(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for raw_value in values:
+            value = raw_value
+            try:
+                parsed = UUID(value)
+            except (AttributeError, ValueError):
+                raise ValueError(
+                    "Autonomous sync canary account IDs must be canonical UUIDs"
+                ) from None
+            canonical = str(parsed)
+            if value != canonical:
+                raise ValueError(
+                    "Autonomous sync canary account IDs must be canonical UUIDs"
+                )
+            if canonical not in normalized:
+                normalized.append(canonical)
+        if len(normalized) > AUTONOMOUS_SYNC_CANARY_MAX_ACCOUNTS:
+            raise ValueError(
+                "Autonomous sync canary allowlist exceeds its maximum size"
+            )
+        return normalized
+
     @model_validator(mode="after")
     def validate_personal_learning_mode(self) -> Settings:
         if self.learning_access_mode == "cohort":
@@ -180,13 +224,23 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def reject_unimplemented_autonomous_sync(self) -> Settings:
-        if self.environment == "production" and self.autonomous_sync_enabled:
-            raise ValueError(
-                "AUTONOMOUS_SYNC_RUNTIME_NOT_ACTIVATABLE_IN_G6"
-            )
-        if self.environment == "production" and self.autonomous_sync_enrollment_enabled:
-            raise ValueError("AUTONOMOUS_SYNC_ENROLLMENT_NOT_ACTIVATABLE_IN_G5")
+    def validate_autonomous_sync_rollout(self) -> Settings:
+        if self.environment != "production":
+            return self
+        rollout = self.autonomous_sync_rollout
+        runtime_enabled = self.autonomous_sync_enabled
+        enrollment_enabled = self.autonomous_sync_enrollment_enabled
+        canary_accounts = self.autonomous_sync_canary_account_ids
+        if rollout is AutonomousSyncRollout.OFF:
+            if runtime_enabled or enrollment_enabled or canary_accounts:
+                raise ValueError("AUTONOMOUS_SYNC_ROLLOUT_CONFIGURATION_INVALID")
+            return self
+        if not runtime_enabled or not enrollment_enabled:
+            raise ValueError("AUTONOMOUS_SYNC_ROLLOUT_CONFIGURATION_INVALID")
+        if rollout is AutonomousSyncRollout.CANARY and not canary_accounts:
+            raise ValueError("AUTONOMOUS_SYNC_ROLLOUT_CONFIGURATION_INVALID")
+        if rollout is AutonomousSyncRollout.ALL and canary_accounts:
+            raise ValueError("AUTONOMOUS_SYNC_ROLLOUT_CONFIGURATION_INVALID")
         return self
 
     def validate_for_runtime(self, role: RuntimeRole | str) -> None:

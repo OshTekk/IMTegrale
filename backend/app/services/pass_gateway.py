@@ -15,18 +15,22 @@ import requests
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.orm import Session
 
-from app.config import get_settings
+from app.config import AutonomousSyncRollout, get_settings
 from app.database import SessionLocal, utcnow
 from app.models import (
     Account,
     AuthAttempt,
     AuthThrottleState,
     Event,
+    ImtSyncCredential,
     PassDenial,
     PassOperation,
     PassServiceSession,
     PassSystemState,
     WebAuthnChallenge,
+)
+from app.services.autonomous_sync_availability import (
+    autonomous_sync_execution_allowed_for,
 )
 from app.services.autonomous_sync_credentials import (
     AutonomousCredentialSnapshot,
@@ -759,10 +763,11 @@ def perform_sync_operation(
     sync_request_id: str | None = None,
 ) -> GatewayResult:
     now = utcnow()
+    settings = get_settings()
     if (
         account.auto_sync_enabled
         and account.auto_sync_mode == "autonomous"
-        and not get_settings().autonomous_sync_enabled
+        and not autonomous_sync_execution_allowed_for(account, settings)
     ):
         pause_autonomous_account(
             account.id,
@@ -957,7 +962,10 @@ def perform_sync_operation(
                     not (
                         account.auto_sync_enabled
                         and account.auto_sync_mode == "autonomous"
-                        and get_settings().autonomous_sync_enabled
+                        and autonomous_sync_execution_allowed_for(
+                            account,
+                            settings,
+                        )
                     )
                     and owner_password_for(account) is None
                 ):
@@ -1037,7 +1045,12 @@ def perform_sync_operation(
         _close_client_session(client)
 
 
-def pass_status_view(db: Session, account: Account | None = None) -> dict:
+def pass_status_view(
+    db: Session,
+    account: Account | None = None,
+    *,
+    include_service_session: bool = True,
+) -> dict:
     now = utcnow()
     state = _system_state(db)
     active_until = ensure_utc(state.active_until)
@@ -1079,7 +1092,9 @@ def pass_status_view(db: Session, account: Account | None = None) -> dict:
             "refreshed_at": account.profile_refreshed_at,
             "refresh_due": _profile_refresh_due(account, now),
         }
-        result["service_session"] = service_session_view(db, account)
+        result["service_session"] = (
+            service_session_view(db, account) if include_service_session else None
+        )
     return result
 
 
@@ -1127,6 +1142,41 @@ def metrics_view(db: Session, *, hours: int) -> dict:
     )
     p95_index = max(0, math.ceil(len(durations) * 0.95) - 1) if durations else 0
     denial_counts = Counter(db.scalars(select(PassDenial.reason).where(PassDenial.created_at >= since)))
+    settings = get_settings()
+    if settings.autonomous_sync_rollout is AutonomousSyncRollout.OFF:
+        rollout_authorized_accounts = 0
+    elif settings.autonomous_sync_rollout is AutonomousSyncRollout.CANARY:
+        rollout_authorized_accounts = int(
+            db.scalar(
+                select(func.count(Account.id)).where(
+                    Account.id.in_(settings.autonomous_sync_canary_account_ids),
+                    Account.is_disabled.is_(False),
+                )
+            )
+            or 0
+        )
+    else:
+        rollout_authorized_accounts = int(
+            db.scalar(
+                select(func.count(Account.id)).where(Account.is_disabled.is_(False))
+            )
+            or 0
+        )
+    last_autonomous_event_at = db.scalar(
+        select(func.max(Event.created_at)).where(
+            Event.created_at >= since,
+            or_(
+                Event.kind.like("sync:autonomous%"),
+                Event.kind.like("sync_credential:%"),
+            ),
+        )
+    )
+    if last_autonomous_event_at is not None:
+        last_autonomous_event_at = ensure_utc(last_autonomous_event_at).replace(
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
     return {
         "window_hours": hours,
         "from": since,
@@ -1150,6 +1200,32 @@ def metrics_view(db: Session, *, hours: int) -> dict:
             "skipped": sum(not operation.profile_fetched for operation in successful),
         },
         "autonomous": {
+            "rollout_authorized_accounts": rollout_authorized_accounts,
+            "active_accounts": int(
+                db.scalar(
+                    select(func.count(Account.id)).where(
+                        Account.auto_sync_enabled.is_(True),
+                        Account.auto_sync_mode == "autonomous",
+                    )
+                )
+                or 0
+            ),
+            "active_credentials": int(
+                db.scalar(
+                    select(func.count(ImtSyncCredential.id)).where(
+                        ImtSyncCredential.state == "active"
+                    )
+                )
+                or 0
+            ),
+            "invalid_credentials": int(
+                db.scalar(
+                    select(func.count(ImtSyncCredential.id)).where(
+                        ImtSyncCredential.state == "invalid"
+                    )
+                )
+                or 0
+            ),
             "credential_operations": len(autonomous_operations),
             "succeeded": sum(operation.status == "succeeded" for operation in autonomous_operations),
             "authentication_failures": sum(
@@ -1185,6 +1261,7 @@ def metrics_view(db: Session, *, hours: int) -> dict:
                     )
                 )
             ),
+            "last_event_at": last_autonomous_event_at,
         },
         "by_kind": dict(Counter(operation.kind for operation in operations)),
         "errors": dict(

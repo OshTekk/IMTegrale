@@ -64,6 +64,68 @@ test("un viewer reste en lecture seule même sur une route owner directe", async
   expect(state.externalRequests).toEqual([]);
 });
 
+test("un propriétaire hors rollout ne découvre que les modes sans mot de passe", async ({ page }) => {
+  const state = await installFakeAppApi(page, "imt");
+  await installFakeEventSource(page);
+  await page.goto("/settings");
+
+  await expect(page.getByRole("radio", { name: /À la demande/ })).toBeVisible();
+  await expect(page.getByRole("radio", { name: /Automatique avec session privée/ })).toBeVisible();
+  await expect(page.getByRole("radio", { name: /Automatique autonome/ })).toHaveCount(0);
+  expect(state.credentialEnrollments).toBe(0);
+  expect(state.syncModeUpdates).toEqual([]);
+  expect(state.externalRequests).toEqual([]);
+});
+
+test("le parcours autonome synthétique enrôle, active puis révoque sans persister le secret", async ({ page }) => {
+  const state = await installFakeAppApi(page, "imt");
+  state.autonomousAvailable = true;
+  await installFakeEventSource(page);
+  await page.goto("/settings");
+
+  await page.locator("label.sync-mode-card").filter({ hasText: "Automatique autonome" }).click();
+  await page.getByRole("button", { name: "Enregistrer ce mode" }).click();
+  const enrollment = page.getByRole("dialog", { name: "Activer la synchronisation autonome" });
+  await expect(enrollment).toBeVisible();
+
+  const syntheticSecret = `secret-synthetique-${Date.now()}`;
+  await enrollment.getByLabel("Mot de passe IMT", { exact: true }).fill(syntheticSecret);
+  for (const checkbox of await enrollment.getByRole("checkbox").all()) await checkbox.check();
+  await enrollment.getByRole("button", { name: "Vérifier et activer" }).click();
+
+  await expect(enrollment).toBeHidden();
+  await expect(page.getByRole("heading", { name: "Mot de passe protégé" })).toBeVisible();
+  await expect(page.getByText("Mode actif : Automatique autonome")).toBeVisible();
+  expect(state.credentialEnrollments).toBe(1);
+  expect(state.credentialEnrollmentFields).toEqual([
+    [
+      "acknowledge_encrypted_storage",
+      "acknowledge_irreversible_deletion",
+      "acknowledge_worker_risk",
+      "consent_version",
+      "password",
+    ],
+  ]);
+  expect(state.syncModeUpdates).toEqual([{ mode: "autonomous", interval_hours: 2, adaptive: true }]);
+  expect(JSON.stringify(state)).not.toContain(syntheticSecret);
+  expect(await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage }))).not.toContain(
+    syntheticSecret,
+  );
+  await expect(page.locator("body")).not.toContainText(syntheticSecret);
+
+  await page.locator("label.sync-mode-card").filter({ hasText: "Automatique avec session privée" }).click();
+  await page.getByRole("button", { name: "Enregistrer ce mode" }).click();
+  const leave = page.getByRole("dialog", { name: "Quitter la synchronisation autonome ?" });
+  await expect(leave).toBeVisible();
+  await leave.getByRole("button", { name: "Supprimer le mot de passe et changer de mode" }).click();
+
+  await expect(page.getByText("Mode actif : Session privée")).toBeVisible();
+  expect(state.autonomousConfigured).toBe(false);
+  expect(state.syncMode).toBe("session_only");
+  expect(state.externalRequests).toEqual([]);
+  await expectNoSeriousA11yViolations(page);
+});
+
 test("une session passkey primaire peut créer puis supprimer une passkey", async ({ page }) => {
   const state = await installFakeAppApi(page, "passkey");
   await installFakeEventSource(page);

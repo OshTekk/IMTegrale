@@ -2,14 +2,14 @@
 
 ## Modes et fondation autonome
 
-La configuration possède désormais trois valeurs de domaine : `manual`,
-`session_only` et `autonomous`. Seules les deux premières sont disponibles :
+La configuration possède trois valeurs de domaine : `manual`, `session_only`
+et `autonomous` :
 
 - `manual` conserve le fonctionnement à la demande ;
 - `session_only` correspond exactement à l'automatisation actuelle par cookies
   PASS/HUB chiffrés ;
-- `autonomous` est réservé à une architecture future et reçoit
-  `AUTONOMOUS_SYNC_UNAVAILABLE` avant toute mutation.
+- `autonomous` peut être proposé uniquement à un propriétaire primaire lorsque
+  le rollout serveur, le worker isolé et le credential sont tous valides.
 
 Pendant la migration expand/contract, `auto_sync_enabled` reste l'autorité
 comportementale compatible avec l'ancienne release. La colonne
@@ -27,13 +27,15 @@ credential dans le web et zéro credential. G2 fournit la
 sync et G4 migre les sessions PASS/HUB vers ce worker. `0028` ajoute un marqueur
 agrégé sur les opérations PASS, borne les raisons de pause et équipe le worker
 d'un opener credential strict. G6B branche le moteur session-first et le
-fallback autonome complet uniquement dans les tests où le flag runtime est
-explicitement actif. Le worker revérifie le mode, le consentement, la
+fallback autonome complet. Le worker revérifie le mode, le rollout, le
+consentement, la
 génération, le login, l'enveloppe et les leases avant et après l'unique SSO.
-La production conserve zéro credential, zéro compte autonome et les deux flags
-fermés. Le
-détail des gates se trouve dans
-[`security/autonomous-sync-architecture.md`](security/autonomous-sync-architecture.md).
+G7A ajoute l'interface et le mécanisme de rollout, mais la production conserve
+zéro credential, zéro compte autonome, `rollout=off` et les deux flags fermés.
+Le détail des gates se trouve dans
+[`security/autonomous-sync-architecture.md`](security/autonomous-sync-architecture.md)
+et la présentation utilisateur dans
+[`product/sync-modes.md`](product/sync-modes.md).
 
 ## Consentement
 
@@ -47,9 +49,9 @@ La désactivation est immédiate pour tout nouveau démarrage. L'ordonnanceur re
 
 Les connexions explicitement déclenchées par une connexion IMT, le bouton de synchronisation ou l'administrateur restent indépendantes de cette option.
 
-## Session technique bêta
+## Sessions et credential
 
-Dans les deux modes disponibles, le mot de passe IMT n'est jamais conservé.
+Dans `manual` et `session_only`, le mot de passe IMT n'est jamais conservé.
 Après une authentification réussie,
 seuls les cookies appartenant exactement à PASS et au Hub COMPETENCES sont
 retenus. PASS pouvant encore émettre un cookie historique sans attribut
@@ -65,7 +67,15 @@ lieu de provoquer une erreur serveur.
 
 Cette durée est une borne d'observation, pas une promesse de PASS. Le service distant peut fermer la session plus tôt. Dans ce cas, IMTégrale détruit immédiatement l'instantané chiffré, marque l'automatisation `reauth_required` et n'effectue aucun nouvel appel planifié avant une reconnexion explicite. La reconnexion renouvelle la session mais ne synchronise pas les notes.
 
-Le premier parcours propose le mode manuel par défaut ou l'automatique facultatif. Le portail administrateur expose l'état par compte et uniquement des métriques de longévité agrégées sur 24 heures, 3 jours, 7 jours et 30 jours ; aucune valeur de cookie n'est renvoyée.
+Le mode `autonomous`, lorsqu'il est réellement autorisé, demande une nouvelle
+saisie et trois consentements distincts. Le web peut uniquement sceller le
+mot de passe ; seul le worker sync possède la clé privée. Quitter ce mode
+révoque immédiatement l'enveloppe. Ce chiffrement ne protège pas contre une
+compromission du worker ou un accès root.
+
+Le premier parcours propose toujours le mode manuel par défaut. Le portail
+administrateur expose uniquement des métriques agrégées ; aucune valeur de
+cookie, credential ou identité canary n'est renvoyée.
 
 ## Planification
 
@@ -105,12 +115,11 @@ Les jobs réussis sont conservés 7 jours, les notifications livrées 30 jours e
 
 Le portail administrateur affiche l'état et la fréquence choisis pour faciliter le support, sans proposer d'activation administrateur. Les événements `sync:auto_enabled` et `sync:auto_disabled` assurent la traçabilité du choix du propriétaire.
 
-Dans la release G6, `BOTNOTE_AUTONOMOUS_SYNC_ENABLED` et
-`BOTNOTE_AUTONOMOUS_SYNC_ENROLLMENT_ENABLED` doivent rester absents ou valoir
-`false` en production. Une activation du runtime autonome reste refusée en
-production ; elle est autorisée uniquement par les tests isolés. Une
-activation de l'enrôlement est explicitement refusée en production. Si une
-ligne `autonomous` est injectée manuellement en base, le scheduler l'ignore,
-émet une alerte agrégée sans identité et le worker la refuse avant tout appel
-PASS. G7 reste nécessaire pour l'interface, le consentement visible et un
-canary explicitement autorisé.
+Dans la release G7A,
+`BOTNOTE_AUTONOMOUS_SYNC_ROLLOUT=off`,
+`BOTNOTE_AUTONOMOUS_SYNC_ENABLED=false` et
+`BOTNOTE_AUTONOMOUS_SYNC_ENROLLMENT_ENABLED=false` restent obligatoires en
+production, avec une allowlist vide. Si une ligne `autonomous` est injectée
+manuellement, le scheduler vérifie également le rollout, la met en pause hors
+autorisation et le worker la refuse avant toute lecture du credential ou tout
+appel PASS. Le premier canary relève d'un lot G7B séparé.

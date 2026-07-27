@@ -1,148 +1,202 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { CalendarClock, Check, Clock3, FlaskConical, Hand, LockKeyhole, ShieldCheck, Zap } from "lucide-react";
-import { useEffect, useState } from "react";
-import { settingsCompleteSyncSetup } from "../generated/api/sdk.gen";
+import { Check, LockKeyhole, ShieldCheck, Trash2 } from "lucide-react";
+import { useEffect, useId, useState } from "react";
+import {
+  settingsCompleteSyncSetup,
+  settingsDeleteSyncCredential,
+  settingsUpdateSyncMode,
+} from "../generated/api/sdk.gen";
+import type { SettingsResponse, SyncMode } from "../generated/api/types.gen";
 import { apiData, throwOnApiError } from "../lib/generatedApi";
 import { queryKeys, useSettings } from "../lib/queries";
 import { Modal } from "./Modal";
+import { AutonomousSyncEnrollmentModal } from "./sync/AutonomousSyncEnrollmentModal";
+import { SyncModeSelector } from "./sync/SyncModeSelector";
+import { SyncScheduleOptions, type SyncInterval } from "./sync/SyncScheduleOptions";
 import { useToast } from "./Toast";
 
-type Interval = 2 | 4 | 6 | 8 | 12 | 24;
+function cacheSettings(queryClient: ReturnType<typeof useQueryClient>, settings: SettingsResponse): void {
+  const accountId = queryClient.getQueryData<{ account?: { id: string } }>(queryKeys.session)?.account?.id;
+  if (accountId) queryClient.setQueryData(queryKeys.settings(accountId), settings);
+}
 
 export function SyncSetupModal({ open, onComplete }: { open: boolean; onComplete: () => void }) {
   const settings = useSettings();
   const queryClient = useQueryClient();
   const { showToast } = useToast();
-  const [mode, setMode] = useState<"manual" | "automatic">("manual");
-  const [interval, setInterval] = useState<Interval>(2);
+  const modeGroupName = useId();
+  const [mode, setMode] = useState<SyncMode>("manual");
+  const [interval, setInterval] = useState<SyncInterval>(2);
   const [adaptive, setAdaptive] = useState(true);
+  const [enrollmentOpen, setEnrollmentOpen] = useState(false);
+
   useEffect(() => {
     if (!open || !settings.data) return;
-    setMode(settings.data.sync.enabled ? "automatic" : "manual");
+    setMode(settings.data.sync.autonomous.activation_pending ? "autonomous" : "manual");
     setInterval(settings.data.sync.interval_hours);
     setAdaptive(settings.data.sync.adaptive);
   }, [open, settings.data]);
-  const save = useMutation({
-    mutationFn: () =>
-      apiData(
+
+  const complete = useMutation({
+    mutationFn: async () => {
+      if (mode === "autonomous") {
+        if (!settings.data?.sync.autonomous.configured) {
+          throw new Error("SYNC_CREDENTIAL_REQUIRED");
+        }
+        return apiData(
+          settingsUpdateSyncMode({
+            body: { mode, interval_hours: interval, adaptive },
+            throwOnError: throwOnApiError,
+          }),
+        );
+      }
+      return apiData(
         settingsCompleteSyncSetup({
           body: {
-            enabled: mode === "automatic",
+            enabled: mode === "session_only",
             interval_hours: interval,
             adaptive,
           },
           throwOnError: throwOnApiError,
         }),
-      ),
+      );
+    },
     onSuccess: (next) => {
-      const accountId = queryClient.getQueryData<{ account?: { id: string } }>(queryKeys.session)?.account?.id;
-      if (accountId) queryClient.setQueryData(queryKeys.settings(accountId), next);
-      showToast(mode === "automatic" ? "Synchronisation automatique configurée" : "Synchronisation manuelle choisie");
+      cacheSettings(queryClient, next);
+      showToast(
+        mode === "manual"
+          ? "Synchronisation à la demande choisie"
+          : mode === "session_only"
+            ? "Synchronisation avec session privée configurée"
+            : "Synchronisation autonome activée",
+      );
       onComplete();
     },
     onError: (error) => showToast(error.message, "error"),
   });
 
+  const removePendingCredential = useMutation({
+    mutationFn: () => apiData(settingsDeleteSyncCredential({ throwOnError: throwOnApiError })),
+    onSuccess: (next) => {
+      cacheSettings(queryClient, next);
+      setMode("manual");
+      showToast("Mot de passe conservé supprimé");
+    },
+    onError: (error) => showToast(error.message, "error"),
+  });
+
+  if (!settings.data) return null;
+  const data = settings.data;
+  const showAutonomous =
+    data.sync.available_modes.includes("autonomous") ||
+    data.sync.autonomous.configured ||
+    data.sync.autonomous.needs_reenrollment;
+
+  const save = () => {
+    if (mode === "autonomous" && (!data.sync.autonomous.configured || data.sync.autonomous.needs_reenrollment)) {
+      setEnrollmentOpen(true);
+      return;
+    }
+    complete.mutate();
+  };
+
   return (
-    <Modal
-      open={open}
-      title="Choisir les synchronisations"
-      description="Tu gardes le contrôle sur chaque accès planifié à PASS et HUB COMPETENCES."
-      onClose={() => undefined}
-      size="large"
-      className="sync-setup-modal"
-      dismissible={false}
-    >
-      <div className="sync-setup-content">
-        <div className="sync-setup-choice" role="radiogroup" aria-label="Mode de synchronisation">
-          <button
-            type="button"
-            role="radio"
-            aria-checked={mode === "manual"}
-            className={mode === "manual" ? "selected" : ""}
-            onClick={() => setMode("manual")}
-          >
-            <span>
-              <Hand size={21} />
-            </span>
+    <>
+      <Modal
+        open={open && !enrollmentOpen}
+        title="Choisir les synchronisations"
+        description="Tu gardes le contrôle sur chaque accès planifié à PASS et HUB COMPETENCES."
+        onClose={() => undefined}
+        size="large"
+        className="sync-setup-modal"
+        dismissible={false}
+      >
+        <div className="sync-setup-content">
+          <SyncModeSelector
+            value={mode}
+            availableModes={data.sync.available_modes}
+            includeAutonomous={showAutonomous}
+            disabled={complete.isPending}
+            name={modeGroupName}
+            onChange={setMode}
+          />
+          {mode !== "manual" && (
+            <SyncScheduleOptions
+              interval={interval}
+              adaptive={adaptive}
+              allowedIntervals={data.sync.allowed_intervals}
+              disabled={complete.isPending}
+              onIntervalChange={setInterval}
+              onAdaptiveChange={setAdaptive}
+            />
+          )}
+          <div className="sync-setup-privacy">
+            <ShieldCheck size={19} />
             <div>
-              <strong>À la demande</strong>
-              <small>Choix par défaut</small>
-              <p>Aucun appel planifié. Tu lances toi-même les actualisations.</p>
+              <strong>
+                {mode === "autonomous"
+                  ? "Mot de passe IMT conservé avec consentement explicite"
+                  : "Aucun mot de passe IMT conservé"}
+              </strong>
+              <p>
+                {mode === "autonomous"
+                  ? "Le mot de passe est protégé sous une enveloppe chiffrée, avec un risque serveur supérieur clairement assumé."
+                  : "Après la connexion, le mot de passe est abandonné. Seule la session technique PASS/HUB peut être conservée chiffrée."}
+              </p>
             </div>
-            {mode === "manual" && <Check size={17} />}
-          </button>
-          <button
-            type="button"
-            role="radio"
-            aria-checked={mode === "automatic"}
-            className={mode === "automatic" ? "selected" : ""}
-            onClick={() => setMode("automatic")}
-          >
-            <span>
-              <CalendarClock size={21} />
-            </span>
-            <div>
-              <strong>Automatique</strong>
-              <small>
-                <FlaskConical size={13} /> Bêta
-              </small>
-              <p>IMTégrale vérifie les nouvelles notes pendant les heures ouvrées.</p>
-            </div>
-            {mode === "automatic" && <Check size={17} />}
-          </button>
-        </div>
-        {mode === "automatic" && (
-          <section className="sync-setup-options">
-            <label>
-              Fréquence de base
-              <select value={interval} onChange={(event) => setInterval(Number(event.target.value) as Interval)}>
-                {([2, 4, 6, 8, 12, 24] as Interval[]).map((hours) => (
-                  <option key={hours} value={hours}>
-                    {hours === 24 ? "Une fois par jour" : `Toutes les ${hours} heures`}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="adaptive-control">
-              <span>
-                <Zap size={17} />
-                <span>
-                  <strong>Cadence adaptative</strong>
-                  <small>Ralentit automatiquement après plusieurs passages sans changement.</small>
-                </span>
-              </span>
-              <input type="checkbox" checked={adaptive} onChange={(event) => setAdaptive(event.target.checked)} />
-            </label>
-            <div className="sync-setup-window">
-              <Clock3 size={16} />
-              <span>Du lundi au vendredi, entre 8 h et 20 h. Deux heures est la fréquence maximale.</span>
-            </div>
-          </section>
-        )}
-        <div className="sync-setup-privacy">
-          <ShieldCheck size={19} />
-          <div>
-            <strong>Aucun mot de passe IMT conservé</strong>
-            <p>
-              Après la connexion, le mot de passe est détruit. Seule la session technique PASS/HUB est chiffrée,
-              révocable et limitée à 30 jours.
-            </p>
           </div>
+          {mode === "session_only" && (
+            <div className="sync-setup-beta-note">
+              <LockKeyhole size={16} />
+              <span>
+                PASS peut fermer sa session plus tôt que prévu. La synchronisation se met alors en pause et demande une
+                nouvelle authentification.
+              </span>
+            </div>
+          )}
+          {data.sync.autonomous.activation_pending && (
+            <div className="autonomous-enrollment-error is-pending" role="status">
+              <LockKeyhole size={17} />
+              <span>Le mot de passe est protégé, mais l'activation n'est pas terminée.</span>
+            </div>
+          )}
         </div>
-        <div className="sync-setup-beta-note">
-          <LockKeyhole size={16} />
-          <span>
-            Les accès planifiés peuvent aider la session distante à rester ouverte, sans garantie de la part de PASS. Si
-            elle expire, l'automatisation se met en pause et te demande de te reconnecter.
-          </span>
-        </div>
-      </div>
-      <footer className="modal-actions">
-        <button className="primary-button" type="button" onClick={() => save.mutate()} disabled={save.isPending}>
-          {save.isPending ? <span className="spinner" /> : <Check size={17} />} Enregistrer ce choix
-        </button>
-      </footer>
-    </Modal>
+        <footer className="modal-actions sync-setup-actions">
+          {data.sync.autonomous.activation_pending && (
+            <button
+              className="text-button danger-text-button"
+              type="button"
+              onClick={() => removePendingCredential.mutate()}
+              disabled={removePendingCredential.isPending || complete.isPending}
+            >
+              <Trash2 size={16} /> Abandonner et supprimer
+            </button>
+          )}
+          <button
+            className="primary-button"
+            type="button"
+            onClick={save}
+            disabled={
+              complete.isPending || removePendingCredential.isPending || !data.sync.available_modes.includes(mode)
+            }
+          >
+            {complete.isPending ? <span className="spinner" /> : <Check size={17} />}
+            {mode === "autonomous" && data.sync.autonomous.activation_pending
+              ? "Terminer l'activation"
+              : "Enregistrer ce choix"}
+          </button>
+        </footer>
+      </Modal>
+      <AutonomousSyncEnrollmentModal
+        open={open && enrollmentOpen}
+        interval={interval}
+        adaptive={adaptive}
+        available={data.sync.autonomous.enrollment_available}
+        updateExisting={data.sync.autonomous.configured}
+        onClose={() => setEnrollmentOpen(false)}
+        onSettings={(next) => cacheSettings(queryClient, next)}
+        onActivated={onComplete}
+      />
+    </>
   );
 }

@@ -180,7 +180,7 @@ def test_autonomous_runtime_flag_is_testable_but_closed_in_production() -> None:
     )
     with pytest.raises(
         ValidationError,
-        match="AUTONOMOUS_SYNC_RUNTIME_NOT_ACTIVATABLE_IN_G6",
+        match="AUTONOMOUS_SYNC_ROLLOUT_CONFIGURATION_INVALID",
     ):
         Settings(
             _env_file=None,
@@ -201,6 +201,8 @@ def test_settings_exposes_only_effective_available_modes(
     assert sync["autonomous"] == {
         "available": False,
         "enrollment_available": False,
+        "runtime_ready": False,
+        "unavailable_reason": "unavailable",
         "configured": False,
         "state": None,
         "activation_pending": False,

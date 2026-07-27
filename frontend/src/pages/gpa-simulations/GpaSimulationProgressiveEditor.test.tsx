@@ -173,7 +173,7 @@ describe("éditeur progressif de simulation GPA", () => {
     );
 
     fireEvent.change(screen.getByRole("textbox", { name: "Code UE" }), { target: { value: "fic999" } });
-    await user.type(screen.getByRole("spinbutton", { name: "Crédits ECTS" }), "6");
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Crédits ECTS" }), { target: { value: "6" } });
     await user.selectOptions(screen.getByRole("combobox", { name: "Grade potentiel" }), "B");
     fireEvent.submit(screen.getByRole("button", { name: "Ajouter l’UE" }).closest("form")!);
 
@@ -187,7 +187,6 @@ describe("éditeur progressif de simulation GPA", () => {
   });
 
   it("garde l’éditeur ouvert lorsque les ECTS sont invalides", async () => {
-    const user = userEvent.setup();
     render(
       <GpaSimulationUeEditor
         open
@@ -203,8 +202,7 @@ describe("éditeur progressif de simulation GPA", () => {
       />,
     );
     const credits = screen.getByRole("spinbutton", { name: "Crédits ECTS" });
-    await user.clear(credits);
-    await user.type(credits, "61");
+    fireEvent.change(credits, { target: { value: "61" } });
 
     expect(credits.getAttribute("aria-invalid")).toBe("true");
     expect(screen.getByText("Les crédits doivent être compris entre 0,01 et 60.")).toBeTruthy();

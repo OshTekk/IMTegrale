@@ -1,29 +1,23 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Activity,
   Bell,
   Bot,
-  CalendarClock,
-  CheckCircle2,
-  Clock3,
   ExternalLink,
   Fingerprint,
   Info,
   KeyRound,
   LockKeyhole,
   MessageCircle,
-  RefreshCw,
   Send,
   ShieldCheck,
   Smartphone,
   Trash2,
   TriangleAlert,
   UserRound,
-  Zap,
 } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 import { Modal } from "../components/Modal";
-import { PassReconnectModal } from "../components/PassReconnectModal";
+import { SyncSettingsPanel } from "../components/sync/SyncSettingsPanel";
 import { useToast } from "../components/Toast";
 import {
   authDeletePasskey,
@@ -32,16 +26,12 @@ import {
   settingsTestTelegram,
   settingsToggleTelegram,
   settingsUpdateAccount,
-  settingsUpdateAutoSync,
 } from "../generated/api/sdk.gen";
 import { formatDate } from "../lib/format";
 import { apiData, throwOnApiError } from "../lib/generatedApi";
 import { registerPasskey } from "../lib/passkeys";
 import { queryKeys, useDashboard, useSettings } from "../lib/queries";
-import { manualSyncMessage, useServerCountdown } from "../lib/sync";
 import type { Role } from "../types";
-
-type Interval = 2 | 4 | 6 | 8 | 12 | 24;
 
 export function SettingsPage({ role, isPrimaryOwner }: { role: Role; isPrimaryOwner: boolean }) {
   const settings = useSettings();
@@ -52,14 +42,8 @@ export function SettingsPage({ role, isPrimaryOwner }: { role: Role; isPrimaryOw
   const [timezone, setTimezone] = useState("Europe/Paris");
   const [botToken, setBotToken] = useState("");
   const [chatId, setChatId] = useState("");
-  const [autoSyncInterval, setAutoSyncInterval] = useState<Interval>(2);
-  const [adaptive, setAdaptive] = useState(true);
-  const [autoSyncConsentOpen, setAutoSyncConsentOpen] = useState(false);
   const [telegramGuideOpen, setTelegramGuideOpen] = useState(false);
-  const [passReconnectOpen, setPassReconnectOpen] = useState(false);
   const [passkeyName, setPasskeyName] = useState("Appareil principal");
-  const manualSync = dashboard.data?.account.manual_sync;
-  const manualSyncRemaining = useServerCountdown(manualSync);
   const passkeys = useQuery({
     queryKey: ["account", "passkeys"],
     queryFn: () => apiData(authListPasskeys({ throwOnError: throwOnApiError })),
@@ -70,8 +54,6 @@ export function SettingsPage({ role, isPrimaryOwner }: { role: Role; isPrimaryOw
     if (!settings.data) return;
     setDisplayName(settings.data.account.display_name);
     setTimezone(settings.data.account.timezone);
-    setAutoSyncInterval(settings.data.sync.interval_hours);
-    setAdaptive(settings.data.sync.adaptive);
   }, [settings.data]);
 
   const refresh = () => {
@@ -123,21 +105,6 @@ export function SettingsPage({ role, isPrimaryOwner }: { role: Role; isPrimaryOw
       showToast(error.message, "error");
     },
   });
-  const autoSyncMutation = useMutation({
-    mutationFn: ({ enabled, interval, useAdaptive }: { enabled: boolean; interval: Interval; useAdaptive: boolean }) =>
-      apiData(
-        settingsUpdateAutoSync({
-          body: { enabled, interval_hours: interval, adaptive: useAdaptive },
-          throwOnError: throwOnApiError,
-        }),
-      ),
-    onSuccess: (_next, variables) => {
-      setAutoSyncConsentOpen(false);
-      refresh();
-      showToast(variables.enabled ? "Actualisation automatique autorisée" : "Actualisation automatique désactivée");
-    },
-    onError: (error) => showToast(error.message, "error"),
-  });
   const addPasskey = useMutation({
     mutationFn: () => registerPasskey(passkeyName),
     onSuccess: () => {
@@ -183,17 +150,6 @@ export function SettingsPage({ role, isPrimaryOwner }: { role: Role; isPrimaryOw
         </section>
       </div>
     );
-  const passAccess = data.sync.pass_access;
-  const serviceSession = data.sync.service_session;
-  if (!passAccess?.quota || !serviceSession) {
-    return (
-      <div className="error-panel">
-        <TriangleAlert size={22} />
-        État de synchronisation indisponible.
-      </div>
-    );
-  }
-
   const saveProfile = (event: FormEvent) => {
     event.preventDefault();
     accountMutation.mutate();
@@ -202,26 +158,11 @@ export function SettingsPage({ role, isPrimaryOwner }: { role: Role; isPrimaryOw
     event.preventDefault();
     telegramMutation.mutate();
   };
-  const updateAuto = (enabled: boolean, interval = autoSyncInterval, useAdaptive = adaptive) =>
-    autoSyncMutation.mutate({ enabled, interval, useAdaptive });
   const segment = data.account.promotion_year
     ? `${data.account.program} ${data.account.promotion_year}`
     : "Non disponible";
   return (
     <div className="settings-grid">
-      {passAccess.state === "circuit_open" && (
-        <div className="pass-outage-banner">
-          <Activity size={18} />
-          <div>
-            <strong>PASS est temporairement indisponible</strong>
-            <span>
-              Tes données déjà importées restent accessibles. Prochaine vérification :{" "}
-              {formatDate(passAccess.circuit.next_probe_at)}.
-            </span>
-          </div>
-        </div>
-      )}
-
       <section className="settings-panel profile-settings">
         <header>
           <span>
@@ -287,183 +228,7 @@ export function SettingsPage({ role, isPrimaryOwner }: { role: Role; isPrimaryOw
         </p>
       </section>
 
-      <section className="settings-panel sync-settings">
-        <header>
-          <span>
-            <RefreshCw size={20} />
-          </span>
-          <div>
-            <h2>Synchronisation IMT</h2>
-            <p>Fraîcheur, budget et consentement.</p>
-          </div>
-        </header>
-        {!isPrimaryOwner && (
-          <div className="privacy-note">
-            <LockKeyhole size={17} />
-            <span>
-              <strong>Reconnexion requise.</strong> Une connexion IMT ou passkey est nécessaire pour lancer une
-              synchronisation ou autoriser l'actualisation automatique.
-            </span>
-          </div>
-        )}
-        <div className="sync-state">
-          <span className={`large-status-icon ${dashboard.data?.account.last_sync_status ?? "never"}`}>
-            {dashboard.data?.account.last_sync_status === "error" ? (
-              <TriangleAlert size={25} />
-            ) : (
-              <CheckCircle2 size={25} />
-            )}
-          </span>
-          <div>
-            <strong>
-              {dashboard.data?.account.last_sync_status === "error"
-                ? "Synchronisation en erreur"
-                : "Connexion opérationnelle"}
-            </strong>
-            <span>Dernière synchronisation : {formatDate(dashboard.data?.account.last_sync_at)}</span>
-          </div>
-        </div>
-        {dashboard.data?.account.last_sync_error && (
-          <div className="inline-warning">{dashboard.data.account.last_sync_error}</div>
-        )}
-        <div className={`manual-sync-state ${manualSync?.state ?? "checking"}`} role="status" aria-live="polite">
-          <Clock3 size={17} />
-          <div>
-            <strong>Synchronisation manuelle</strong>
-            <span>{manualSyncMessage(manualSync, manualSyncRemaining)}</span>
-          </div>
-        </div>
-        <div className="pass-budget">
-          <div>
-            <span>Dernière heure</span>
-            <strong>
-              {passAccess.quota.hour.remaining} / {passAccess.quota.hour.limit}
-            </strong>
-          </div>
-          <div>
-            <span>Dernières 24 h</span>
-            <strong>
-              {passAccess.quota.day.remaining} / {passAccess.quota.day.limit}
-            </strong>
-          </div>
-        </div>
-        <div className={`auto-sync-box ${data.sync.enabled ? "is-enabled" : ""}`}>
-          <div className="auto-sync-heading">
-            <span>
-              <CalendarClock size={18} />
-            </span>
-            <div>
-              <strong>Actualisation automatique</strong>
-              <small>
-                {data.sync.enabled ? `Base choisie : ${data.sync.interval_hours} h` : "Désactivée par défaut"}
-              </small>
-            </div>
-            <label className="switch">
-              <input
-                type="checkbox"
-                aria-label="Actualisation automatique"
-                checked={data.sync.enabled}
-                disabled={!isPrimaryOwner || autoSyncMutation.isPending}
-                onChange={(event) => (event.target.checked ? setAutoSyncConsentOpen(true) : updateAuto(false))}
-              />
-              <i />
-            </label>
-          </div>
-          <label className="auto-sync-frequency">
-            Fréquence de base
-            <select
-              value={autoSyncInterval}
-              onChange={(event) => {
-                const interval = Number(event.target.value) as Interval;
-                setAutoSyncInterval(interval);
-                if (data.sync.enabled) updateAuto(true, interval);
-              }}
-              disabled={!isPrimaryOwner || autoSyncMutation.isPending}
-            >
-              {data.sync.allowed_intervals.map((hours) => (
-                <option key={hours} value={hours}>
-                  {hours === 24 ? "Une fois par jour" : `Toutes les ${hours} heures`}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="adaptive-control">
-            <span>
-              <Zap size={16} />
-              <span>
-                <strong>Cadence adaptative</strong>
-                <small>Ralentit après trois passages sans nouvelle note.</small>
-              </span>
-            </span>
-            <input
-              type="checkbox"
-              checked={adaptive}
-              disabled={!isPrimaryOwner}
-              onChange={(event) => {
-                setAdaptive(event.target.checked);
-                if (data.sync.enabled) updateAuto(true, autoSyncInterval, event.target.checked);
-              }}
-            />
-          </label>
-          {data.sync.enabled && (
-            <div className="adaptive-status">
-              <div>
-                <span>Cadence actuelle</span>
-                <strong>{data.sync.current_interval_hours} h</strong>
-              </div>
-              <div>
-                <span>Prochaine exécution</span>
-                <strong>{formatDate(data.sync.next_eligible_at)}</strong>
-              </div>
-            </div>
-          )}
-          <div className="auto-sync-window">
-            <Clock3 size={15} />
-            <span>
-              Du lundi au vendredi, de {data.sync.business_hours.start.replace(":", " h ")} à{" "}
-              {data.sync.business_hours.end.replace(":", " h ")}.
-            </span>
-          </div>
-        </div>
-        {data.sync.paused_reason === "reauth_required" && (
-          <div className="inline-warning">
-            <TriangleAlert size={16} /> L'actualisation automatique est en pause jusqu'au renouvellement de la session
-            IMT.
-          </div>
-        )}
-        <div className={`pass-session-summary state-${serviceSession.state}`}>
-          <span>
-            <LockKeyhole size={18} />
-          </span>
-          <div>
-            <strong>
-              {serviceSession.state === "active"
-                ? "Session PASS active"
-                : serviceSession.state === "owner_managed"
-                  ? "Synchronisation propriétaire autonome"
-                  : "Reconnexion IMT requise"}
-            </strong>
-            <small>
-              {serviceSession.state === "active"
-                ? `Dernière utilisation ${formatDate(serviceSession.last_used_at)} · limite locale ${formatDate(serviceSession.expires_at)}`
-                : serviceSession.state === "owner_managed"
-                  ? "Secret local privé, absent de la base et du dépôt"
-                  : "Aucun mot de passe IMT n'est conservé par IMTégrale"}
-            </small>
-          </div>
-          {isPrimaryOwner && (
-            <button className="secondary-button" type="button" onClick={() => setPassReconnectOpen(true)}>
-              <RefreshCw size={16} /> {serviceSession.reauth_required ? "Reconnecter" : "Renouveler"}
-            </button>
-          )}
-        </div>
-        {serviceSession.hub_state === "degraded" && (
-          <div className="settings-hint">
-            <Info size={14} /> PASS fonctionne, mais HUB COMPETENCES devra peut-être être rouvert lors de la prochaine
-            reconnexion.
-          </div>
-        )}
-      </section>
+      <SyncSettingsPanel data={data} dashboardAccount={dashboard.data?.account} isPrimaryOwner={isPrimaryOwner} />
 
       <section className="settings-panel passkey-settings">
         <header>
@@ -640,46 +405,6 @@ export function SettingsPage({ role, isPrimaryOwner }: { role: Role; isPrimaryOw
       </section>
 
       <Modal
-        open={autoSyncConsentOpen}
-        title="Autoriser l'actualisation automatique"
-        description="Cette autorisation est facultative et révocable à tout moment."
-        onClose={() => setAutoSyncConsentOpen(false)}
-        size="small"
-      >
-        <div className="auto-sync-consent">
-          <span>
-            <CalendarClock size={21} />
-          </span>
-          <div>
-            <strong>Accès planifié à PASS</strong>
-            <p>
-              Fréquence de base : {autoSyncInterval} heures, du lundi au vendredi entre 8 h et 20 h. La cadence
-              adaptative est {adaptive ? "activée" : "désactivée"}.
-            </p>
-          </div>
-        </div>
-        <div className="privacy-note">
-          <ShieldCheck size={16} />
-          <span>
-            Le mot de passe IMT n'est jamais conservé. La session technique chiffrée peut expirer avant sa limite de 30
-            jours ; l'automatisation se met alors en pause.
-          </span>
-        </div>
-        <footer className="modal-actions">
-          <button className="secondary-button" type="button" onClick={() => setAutoSyncConsentOpen(false)}>
-            Annuler
-          </button>
-          <button
-            className="primary-button"
-            type="button"
-            onClick={() => updateAuto(true)}
-            disabled={autoSyncMutation.isPending}
-          >
-            {autoSyncMutation.isPending ? <span className="spinner" /> : <CheckCircle2 size={17} />} Autoriser
-          </button>
-        </footer>
-      </Modal>
-      <Modal
         open={telegramGuideOpen}
         title="Configurer les notifications Telegram"
         description="Quatre étapes pour relier un bot privé à IMTégrale."
@@ -751,12 +476,6 @@ export function SettingsPage({ role, isPrimaryOwner }: { role: Role; isPrimaryOw
           </button>
         </footer>
       </Modal>
-      <PassReconnectModal
-        open={passReconnectOpen}
-        identifier={data.account.imt_username}
-        onClose={() => setPassReconnectOpen(false)}
-        onRenewed={refresh}
-      />
     </div>
   );
 }

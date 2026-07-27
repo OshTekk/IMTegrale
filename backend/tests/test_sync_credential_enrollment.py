@@ -4,10 +4,11 @@ import json
 import os
 from contextlib import contextmanager
 from dataclasses import replace
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
-from app.config import Settings, get_settings
+from app.config import AutonomousSyncRollout, Settings, get_settings
 from app.crypto import (
     EnvelopePurpose,
     ImtSyncCredentialContext,
@@ -44,8 +45,10 @@ from app.services.imt_sync_credential_crypto import (
     load_web_imt_sync_credential_sealer,
 )
 from app.services.login_rate_limits import check_login_limits
+from app.services.operations import record_runtime_heartbeat
 from app.services.pass_gateway import GatewayResult
 from app.services.pass_session_crypto import PASS_SESSION_PUBLIC_CREDENTIAL
+from app.services.worker_runtime import ISOLATED_SYNC_RUNTIME_DETAILS
 from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
@@ -147,7 +150,26 @@ def _install_session(
 
 @contextmanager
 def _enrollment_enabled(client: TestClient):
-    settings = get_settings().model_copy(update={"autonomous_sync_enrollment_enabled": True})
+    with SessionLocal() as db:
+        account_id = db.scalar(select(Account.id))
+        assert account_id is not None
+        record_runtime_heartbeat(
+            db,
+            component="sync",
+            instance_id="sync:synthetic:g7a",
+            state="ok",
+            started_at=datetime(2026, 7, 27, 8, 0, tzinfo=UTC),
+            details=ISOLATED_SYNC_RUNTIME_DETAILS,
+        )
+        db.commit()
+    settings = get_settings().model_copy(
+        update={
+            "autonomous_sync_enabled": True,
+            "autonomous_sync_enrollment_enabled": True,
+            "autonomous_sync_rollout": AutonomousSyncRollout.CANARY,
+            "autonomous_sync_canary_account_ids": [account_id],
+        }
+    )
     private_key = RecipientPrivateKey.from_raw_bytes(b"\x35" * 32)
     original_sealer = client.app.state.imt_sync_credential_sealer
     client.app.state.imt_sync_credential_sealer = ImtSyncCredentialSealer(private_key.public_key)
@@ -233,7 +255,7 @@ def test_enrollment_flag_is_closed_in_production() -> None:
     )
     with pytest.raises(
         ValidationError,
-        match="AUTONOMOUS_SYNC_ENROLLMENT_NOT_ACTIVATABLE_IN_G5",
+        match="AUTONOMOUS_SYNC_ROLLOUT_CONFIGURATION_INVALID",
     ):
         Settings(
             _env_file=None,
@@ -832,6 +854,8 @@ def test_shared_sessions_cannot_mutate_or_observe_credential(
         assert settings_response.json()["sync"]["autonomous"] == {
             "available": False,
             "enrollment_available": False,
+            "runtime_ready": False,
+            "unavailable_reason": "unavailable",
             "configured": False,
             "state": None,
             "activation_pending": False,
