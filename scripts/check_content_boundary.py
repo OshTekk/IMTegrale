@@ -38,6 +38,28 @@ FORBIDDEN_INDEX_MODES = {"120000": "TRACKED_SYMLINK", "160000": "TRACKED_GITLINK
 FORBIDDEN_PATH_SEGMENTS = frozenset({"private", "content", "contents", "release", "releases"})
 PRIVATE_NAME_TOKENS = frozenset({"private"})
 
+# These paths implement the public, bilateral "private comparisons" feature.
+# Exact raw-path matching keeps the exception narrow: aliases, case changes,
+# suffixes and nested files remain denied, while content rules still apply.
+PUBLIC_PRIVATE_COMPARISON_PATH_ALLOWLIST = frozenset(
+    {
+        "backend/alembic/versions/0029_private_comparisons.py",
+        "backend/app/private_comparison_contract.py",
+        "backend/app/routers/private_comparisons.py",
+        "backend/app/services/private_comparisons.py",
+        "backend/postgres_tests/test_private_comparisons.py",
+        "backend/tests/test_private_comparison_constraints.py",
+        "backend/tests/test_private_comparisons.py",
+        "backend/tests/test_private_comparisons_migration.py",
+        "docs/private-comparisons.md",
+        "docs/security/private-comparisons-threat-model.md",
+        "frontend/src/lib/privateComparisonsGenerated.test.ts",
+        "app/private_comparison_contract.py",
+        "app/routers/private_comparisons.py",
+        "app/services/private_comparisons.py",
+    }
+)
+
 LEARNING_NAME_TOKENS = frozenset(
     {
         "bundle",
@@ -256,7 +278,7 @@ def normalize_repo_path(raw_path: str) -> tuple[str | None, tuple[str, ...]]:
         any(segment in FORBIDDEN_PATH_SEGMENTS for segment in segments)
         or directory_tokens.intersection(FORBIDDEN_PATH_SEGMENTS)
         or private_name
-    ):
+    ) and raw_path not in PUBLIC_PRIVATE_COMPARISON_PATH_ALLOWLIST:
         rules.add("PRIVATE_PATH_TRACKED")
     if normalized in STATIC_ASSET_ALLOWLIST and raw_path != normalized:
         rules.add("STATIC_ALLOWLIST_PATH_MISMATCH")

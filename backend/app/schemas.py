@@ -11,6 +11,11 @@ from app.imt_sync_credential_contract import (
     IMT_SYNC_CREDENTIAL_PASSWORD_MAX_BYTES,
     IMT_SYNC_CREDENTIAL_PASSWORD_MAX_CHARACTERS,
 )
+from app.private_comparison_contract import (
+    PRIVATE_COMPARISON_CONSENT_VERSION,
+    PRIVATE_COMPARISON_MAX_DURATION_DAYS,
+    valid_private_comparison_token,
+)
 from app.sync_modes import SyncMode
 
 
@@ -143,6 +148,64 @@ class LeaderboardJoinRequest(BaseModel):
     consent_version: str = Field(min_length=1, max_length=32)
     acknowledge_visibility: Literal[True]
     acknowledge_wait: Literal[True]
+
+
+class PrivateComparisonConsentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    consent_version: int
+    acknowledge_identity_visibility: Literal[True]
+    acknowledge_academic_scope: Literal[True]
+    acknowledge_copy_risk: Literal[True]
+
+    @field_validator("consent_version")
+    @classmethod
+    def validate_consent_version(cls, value: int) -> int:
+        if value != PRIVATE_COMPARISON_CONSENT_VERSION:
+            raise ValueError("Version de consentement non prise en charge")
+        return value
+
+
+class PrivateComparisonInvitationCreate(PrivateComparisonConsentRequest):
+    duration_days: int = Field(default=30, ge=1, le=PRIVATE_COMPARISON_MAX_DURATION_DAYS)
+
+
+class PrivateComparisonInvitationTokenRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    token: SecretStr = Field(
+        json_schema_extra={
+            "writeOnly": True,
+            "minLength": 50,
+            "maxLength": 50,
+            "pattern": r"^pcinv1_[A-Za-z0-9_-]{43}$",
+        },
+    )
+
+    @field_validator("token")
+    @classmethod
+    def validate_token(cls, value: SecretStr) -> SecretStr:
+        if not valid_private_comparison_token(value.get_secret_value()):
+            raise ValueError("Invitation invalide")
+        return value
+
+
+class PrivateComparisonInvitationAccept(PrivateComparisonConsentRequest):
+    token: SecretStr = Field(
+        json_schema_extra={
+            "writeOnly": True,
+            "minLength": 50,
+            "maxLength": 50,
+            "pattern": r"^pcinv1_[A-Za-z0-9_-]{43}$",
+        },
+    )
+
+    @field_validator("token")
+    @classmethod
+    def validate_token(cls, value: SecretStr) -> SecretStr:
+        if not valid_private_comparison_token(value.get_secret_value()):
+            raise ValueError("Invitation invalide")
+        return value
 
 
 class ApiMessage(BaseModel):

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from sqlalchemy import func, select, text
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
@@ -24,6 +24,8 @@ from app.models import (
     PassOperation,
     PassServiceSession,
     PassSystemState,
+    PrivateComparison,
+    PrivateComparisonInvitation,
     RuntimeHeartbeat,
 )
 from app.observability import runtime_metrics
@@ -31,7 +33,7 @@ from app.pass_session_contract import PASS_SERVICE_SESSION_ENVELOPE_BYTES
 from app.services.autonomous_sync_availability import autonomous_runtime_status
 from app.services.sync_control import ensure_utc
 
-EXPECTED_DATABASE_REVISION = "0028"
+EXPECTED_DATABASE_REVISION = "0029"
 REQUIRED_RUNTIME_COMPONENTS = ("scheduler", "sync", "calendar", "outbox")
 ISOLATED_SYNC_PROFILE = {
     "runtime_profile": "isolated-sync-v3",
@@ -189,6 +191,79 @@ def _queue_rows(db: Session, now) -> list[dict]:  # noqa: ANN001
     return rows
 
 
+def _private_comparison_metrics(db: Session, settings: Settings, now) -> dict:  # noqa: ANN001
+    invitation_total = int(db.scalar(select(func.count(PrivateComparisonInvitation.id))) or 0)
+    relation_total = int(db.scalar(select(func.count(PrivateComparison.id))) or 0)
+    active_invitations = int(
+        db.scalar(
+            select(func.count(PrivateComparisonInvitation.id)).where(
+                PrivateComparisonInvitation.consumed_at.is_(None),
+                PrivateComparisonInvitation.revoked_at.is_(None),
+                PrivateComparisonInvitation.expires_at > now,
+            )
+        )
+        or 0
+    )
+    active_relations = int(
+        db.scalar(
+            select(func.count(PrivateComparison.id)).where(
+                PrivateComparison.revoked_at.is_(None),
+                PrivateComparison.expires_at > now,
+            )
+        )
+        or 0
+    )
+    inconsistent_invitations = int(
+        db.scalar(
+            select(func.count(PrivateComparisonInvitation.id)).where(
+                or_(
+                    PrivateComparisonInvitation.consumed_at.is_(None)
+                    != PrivateComparisonInvitation.consumed_by_account_id.is_(None),
+                    (
+                        PrivateComparisonInvitation.revoked_at.is_(None)
+                        != PrivateComparisonInvitation.revoked_reason.is_(None)
+                    ),
+                    (
+                        PrivateComparisonInvitation.consumed_at.is_not(None)
+                        & PrivateComparisonInvitation.revoked_at.is_not(None)
+                    ),
+                )
+            )
+        )
+        or 0
+    )
+    inconsistent_relations = int(
+        db.scalar(
+            select(func.count(PrivateComparison.id)).where(
+                or_(
+                    PrivateComparison.account_a_id >= PrivateComparison.account_b_id,
+                    PrivateComparison.account_a_consented_at.is_(None),
+                    PrivateComparison.account_b_consented_at.is_(None),
+                    PrivateComparison.activated_at.is_(None),
+                    (
+                        PrivateComparison.revoked_at.is_(None)
+                        != PrivateComparison.revoked_by_account_id.is_(None)
+                    ),
+                    (
+                        PrivateComparison.revoked_at.is_(None)
+                        != PrivateComparison.revoked_reason.is_(None)
+                    ),
+                )
+            )
+        )
+        or 0
+    )
+    return {
+        "enabled": settings.private_comparisons_enabled,
+        "invitations_total": invitation_total,
+        "active_invitations": active_invitations,
+        "relations_total": relation_total,
+        "active_relations": active_relations,
+        "inconsistent_invitations": inconsistent_invitations,
+        "inconsistent_relations": inconsistent_relations,
+    }
+
+
 def operations_metrics(db: Session, settings: Settings) -> dict:
     now = utcnow()
     cutoff = now - timedelta(hours=24)
@@ -251,6 +326,7 @@ def operations_metrics(db: Session, settings: Settings) -> dict:
             "attempts_24h": sum(calendar_counts.values()),
             "errors_24h": calendar_counts.get("invalid", 0) + calendar_counts.get("upstream", 0),
         },
+        "private_comparisons": _private_comparison_metrics(db, settings, now),
     }
 
 
@@ -422,6 +498,25 @@ def operational_alert_codes(db: Session, settings: Settings) -> list[str]:
         )
     ):
         alerts.add("AUTONOMOUS_SYNC_CREDENTIAL_KEY_UNAVAILABLE")
+    comparison_metrics = metrics.get(
+        "private_comparisons",
+        {
+            "enabled": False,
+            "invitations_total": 0,
+            "relations_total": 0,
+            "inconsistent_invitations": 0,
+            "inconsistent_relations": 0,
+        },
+    )
+    if (
+        comparison_metrics["inconsistent_invitations"]
+        or comparison_metrics["inconsistent_relations"]
+    ):
+        alerts.add("PRIVATE_COMPARISON_DATA_INCONSISTENT")
+    if not comparison_metrics["enabled"] and (
+        comparison_metrics["invitations_total"] or comparison_metrics["relations_total"]
+    ):
+        alerts.add("PRIVATE_COMPARISON_DATA_WHILE_DISABLED")
     for queue in metrics["queues"]:
         name = str(queue["name"]).upper()
         if queue["dead_letter"]:

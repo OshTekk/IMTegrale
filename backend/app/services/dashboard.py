@@ -34,6 +34,7 @@ OWNER_ONLY_EVENT_PREFIXES = (
     "account:",
     "auth:",
     "leaderboard:",
+    "private_comparison:",
     "simulation:",
     "telegram:",
     "token:",

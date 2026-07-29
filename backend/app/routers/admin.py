@@ -110,6 +110,9 @@ from app.services.pass_sessions import (
     service_session_admin_rows,
     service_session_view,
 )
+from app.services.private_comparisons import (
+    lock_private_comparison_invitations_for_account_deletion,
+)
 from app.services.sync import SyncAlreadyRunning, account_sync_lock
 from app.services.sync_control import (
     InvalidIdempotencyKey,
@@ -1156,6 +1159,7 @@ def delete_account(
     account_snapshot = {"id": account.id, "display_name": account.display_name}
     try:
         with account_sync_lock(account.id):
+            lock_private_comparison_invitations_for_account_deletion(db, account.id)
             purge_account_service_sessions(db, account.id, reason="account_deleted")
             record_admin_audit(
                 db,

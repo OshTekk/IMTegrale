@@ -107,6 +107,50 @@ def test_index_path_bypasses_are_rejected(tmp_path: Path, relative_path: str, ex
 
 
 @pytest.mark.parametrize(
+    "relative_path",
+    [
+        "backend/app/private_comparison_contract.py",
+        "backend/app/routers/private_comparisons.py",
+        "backend/app/services/private_comparisons.py",
+        "docs/private-comparisons.md",
+        "docs/security/private-comparisons-threat-model.md",
+        "frontend/src/lib/privateComparisonsGenerated.test.ts",
+    ],
+)
+def test_public_private_comparison_paths_are_narrowly_allowlisted(
+    tmp_path: Path,
+    relative_path: str,
+) -> None:
+    repo = _repository(tmp_path)
+    _stage(repo, relative_path, b"PUBLIC_PRIVATE_COMPARISON = True\n")
+
+    result = scan_repository(repo)
+
+    assert result.ok, format_result(result)
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "backend/app/services/Private_Comparisons.py",
+        "backend/app/services/private_comparisons.py.bak",
+        "backend/app/services/private_comparisons/notes.py",
+        "docs/private-comparisons/notes.md",
+    ],
+)
+def test_private_comparison_path_allowlist_rejects_nearby_paths(
+    tmp_path: Path,
+    relative_path: str,
+) -> None:
+    repo = _repository(tmp_path)
+    _stage(repo, relative_path)
+
+    result = scan_repository(repo)
+
+    assert result.violations["PRIVATE_PATH_TRACKED"] == 1
+
+
+@pytest.mark.parametrize(
     ("header", "expected_rule"),
     [
         (b"%PDF-1.7\n", "MAGIC_PDF"),
@@ -236,10 +280,7 @@ def test_plain_text_containing_a_bzip_mnemonic_is_not_an_archive(tmp_path: Path)
 
 def test_git_lfs_pointer_is_rejected_even_under_an_opaque_name(tmp_path: Path):
     repo = _repository(tmp_path)
-    payload = (
-        b"version https://git-lfs.github.com/spec/v1\n"
-        b"oid sha256:" + b"a" * 64 + b"\nsize 42\n"
-    )
+    payload = b"version https://git-lfs.github.com/spec/v1\noid sha256:" + b"a" * 64 + b"\nsize 42\n"
     _stage(repo, "assets/opaque.bin", payload)
 
     result = scan_repository(repo)
@@ -635,3 +676,17 @@ def test_safe_wheel_passes(tmp_path: Path):
 
     assert result.ok, format_result(result)
     assert result.artifact_files == 2
+
+
+def test_public_private_comparison_wheel_modules_are_narrowly_allowlisted(tmp_path: Path) -> None:
+    wheel = tmp_path / "package.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr("app/private_comparison_contract.py", b"SYNTHETIC = True\n")
+        archive.writestr("app/routers/private_comparisons.py", b"SYNTHETIC = True\n")
+        archive.writestr("app/services/private_comparisons.py", b"SYNTHETIC = True\n")
+        archive.writestr("app/services/private_comparisons.py.bak", b"SYNTHETIC = True\n")
+
+    result = scan_wheel(wheel)
+
+    assert result.violations["PRIVATE_PATH_TRACKED"] == 1
+    assert result.artifact_files == 4

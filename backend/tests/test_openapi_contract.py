@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from app.main import app
 from fastapi.testclient import TestClient
 
@@ -88,3 +90,30 @@ def test_body_limit_uses_the_same_stable_error_contract(client: TestClient) -> N
         }
     }
     assert sentinel not in response.text
+
+
+def test_private_comparison_token_is_limited_to_one_shot_and_post_bodies() -> None:
+    document = app.openapi()
+    schemas = document["components"]["schemas"]
+    created = schemas["PrivateComparisonInvitationCreatedResponse"]
+    invitation_list = schemas["PrivateComparisonInvitationResponse"]
+    comparison_list = schemas["PrivateComparisonRelationResponse"]
+    detail = schemas["PrivateComparisonDetailResponse"]
+
+    assert "token" in created["required"]
+    assert created["properties"]["token"]["pattern"] == r"^pcinv1_[A-Za-z0-9_-]{43}$"
+    assert "writeOnly" not in created["properties"]["token"]
+    assert "token" not in invitation_list["properties"]
+    assert "token" not in comparison_list["properties"]
+    assert "token" not in detail["properties"]
+    assert "token_digest" not in json.dumps(document)
+
+    for request_schema in (
+        "PrivateComparisonInvitationAccept",
+        "PrivateComparisonInvitationTokenRequest",
+    ):
+        token = schemas[request_schema]["properties"]["token"]
+        assert token["writeOnly"] is True
+        assert token["pattern"] == r"^pcinv1_[A-Za-z0-9_-]{43}$"
+
+    assert "token" not in schemas["PrivateComparisonInvitationCreate"]["properties"]

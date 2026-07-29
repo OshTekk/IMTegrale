@@ -830,6 +830,7 @@ export type AdminOperationsMetricsResponse = {
     generated_at: string;
     http: AdminHttpRuntimeMetricsResponse;
     pass: AdminPassOperationalMetricsResponse;
+    private_comparisons: AdminPrivateComparisonMetricsResponse;
     /**
      * Queues
      */
@@ -1040,6 +1041,40 @@ export type AdminPasswordChange = {
      * New Password
      */
     new_password: string;
+};
+
+/**
+ * AdminPrivateComparisonMetricsResponse
+ */
+export type AdminPrivateComparisonMetricsResponse = {
+    /**
+     * Active Invitations
+     */
+    active_invitations: number;
+    /**
+     * Active Relations
+     */
+    active_relations: number;
+    /**
+     * Enabled
+     */
+    enabled: boolean;
+    /**
+     * Inconsistent Invitations
+     */
+    inconsistent_invitations: number;
+    /**
+     * Inconsistent Relations
+     */
+    inconsistent_relations: number;
+    /**
+     * Invitations Total
+     */
+    invitations_total: number;
+    /**
+     * Relations Total
+     */
+    relations_total: number;
 };
 
 /**
@@ -4034,6 +4069,374 @@ export type PasskeyResponse = {
 };
 
 /**
+ * PrivateComparisonCommonUeResponse
+ */
+export type PrivateComparisonCommonUeResponse = {
+    current: PrivateComparisonUeSideResponse;
+    /**
+     * Official Code
+     */
+    official_code: string;
+    other: PrivateComparisonUeSideResponse;
+};
+
+/**
+ * PrivateComparisonDetailResponse
+ */
+export type PrivateComparisonDetailResponse = {
+    /**
+     * Activated At
+     */
+    activated_at: string;
+    /**
+     * Calculated At
+     */
+    calculated_at: string;
+    /**
+     * Common Ues
+     */
+    common_ues: Array<PrivateComparisonCommonUeResponse>;
+    /**
+     * Consent Version
+     */
+    consent_version: number;
+    current: PrivateComparisonParticipantResponse;
+    /**
+     * Expires At
+     */
+    expires_at: string;
+    other: PrivateComparisonParticipantResponse;
+    /**
+     * Public Id
+     */
+    public_id: string;
+    /**
+     * Status
+     */
+    status: 'active';
+};
+
+/**
+ * PrivateComparisonInvitationAccept
+ */
+export type PrivateComparisonInvitationAccept = {
+    /**
+     * Acknowledge Academic Scope
+     */
+    acknowledge_academic_scope: true;
+    /**
+     * Acknowledge Copy Risk
+     */
+    acknowledge_copy_risk: true;
+    /**
+     * Acknowledge Identity Visibility
+     */
+    acknowledge_identity_visibility: true;
+    /**
+     * Consent Version
+     */
+    consent_version: number;
+};
+
+/**
+ * PrivateComparisonInvitationCreate
+ */
+export type PrivateComparisonInvitationCreate = {
+    /**
+     * Acknowledge Academic Scope
+     */
+    acknowledge_academic_scope: true;
+    /**
+     * Acknowledge Copy Risk
+     */
+    acknowledge_copy_risk: true;
+    /**
+     * Acknowledge Identity Visibility
+     */
+    acknowledge_identity_visibility: true;
+    /**
+     * Consent Version
+     */
+    consent_version: number;
+    /**
+     * Duration Days
+     */
+    duration_days?: number;
+};
+
+/**
+ * PrivateComparisonInvitationCreatedResponse
+ */
+export type PrivateComparisonInvitationCreatedResponse = {
+    /**
+     * Consent Version
+     */
+    consent_version: number;
+    /**
+     * Expires At
+     */
+    expires_at: string;
+    /**
+     * Public Id
+     */
+    public_id: string;
+    /**
+     * Relationship Duration Days
+     */
+    relationship_duration_days: number;
+    scope: PrivateComparisonScopeResponse;
+    /**
+     * Token
+     */
+    token: string;
+};
+
+/**
+ * PrivateComparisonInvitationListResponse
+ */
+export type PrivateComparisonInvitationListResponse = {
+    /**
+     * Invitations
+     */
+    invitations: Array<PrivateComparisonInvitationResponse>;
+};
+
+/**
+ * PrivateComparisonInvitationPreviewResponse
+ */
+export type PrivateComparisonInvitationPreviewResponse = {
+    /**
+     * Consent Version
+     */
+    consent_version: number;
+    creator: PrivateComparisonOfficialIdentityResponse;
+    /**
+     * Expires At
+     */
+    expires_at: string;
+    /**
+     * Relationship Duration Days
+     */
+    relationship_duration_days: number;
+    scope: PrivateComparisonScopeResponse;
+};
+
+/**
+ * PrivateComparisonInvitationResponse
+ */
+export type PrivateComparisonInvitationResponse = {
+    /**
+     * Created At
+     */
+    created_at: string;
+    /**
+     * Expires At
+     */
+    expires_at: string;
+    /**
+     * Public Id
+     */
+    public_id: string;
+    /**
+     * Relationship Duration Days
+     */
+    relationship_duration_days: number;
+    /**
+     * Status
+     */
+    status: 'active' | 'consumed' | 'expired' | 'revoked';
+};
+
+/**
+ * PrivateComparisonInvitationTokenRequest
+ */
+export type PrivateComparisonInvitationTokenRequest = {
+    /**
+     * Token
+     */
+    token: string;
+};
+
+/**
+ * PrivateComparisonListResponse
+ */
+export type PrivateComparisonListResponse = {
+    /**
+     * Comparisons
+     */
+    comparisons: Array<PrivateComparisonRelationResponse>;
+};
+
+/**
+ * PrivateComparisonOfficialIdentityResponse
+ */
+export type PrivateComparisonOfficialIdentityResponse = {
+    /**
+     * Official Name
+     */
+    official_name: string;
+};
+
+/**
+ * PrivateComparisonParticipantResponse
+ */
+export type PrivateComparisonParticipantResponse = {
+    identity: PrivateComparisonOfficialIdentityResponse;
+    summary: PrivateComparisonSummaryResponse;
+};
+
+/**
+ * PrivateComparisonRelationResponse
+ */
+export type PrivateComparisonRelationResponse = {
+    /**
+     * Academic Verified At
+     */
+    academic_verified_at: string | null;
+    /**
+     * Activated At
+     */
+    activated_at: string;
+    /**
+     * Expires At
+     */
+    expires_at: string;
+    /**
+     * Freshness
+     */
+    freshness: 'current' | 'recommended' | 'stale';
+    other_participant: PrivateComparisonOfficialIdentityResponse;
+    /**
+     * Public Id
+     */
+    public_id: string;
+    /**
+     * Status
+     */
+    status: 'active' | 'expired' | 'revoked';
+};
+
+/**
+ * PrivateComparisonScopeResponse
+ */
+export type PrivateComparisonScopeResponse = {
+    /**
+     * Common Ues
+     */
+    common_ues: true;
+    /**
+     * Detailed Assessments
+     */
+    detailed_assessments: false;
+    /**
+     * General Summary
+     */
+    general_summary: true;
+    /**
+     * Leaderboard
+     */
+    leaderboard: false;
+    /**
+     * Official Identity
+     */
+    official_identity: true;
+    /**
+     * Published
+     */
+    published: false;
+    /**
+     * Simulations
+     */
+    simulations: false;
+};
+
+/**
+ * PrivateComparisonSummaryResponse
+ */
+export type PrivateComparisonSummaryResponse = {
+    /**
+     * Academic Verified At
+     */
+    academic_verified_at: string | null;
+    /**
+     * Average
+     */
+    average: number | null;
+    /**
+     * Freshness
+     */
+    freshness: 'current' | 'recommended' | 'stale';
+    /**
+     * Gpa
+     */
+    gpa: number | null;
+    /**
+     * Grade Distribution
+     */
+    grade_distribution: {
+        [key: string]: number;
+    };
+    /**
+     * Ue Count
+     */
+    ue_count: number;
+    /**
+     * Validated Ects
+     */
+    validated_ects: number;
+};
+
+/**
+ * PrivateComparisonUeSideResponse
+ */
+export type PrivateComparisonUeSideResponse = {
+    /**
+     * Allocated Ects
+     */
+    allocated_ects: number | null;
+    /**
+     * Average
+     */
+    average: number | null;
+    /**
+     * Earned Ects
+     */
+    earned_ects: number | null;
+    /**
+     * Freshness
+     */
+    freshness: 'current' | 'recommended' | 'stale';
+    /**
+     * Gpa
+     */
+    gpa: number | null;
+    /**
+     * Grade
+     */
+    grade: 'A' | 'B' | 'C' | 'D' | 'E' | 'FX' | 'F' | null;
+    /**
+     * Semester
+     */
+    semester: 'S5' | 'S6' | 'S7' | 'S8' | 'S9' | 'S10' | null;
+    /**
+     * Title
+     */
+    title: string;
+    /**
+     * Validated
+     */
+    validated: boolean;
+    /**
+     * Verified At
+     */
+    verified_at: string | null;
+    /**
+     * Year
+     */
+    year: string;
+};
+
+/**
  * ServiceSessionResponse
  */
 export type ServiceSessionResponse = {
@@ -5069,6 +5472,32 @@ export type WebAuthnOptionsResponse = {
     publicKey: {
         [key: string]: unknown;
     };
+};
+
+/**
+ * PrivateComparisonInvitationAccept
+ */
+export type PrivateComparisonInvitationAcceptWritable = {
+    /**
+     * Acknowledge Academic Scope
+     */
+    acknowledge_academic_scope: true;
+    /**
+     * Acknowledge Copy Risk
+     */
+    acknowledge_copy_risk: true;
+    /**
+     * Acknowledge Identity Visibility
+     */
+    acknowledge_identity_visibility: true;
+    /**
+     * Consent Version
+     */
+    consent_version: number;
+    /**
+     * Token
+     */
+    token: string;
 };
 
 /**
@@ -9742,6 +10171,534 @@ export type NotesListNotesResponses = {
 };
 
 export type NotesListNotesResponse = NotesListNotesResponses[keyof NotesListNotesResponses];
+
+export type PrivateComparisonsGetPrivateComparisonsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/private-comparisons';
+};
+
+export type PrivateComparisonsGetPrivateComparisonsErrors = {
+    /**
+     * Requête refusée
+     */
+    400: ApiErrorEnvelope;
+    /**
+     * Authentification requise
+     */
+    401: ApiErrorEnvelope;
+    /**
+     * Action interdite
+     */
+    403: ApiErrorEnvelope;
+    /**
+     * Ressource introuvable
+     */
+    404: ApiErrorEnvelope;
+    /**
+     * Conflit d'état
+     */
+    409: ApiErrorEnvelope;
+    /**
+     * Requête trop volumineuse
+     */
+    413: ApiErrorEnvelope;
+    /**
+     * Validation impossible
+     */
+    422: ApiErrorEnvelope;
+    /**
+     * Limite temporaire atteinte
+     */
+    429: ApiErrorEnvelope;
+    /**
+     * Service temporairement indisponible
+     */
+    503: ApiErrorEnvelope;
+};
+
+export type PrivateComparisonsGetPrivateComparisonsError = PrivateComparisonsGetPrivateComparisonsErrors[keyof PrivateComparisonsGetPrivateComparisonsErrors];
+
+export type PrivateComparisonsGetPrivateComparisonsResponses = {
+    /**
+     * Successful Response
+     */
+    200: PrivateComparisonListResponse;
+};
+
+export type PrivateComparisonsGetPrivateComparisonsResponse = PrivateComparisonsGetPrivateComparisonsResponses[keyof PrivateComparisonsGetPrivateComparisonsResponses];
+
+export type PrivateComparisonsGetPrivateComparisonInvitationsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/private-comparisons/invitations';
+};
+
+export type PrivateComparisonsGetPrivateComparisonInvitationsErrors = {
+    /**
+     * Requête refusée
+     */
+    400: ApiErrorEnvelope;
+    /**
+     * Authentification requise
+     */
+    401: ApiErrorEnvelope;
+    /**
+     * Action interdite
+     */
+    403: ApiErrorEnvelope;
+    /**
+     * Ressource introuvable
+     */
+    404: ApiErrorEnvelope;
+    /**
+     * Conflit d'état
+     */
+    409: ApiErrorEnvelope;
+    /**
+     * Requête trop volumineuse
+     */
+    413: ApiErrorEnvelope;
+    /**
+     * Validation impossible
+     */
+    422: ApiErrorEnvelope;
+    /**
+     * Limite temporaire atteinte
+     */
+    429: ApiErrorEnvelope;
+    /**
+     * Service temporairement indisponible
+     */
+    503: ApiErrorEnvelope;
+};
+
+export type PrivateComparisonsGetPrivateComparisonInvitationsError = PrivateComparisonsGetPrivateComparisonInvitationsErrors[keyof PrivateComparisonsGetPrivateComparisonInvitationsErrors];
+
+export type PrivateComparisonsGetPrivateComparisonInvitationsResponses = {
+    /**
+     * Successful Response
+     */
+    200: PrivateComparisonInvitationListResponse;
+};
+
+export type PrivateComparisonsGetPrivateComparisonInvitationsResponse = PrivateComparisonsGetPrivateComparisonInvitationsResponses[keyof PrivateComparisonsGetPrivateComparisonInvitationsResponses];
+
+export type PrivateComparisonsCreatePrivateComparisonInvitationData = {
+    body: PrivateComparisonInvitationCreate;
+    path?: never;
+    query?: never;
+    url: '/api/v1/private-comparisons/invitations';
+};
+
+export type PrivateComparisonsCreatePrivateComparisonInvitationErrors = {
+    /**
+     * Requête refusée
+     */
+    400: ApiErrorEnvelope;
+    /**
+     * Authentification requise
+     */
+    401: ApiErrorEnvelope;
+    /**
+     * Action interdite
+     */
+    403: ApiErrorEnvelope;
+    /**
+     * Ressource introuvable
+     */
+    404: ApiErrorEnvelope;
+    /**
+     * Conflit d'état
+     */
+    409: ApiErrorEnvelope;
+    /**
+     * Requête trop volumineuse
+     */
+    413: ApiErrorEnvelope;
+    /**
+     * Validation impossible
+     */
+    422: ApiErrorEnvelope;
+    /**
+     * Limite temporaire atteinte
+     */
+    429: ApiErrorEnvelope;
+    /**
+     * Service temporairement indisponible
+     */
+    503: ApiErrorEnvelope;
+};
+
+export type PrivateComparisonsCreatePrivateComparisonInvitationError = PrivateComparisonsCreatePrivateComparisonInvitationErrors[keyof PrivateComparisonsCreatePrivateComparisonInvitationErrors];
+
+export type PrivateComparisonsCreatePrivateComparisonInvitationResponses = {
+    /**
+     * Successful Response
+     */
+    201: PrivateComparisonInvitationCreatedResponse;
+};
+
+export type PrivateComparisonsCreatePrivateComparisonInvitationResponse = PrivateComparisonsCreatePrivateComparisonInvitationResponses[keyof PrivateComparisonsCreatePrivateComparisonInvitationResponses];
+
+export type PrivateComparisonsAcceptPrivateComparisonInvitationData = {
+    body: PrivateComparisonInvitationAcceptWritable;
+    path?: never;
+    query?: never;
+    url: '/api/v1/private-comparisons/invitations/accept';
+};
+
+export type PrivateComparisonsAcceptPrivateComparisonInvitationErrors = {
+    /**
+     * Requête refusée
+     */
+    400: ApiErrorEnvelope;
+    /**
+     * Authentification requise
+     */
+    401: ApiErrorEnvelope;
+    /**
+     * Action interdite
+     */
+    403: ApiErrorEnvelope;
+    /**
+     * Ressource introuvable
+     */
+    404: ApiErrorEnvelope;
+    /**
+     * Conflit d'état
+     */
+    409: ApiErrorEnvelope;
+    /**
+     * Requête trop volumineuse
+     */
+    413: ApiErrorEnvelope;
+    /**
+     * Validation impossible
+     */
+    422: ApiErrorEnvelope;
+    /**
+     * Limite temporaire atteinte
+     */
+    429: ApiErrorEnvelope;
+    /**
+     * Service temporairement indisponible
+     */
+    503: ApiErrorEnvelope;
+};
+
+export type PrivateComparisonsAcceptPrivateComparisonInvitationError = PrivateComparisonsAcceptPrivateComparisonInvitationErrors[keyof PrivateComparisonsAcceptPrivateComparisonInvitationErrors];
+
+export type PrivateComparisonsAcceptPrivateComparisonInvitationResponses = {
+    /**
+     * Successful Response
+     */
+    201: PrivateComparisonRelationResponse;
+};
+
+export type PrivateComparisonsAcceptPrivateComparisonInvitationResponse = PrivateComparisonsAcceptPrivateComparisonInvitationResponses[keyof PrivateComparisonsAcceptPrivateComparisonInvitationResponses];
+
+export type PrivateComparisonsDeclinePrivateComparisonInvitationData = {
+    body: PrivateComparisonInvitationTokenRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/private-comparisons/invitations/decline';
+};
+
+export type PrivateComparisonsDeclinePrivateComparisonInvitationErrors = {
+    /**
+     * Requête refusée
+     */
+    400: ApiErrorEnvelope;
+    /**
+     * Authentification requise
+     */
+    401: ApiErrorEnvelope;
+    /**
+     * Action interdite
+     */
+    403: ApiErrorEnvelope;
+    /**
+     * Ressource introuvable
+     */
+    404: ApiErrorEnvelope;
+    /**
+     * Conflit d'état
+     */
+    409: ApiErrorEnvelope;
+    /**
+     * Requête trop volumineuse
+     */
+    413: ApiErrorEnvelope;
+    /**
+     * Validation impossible
+     */
+    422: ApiErrorEnvelope;
+    /**
+     * Limite temporaire atteinte
+     */
+    429: ApiErrorEnvelope;
+    /**
+     * Service temporairement indisponible
+     */
+    503: ApiErrorEnvelope;
+};
+
+export type PrivateComparisonsDeclinePrivateComparisonInvitationError = PrivateComparisonsDeclinePrivateComparisonInvitationErrors[keyof PrivateComparisonsDeclinePrivateComparisonInvitationErrors];
+
+export type PrivateComparisonsDeclinePrivateComparisonInvitationResponses = {
+    /**
+     * Successful Response
+     */
+    200: OkResponse;
+};
+
+export type PrivateComparisonsDeclinePrivateComparisonInvitationResponse = PrivateComparisonsDeclinePrivateComparisonInvitationResponses[keyof PrivateComparisonsDeclinePrivateComparisonInvitationResponses];
+
+export type PrivateComparisonsPreviewPrivateComparisonInvitationData = {
+    body: PrivateComparisonInvitationTokenRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/private-comparisons/invitations/preview';
+};
+
+export type PrivateComparisonsPreviewPrivateComparisonInvitationErrors = {
+    /**
+     * Requête refusée
+     */
+    400: ApiErrorEnvelope;
+    /**
+     * Authentification requise
+     */
+    401: ApiErrorEnvelope;
+    /**
+     * Action interdite
+     */
+    403: ApiErrorEnvelope;
+    /**
+     * Ressource introuvable
+     */
+    404: ApiErrorEnvelope;
+    /**
+     * Conflit d'état
+     */
+    409: ApiErrorEnvelope;
+    /**
+     * Requête trop volumineuse
+     */
+    413: ApiErrorEnvelope;
+    /**
+     * Validation impossible
+     */
+    422: ApiErrorEnvelope;
+    /**
+     * Limite temporaire atteinte
+     */
+    429: ApiErrorEnvelope;
+    /**
+     * Service temporairement indisponible
+     */
+    503: ApiErrorEnvelope;
+};
+
+export type PrivateComparisonsPreviewPrivateComparisonInvitationError = PrivateComparisonsPreviewPrivateComparisonInvitationErrors[keyof PrivateComparisonsPreviewPrivateComparisonInvitationErrors];
+
+export type PrivateComparisonsPreviewPrivateComparisonInvitationResponses = {
+    /**
+     * Successful Response
+     */
+    200: PrivateComparisonInvitationPreviewResponse;
+};
+
+export type PrivateComparisonsPreviewPrivateComparisonInvitationResponse = PrivateComparisonsPreviewPrivateComparisonInvitationResponses[keyof PrivateComparisonsPreviewPrivateComparisonInvitationResponses];
+
+export type PrivateComparisonsDeletePrivateComparisonInvitationData = {
+    body?: never;
+    path: {
+        /**
+         * Public Id
+         */
+        public_id: string;
+    };
+    query?: never;
+    url: '/api/v1/private-comparisons/invitations/{public_id}';
+};
+
+export type PrivateComparisonsDeletePrivateComparisonInvitationErrors = {
+    /**
+     * Requête refusée
+     */
+    400: ApiErrorEnvelope;
+    /**
+     * Authentification requise
+     */
+    401: ApiErrorEnvelope;
+    /**
+     * Action interdite
+     */
+    403: ApiErrorEnvelope;
+    /**
+     * Ressource introuvable
+     */
+    404: ApiErrorEnvelope;
+    /**
+     * Conflit d'état
+     */
+    409: ApiErrorEnvelope;
+    /**
+     * Requête trop volumineuse
+     */
+    413: ApiErrorEnvelope;
+    /**
+     * Validation impossible
+     */
+    422: ApiErrorEnvelope;
+    /**
+     * Limite temporaire atteinte
+     */
+    429: ApiErrorEnvelope;
+    /**
+     * Service temporairement indisponible
+     */
+    503: ApiErrorEnvelope;
+};
+
+export type PrivateComparisonsDeletePrivateComparisonInvitationError = PrivateComparisonsDeletePrivateComparisonInvitationErrors[keyof PrivateComparisonsDeletePrivateComparisonInvitationErrors];
+
+export type PrivateComparisonsDeletePrivateComparisonInvitationResponses = {
+    /**
+     * Successful Response
+     */
+    200: OkResponse;
+};
+
+export type PrivateComparisonsDeletePrivateComparisonInvitationResponse = PrivateComparisonsDeletePrivateComparisonInvitationResponses[keyof PrivateComparisonsDeletePrivateComparisonInvitationResponses];
+
+export type PrivateComparisonsDeletePrivateComparisonData = {
+    body?: never;
+    path: {
+        /**
+         * Public Id
+         */
+        public_id: string;
+    };
+    query?: never;
+    url: '/api/v1/private-comparisons/{public_id}';
+};
+
+export type PrivateComparisonsDeletePrivateComparisonErrors = {
+    /**
+     * Requête refusée
+     */
+    400: ApiErrorEnvelope;
+    /**
+     * Authentification requise
+     */
+    401: ApiErrorEnvelope;
+    /**
+     * Action interdite
+     */
+    403: ApiErrorEnvelope;
+    /**
+     * Ressource introuvable
+     */
+    404: ApiErrorEnvelope;
+    /**
+     * Conflit d'état
+     */
+    409: ApiErrorEnvelope;
+    /**
+     * Requête trop volumineuse
+     */
+    413: ApiErrorEnvelope;
+    /**
+     * Validation impossible
+     */
+    422: ApiErrorEnvelope;
+    /**
+     * Limite temporaire atteinte
+     */
+    429: ApiErrorEnvelope;
+    /**
+     * Service temporairement indisponible
+     */
+    503: ApiErrorEnvelope;
+};
+
+export type PrivateComparisonsDeletePrivateComparisonError = PrivateComparisonsDeletePrivateComparisonErrors[keyof PrivateComparisonsDeletePrivateComparisonErrors];
+
+export type PrivateComparisonsDeletePrivateComparisonResponses = {
+    /**
+     * Successful Response
+     */
+    200: OkResponse;
+};
+
+export type PrivateComparisonsDeletePrivateComparisonResponse = PrivateComparisonsDeletePrivateComparisonResponses[keyof PrivateComparisonsDeletePrivateComparisonResponses];
+
+export type PrivateComparisonsGetPrivateComparisonData = {
+    body?: never;
+    path: {
+        /**
+         * Public Id
+         */
+        public_id: string;
+    };
+    query?: never;
+    url: '/api/v1/private-comparisons/{public_id}';
+};
+
+export type PrivateComparisonsGetPrivateComparisonErrors = {
+    /**
+     * Requête refusée
+     */
+    400: ApiErrorEnvelope;
+    /**
+     * Authentification requise
+     */
+    401: ApiErrorEnvelope;
+    /**
+     * Action interdite
+     */
+    403: ApiErrorEnvelope;
+    /**
+     * Ressource introuvable
+     */
+    404: ApiErrorEnvelope;
+    /**
+     * Conflit d'état
+     */
+    409: ApiErrorEnvelope;
+    /**
+     * Requête trop volumineuse
+     */
+    413: ApiErrorEnvelope;
+    /**
+     * Validation impossible
+     */
+    422: ApiErrorEnvelope;
+    /**
+     * Limite temporaire atteinte
+     */
+    429: ApiErrorEnvelope;
+    /**
+     * Service temporairement indisponible
+     */
+    503: ApiErrorEnvelope;
+};
+
+export type PrivateComparisonsGetPrivateComparisonError = PrivateComparisonsGetPrivateComparisonErrors[keyof PrivateComparisonsGetPrivateComparisonErrors];
+
+export type PrivateComparisonsGetPrivateComparisonResponses = {
+    /**
+     * Successful Response
+     */
+    200: PrivateComparisonDetailResponse;
+};
+
+export type PrivateComparisonsGetPrivateComparisonResponse = PrivateComparisonsGetPrivateComparisonResponses[keyof PrivateComparisonsGetPrivateComparisonResponses];
 
 export type SettingsGetSettingsData = {
     body?: never;

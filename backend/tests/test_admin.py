@@ -115,10 +115,40 @@ def test_admin_operations_metrics_are_private_and_aggregate(client: TestClient) 
 
     assert response.status_code == 200
     payload = response.json()
-    assert set(payload) == {"generated_at", "http", "sse", "queues", "workers", "pass", "calendar"}
+    assert set(payload) == {
+        "generated_at",
+        "http",
+        "sse",
+        "queues",
+        "workers",
+        "pass",
+        "calendar",
+        "private_comparisons",
+    }
     assert [queue["name"] for queue in payload["queues"]] == ["sync", "calendar", "outbox"]
+    assert payload["private_comparisons"] == {
+        "enabled": False,
+        "invitations_total": 0,
+        "active_invitations": 0,
+        "relations_total": 0,
+        "active_relations": 0,
+        "inconsistent_invitations": 0,
+        "inconsistent_relations": 0,
+    }
     assert "account" not in response.text.casefold()
     assert '"url":' not in response.text.casefold()
+
+
+def test_admin_session_cannot_read_private_comparisons(
+    client: TestClient,
+    monkeypatch,
+) -> None:  # noqa: ANN001
+    monkeypatch.setattr(main_module.settings_config, "private_comparisons_enabled", True)
+    admin = ready_admin(client)
+
+    response = admin.get("/api/v1/private-comparisons")
+
+    assert response.status_code == 401
 
 
 def test_admin_portal_has_separate_session_and_immediate_account_controls(

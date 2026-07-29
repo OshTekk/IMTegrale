@@ -1570,6 +1570,9 @@
           "pass": {
             "$ref": "#/components/schemas/AdminPassOperationalMetricsResponse"
           },
+          "private_comparisons": {
+            "$ref": "#/components/schemas/AdminPrivateComparisonMetricsResponse"
+          },
           "queues": {
             "items": {
               "$ref": "#/components/schemas/AdminQueueMetricsResponse"
@@ -1595,7 +1598,8 @@
           "queues",
           "workers",
           "pass",
-          "calendar"
+          "calendar",
+          "private_comparisons"
         ],
         "title": "AdminOperationsMetricsResponse",
         "type": "object"
@@ -1966,6 +1970,50 @@
           "new_password"
         ],
         "title": "AdminPasswordChange",
+        "type": "object"
+      },
+      "AdminPrivateComparisonMetricsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "active_invitations": {
+            "title": "Active Invitations",
+            "type": "integer"
+          },
+          "active_relations": {
+            "title": "Active Relations",
+            "type": "integer"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "inconsistent_invitations": {
+            "title": "Inconsistent Invitations",
+            "type": "integer"
+          },
+          "inconsistent_relations": {
+            "title": "Inconsistent Relations",
+            "type": "integer"
+          },
+          "invitations_total": {
+            "title": "Invitations Total",
+            "type": "integer"
+          },
+          "relations_total": {
+            "title": "Relations Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "enabled",
+          "invitations_total",
+          "active_invitations",
+          "relations_total",
+          "active_relations",
+          "inconsistent_invitations",
+          "inconsistent_relations"
+        ],
+        "title": "AdminPrivateComparisonMetricsResponse",
         "type": "object"
       },
       "AdminProfileMetricsResponse": {
@@ -7988,6 +8036,704 @@
           "last_used_at"
         ],
         "title": "PasskeyResponse",
+        "type": "object"
+      },
+      "PrivateComparisonCommonUeResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "current": {
+            "$ref": "#/components/schemas/PrivateComparisonUeSideResponse"
+          },
+          "official_code": {
+            "title": "Official Code",
+            "type": "string"
+          },
+          "other": {
+            "$ref": "#/components/schemas/PrivateComparisonUeSideResponse"
+          }
+        },
+        "required": [
+          "official_code",
+          "current",
+          "other"
+        ],
+        "title": "PrivateComparisonCommonUeResponse",
+        "type": "object"
+      },
+      "PrivateComparisonDetailResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "activated_at": {
+            "format": "date-time",
+            "title": "Activated At",
+            "type": "string"
+          },
+          "calculated_at": {
+            "format": "date-time",
+            "title": "Calculated At",
+            "type": "string"
+          },
+          "common_ues": {
+            "items": {
+              "$ref": "#/components/schemas/PrivateComparisonCommonUeResponse"
+            },
+            "title": "Common Ues",
+            "type": "array"
+          },
+          "consent_version": {
+            "title": "Consent Version",
+            "type": "integer"
+          },
+          "current": {
+            "$ref": "#/components/schemas/PrivateComparisonParticipantResponse"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "other": {
+            "$ref": "#/components/schemas/PrivateComparisonParticipantResponse"
+          },
+          "public_id": {
+            "title": "Public Id",
+            "type": "string"
+          },
+          "status": {
+            "const": "active",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "public_id",
+          "status",
+          "activated_at",
+          "expires_at",
+          "consent_version",
+          "current",
+          "other",
+          "common_ues",
+          "calculated_at"
+        ],
+        "title": "PrivateComparisonDetailResponse",
+        "type": "object"
+      },
+      "PrivateComparisonInvitationAccept": {
+        "additionalProperties": false,
+        "properties": {
+          "acknowledge_academic_scope": {
+            "const": true,
+            "title": "Acknowledge Academic Scope",
+            "type": "boolean"
+          },
+          "acknowledge_copy_risk": {
+            "const": true,
+            "title": "Acknowledge Copy Risk",
+            "type": "boolean"
+          },
+          "acknowledge_identity_visibility": {
+            "const": true,
+            "title": "Acknowledge Identity Visibility",
+            "type": "boolean"
+          },
+          "consent_version": {
+            "title": "Consent Version",
+            "type": "integer"
+          },
+          "token": {
+            "format": "password",
+            "maxLength": 50,
+            "minLength": 50,
+            "pattern": "^pcinv1_[A-Za-z0-9_-]{43}$",
+            "title": "Token",
+            "type": "string",
+            "writeOnly": true
+          }
+        },
+        "required": [
+          "consent_version",
+          "acknowledge_identity_visibility",
+          "acknowledge_academic_scope",
+          "acknowledge_copy_risk",
+          "token"
+        ],
+        "title": "PrivateComparisonInvitationAccept",
+        "type": "object"
+      },
+      "PrivateComparisonInvitationCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "acknowledge_academic_scope": {
+            "const": true,
+            "title": "Acknowledge Academic Scope",
+            "type": "boolean"
+          },
+          "acknowledge_copy_risk": {
+            "const": true,
+            "title": "Acknowledge Copy Risk",
+            "type": "boolean"
+          },
+          "acknowledge_identity_visibility": {
+            "const": true,
+            "title": "Acknowledge Identity Visibility",
+            "type": "boolean"
+          },
+          "consent_version": {
+            "title": "Consent Version",
+            "type": "integer"
+          },
+          "duration_days": {
+            "default": 30,
+            "maximum": 90.0,
+            "minimum": 1.0,
+            "title": "Duration Days",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "consent_version",
+          "acknowledge_identity_visibility",
+          "acknowledge_academic_scope",
+          "acknowledge_copy_risk"
+        ],
+        "title": "PrivateComparisonInvitationCreate",
+        "type": "object"
+      },
+      "PrivateComparisonInvitationCreatedResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "consent_version": {
+            "title": "Consent Version",
+            "type": "integer"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "public_id": {
+            "title": "Public Id",
+            "type": "string"
+          },
+          "relationship_duration_days": {
+            "title": "Relationship Duration Days",
+            "type": "integer"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/PrivateComparisonScopeResponse"
+          },
+          "token": {
+            "maxLength": 50,
+            "minLength": 50,
+            "pattern": "^pcinv1_[A-Za-z0-9_-]{43}$",
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "public_id",
+          "token",
+          "expires_at",
+          "relationship_duration_days",
+          "consent_version",
+          "scope"
+        ],
+        "title": "PrivateComparisonInvitationCreatedResponse",
+        "type": "object"
+      },
+      "PrivateComparisonInvitationListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "invitations": {
+            "items": {
+              "$ref": "#/components/schemas/PrivateComparisonInvitationResponse"
+            },
+            "title": "Invitations",
+            "type": "array"
+          }
+        },
+        "required": [
+          "invitations"
+        ],
+        "title": "PrivateComparisonInvitationListResponse",
+        "type": "object"
+      },
+      "PrivateComparisonInvitationPreviewResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "consent_version": {
+            "title": "Consent Version",
+            "type": "integer"
+          },
+          "creator": {
+            "$ref": "#/components/schemas/PrivateComparisonOfficialIdentityResponse"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "relationship_duration_days": {
+            "title": "Relationship Duration Days",
+            "type": "integer"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/PrivateComparisonScopeResponse"
+          }
+        },
+        "required": [
+          "creator",
+          "expires_at",
+          "relationship_duration_days",
+          "consent_version",
+          "scope"
+        ],
+        "title": "PrivateComparisonInvitationPreviewResponse",
+        "type": "object"
+      },
+      "PrivateComparisonInvitationResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "public_id": {
+            "title": "Public Id",
+            "type": "string"
+          },
+          "relationship_duration_days": {
+            "title": "Relationship Duration Days",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "consumed",
+              "expired",
+              "revoked"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "public_id",
+          "created_at",
+          "expires_at",
+          "relationship_duration_days",
+          "status"
+        ],
+        "title": "PrivateComparisonInvitationResponse",
+        "type": "object"
+      },
+      "PrivateComparisonInvitationTokenRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "token": {
+            "format": "password",
+            "maxLength": 50,
+            "minLength": 50,
+            "pattern": "^pcinv1_[A-Za-z0-9_-]{43}$",
+            "title": "Token",
+            "type": "string",
+            "writeOnly": true
+          }
+        },
+        "required": [
+          "token"
+        ],
+        "title": "PrivateComparisonInvitationTokenRequest",
+        "type": "object"
+      },
+      "PrivateComparisonListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "comparisons": {
+            "items": {
+              "$ref": "#/components/schemas/PrivateComparisonRelationResponse"
+            },
+            "title": "Comparisons",
+            "type": "array"
+          }
+        },
+        "required": [
+          "comparisons"
+        ],
+        "title": "PrivateComparisonListResponse",
+        "type": "object"
+      },
+      "PrivateComparisonOfficialIdentityResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "official_name": {
+            "title": "Official Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "official_name"
+        ],
+        "title": "PrivateComparisonOfficialIdentityResponse",
+        "type": "object"
+      },
+      "PrivateComparisonParticipantResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "identity": {
+            "$ref": "#/components/schemas/PrivateComparisonOfficialIdentityResponse"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/PrivateComparisonSummaryResponse"
+          }
+        },
+        "required": [
+          "identity",
+          "summary"
+        ],
+        "title": "PrivateComparisonParticipantResponse",
+        "type": "object"
+      },
+      "PrivateComparisonRelationResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "academic_verified_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Academic Verified At"
+          },
+          "activated_at": {
+            "format": "date-time",
+            "title": "Activated At",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "freshness": {
+            "enum": [
+              "current",
+              "recommended",
+              "stale"
+            ],
+            "title": "Freshness",
+            "type": "string"
+          },
+          "other_participant": {
+            "$ref": "#/components/schemas/PrivateComparisonOfficialIdentityResponse"
+          },
+          "public_id": {
+            "title": "Public Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "expired",
+              "revoked"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "public_id",
+          "other_participant",
+          "status",
+          "activated_at",
+          "expires_at",
+          "academic_verified_at",
+          "freshness"
+        ],
+        "title": "PrivateComparisonRelationResponse",
+        "type": "object"
+      },
+      "PrivateComparisonScopeResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "common_ues": {
+            "const": true,
+            "title": "Common Ues",
+            "type": "boolean"
+          },
+          "detailed_assessments": {
+            "const": false,
+            "title": "Detailed Assessments",
+            "type": "boolean"
+          },
+          "general_summary": {
+            "const": true,
+            "title": "General Summary",
+            "type": "boolean"
+          },
+          "leaderboard": {
+            "const": false,
+            "title": "Leaderboard",
+            "type": "boolean"
+          },
+          "official_identity": {
+            "const": true,
+            "title": "Official Identity",
+            "type": "boolean"
+          },
+          "published": {
+            "const": false,
+            "title": "Published",
+            "type": "boolean"
+          },
+          "simulations": {
+            "const": false,
+            "title": "Simulations",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "official_identity",
+          "general_summary",
+          "common_ues",
+          "detailed_assessments",
+          "simulations",
+          "leaderboard",
+          "published"
+        ],
+        "title": "PrivateComparisonScopeResponse",
+        "type": "object"
+      },
+      "PrivateComparisonSummaryResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "academic_verified_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Academic Verified At"
+          },
+          "average": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Average"
+          },
+          "freshness": {
+            "enum": [
+              "current",
+              "recommended",
+              "stale"
+            ],
+            "title": "Freshness",
+            "type": "string"
+          },
+          "gpa": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gpa"
+          },
+          "grade_distribution": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "propertyNames": {
+              "enum": [
+                "A",
+                "B",
+                "C",
+                "D",
+                "E",
+                "FX",
+                "F"
+              ]
+            },
+            "title": "Grade Distribution",
+            "type": "object"
+          },
+          "ue_count": {
+            "title": "Ue Count",
+            "type": "integer"
+          },
+          "validated_ects": {
+            "title": "Validated Ects",
+            "type": "number"
+          }
+        },
+        "required": [
+          "average",
+          "gpa",
+          "validated_ects",
+          "grade_distribution",
+          "academic_verified_at",
+          "freshness",
+          "ue_count"
+        ],
+        "title": "PrivateComparisonSummaryResponse",
+        "type": "object"
+      },
+      "PrivateComparisonUeSideResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "allocated_ects": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allocated Ects"
+          },
+          "average": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Average"
+          },
+          "earned_ects": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Earned Ects"
+          },
+          "freshness": {
+            "enum": [
+              "current",
+              "recommended",
+              "stale"
+            ],
+            "title": "Freshness",
+            "type": "string"
+          },
+          "gpa": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gpa"
+          },
+          "grade": {
+            "anyOf": [
+              {
+                "enum": [
+                  "A",
+                  "B",
+                  "C",
+                  "D",
+                  "E",
+                  "FX",
+                  "F"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grade"
+          },
+          "semester": {
+            "anyOf": [
+              {
+                "enum": [
+                  "S5",
+                  "S6",
+                  "S7",
+                  "S8",
+                  "S9",
+                  "S10"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Semester"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "validated": {
+            "title": "Validated",
+            "type": "boolean"
+          },
+          "verified_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verified At"
+          },
+          "year": {
+            "title": "Year",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "year",
+          "semester",
+          "average",
+          "grade",
+          "gpa",
+          "earned_ects",
+          "allocated_ects",
+          "validated",
+          "freshness",
+          "verified_at"
+        ],
+        "title": "PrivateComparisonUeSideResponse",
         "type": "object"
       },
       "ServiceSessionResponse": {
@@ -19557,6 +20303,1074 @@
         "summary": "List Notes",
         "tags": [
           "notes"
+        ]
+      }
+    },
+    "/api/v1/private-comparisons": {
+      "get": {
+        "operationId": "private_comparisons_get_private_comparisons",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateComparisonListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requête refusée"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authentification requise"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Action interdite"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Ressource introuvable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflit d'état"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requête trop volumineuse"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Validation impossible"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Limite temporaire atteinte"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Service temporairement indisponible"
+          }
+        },
+        "summary": "Get Private Comparisons",
+        "tags": [
+          "private-comparisons"
+        ]
+      }
+    },
+    "/api/v1/private-comparisons/invitations": {
+      "get": {
+        "operationId": "private_comparisons_get_private_comparison_invitations",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateComparisonInvitationListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requête refusée"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authentification requise"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Action interdite"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Ressource introuvable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflit d'état"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requête trop volumineuse"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Validation impossible"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Limite temporaire atteinte"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Service temporairement indisponible"
+          }
+        },
+        "summary": "Get Private Comparison Invitations",
+        "tags": [
+          "private-comparisons"
+        ]
+      },
+      "post": {
+        "operationId": "private_comparisons_create_private_comparison_invitation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrivateComparisonInvitationCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateComparisonInvitationCreatedResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requête refusée"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authentification requise"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Action interdite"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Ressource introuvable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflit d'état"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requête trop volumineuse"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Validation impossible"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Limite temporaire atteinte"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Service temporairement indisponible"
+          }
+        },
+        "summary": "Create Private Comparison Invitation",
+        "tags": [
+          "private-comparisons"
+        ]
+      }
+    },
+    "/api/v1/private-comparisons/invitations/accept": {
+      "post": {
+        "operationId": "private_comparisons_accept_private_comparison_invitation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrivateComparisonInvitationAccept"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateComparisonRelationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requête refusée"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authentification requise"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Action interdite"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Ressource introuvable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflit d'état"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requête trop volumineuse"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Validation impossible"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Limite temporaire atteinte"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Service temporairement indisponible"
+          }
+        },
+        "summary": "Accept Private Comparison Invitation",
+        "tags": [
+          "private-comparisons"
+        ]
+      }
+    },
+    "/api/v1/private-comparisons/invitations/decline": {
+      "post": {
+        "operationId": "private_comparisons_decline_private_comparison_invitation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrivateComparisonInvitationTokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requête refusée"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authentification requise"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Action interdite"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Ressource introuvable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflit d'état"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requête trop volumineuse"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Validation impossible"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Limite temporaire atteinte"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Service temporairement indisponible"
+          }
+        },
+        "summary": "Decline Private Comparison Invitation",
+        "tags": [
+          "private-comparisons"
+        ]
+      }
+    },
+    "/api/v1/private-comparisons/invitations/preview": {
+      "post": {
+        "operationId": "private_comparisons_preview_private_comparison_invitation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrivateComparisonInvitationTokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateComparisonInvitationPreviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requête refusée"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authentification requise"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Action interdite"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Ressource introuvable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflit d'état"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requête trop volumineuse"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Validation impossible"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Limite temporaire atteinte"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Service temporairement indisponible"
+          }
+        },
+        "summary": "Preview Private Comparison Invitation",
+        "tags": [
+          "private-comparisons"
+        ]
+      }
+    },
+    "/api/v1/private-comparisons/invitations/{public_id}": {
+      "delete": {
+        "operationId": "private_comparisons_delete_private_comparison_invitation",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "public_id",
+            "required": true,
+            "schema": {
+              "title": "Public Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requête refusée"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authentification requise"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Action interdite"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Ressource introuvable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflit d'état"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requête trop volumineuse"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Validation impossible"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Limite temporaire atteinte"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Service temporairement indisponible"
+          }
+        },
+        "summary": "Delete Private Comparison Invitation",
+        "tags": [
+          "private-comparisons"
+        ]
+      }
+    },
+    "/api/v1/private-comparisons/{public_id}": {
+      "delete": {
+        "operationId": "private_comparisons_delete_private_comparison",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "public_id",
+            "required": true,
+            "schema": {
+              "title": "Public Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requête refusée"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authentification requise"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Action interdite"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Ressource introuvable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflit d'état"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requête trop volumineuse"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Validation impossible"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Limite temporaire atteinte"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Service temporairement indisponible"
+          }
+        },
+        "summary": "Delete Private Comparison",
+        "tags": [
+          "private-comparisons"
+        ]
+      },
+      "get": {
+        "operationId": "private_comparisons_get_private_comparison",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "public_id",
+            "required": true,
+            "schema": {
+              "title": "Public Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateComparisonDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requête refusée"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authentification requise"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Action interdite"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Ressource introuvable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflit d'état"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requête trop volumineuse"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Validation impossible"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Limite temporaire atteinte"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Service temporairement indisponible"
+          }
+        },
+        "summary": "Get Private Comparison",
+        "tags": [
+          "private-comparisons"
         ]
       }
     },

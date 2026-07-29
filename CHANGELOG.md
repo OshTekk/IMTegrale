@@ -1,5 +1,15 @@
 # Changements
 
+## Non publié
+
+- fondations backend des comparaisons privées V1, entièrement fermées par
+  feature flag : invitations one-shot, consentement bilatéral, révocation,
+  expiration et intersection exacte des UE officielles ;
+- migration additive `0029`, sans donnée académique copiée et non déployée dans
+  ce lot ;
+- contrats OpenAPI, tests IDOR/concurrence/confidentialité et modèle de menace,
+  sans interface React ni intégration au leaderboard.
+
 ## 4.8.0 - 23 juillet 2026
 
 - espace unique **Résultats** avec vues Par UE, Évaluations et Nouveautés ;

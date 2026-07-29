@@ -39,6 +39,13 @@ from app.models_operations import (
     RuntimeHeartbeat as RuntimeHeartbeat,
 )
 from app.pass_session_contract import PASS_SERVICE_SESSION_ENVELOPE_BYTES
+from app.private_comparison_contract import (
+    PRIVATE_COMPARISON_CONSENT_VERSION,
+    PRIVATE_COMPARISON_INVITATION_REVOCATION_REASONS,
+    PRIVATE_COMPARISON_MAX_DURATION_DAYS,
+    PRIVATE_COMPARISON_REVOCATION_REASONS,
+    PRIVATE_COMPARISON_TOKEN_VERSION,
+)
 from app.sync_modes import SYNC_MODE_VALUES, SYNC_PAUSE_REASONS
 
 
@@ -142,6 +149,23 @@ class Account(Base):
     )
     leaderboard_profile: Mapped[LeaderboardProfile | None] = relationship(
         back_populates="account", cascade="all, delete-orphan", uselist=False
+    )
+    private_comparison_invitations_created: Mapped[
+        list[PrivateComparisonInvitation]
+    ] = relationship(
+        back_populates="creator",
+        foreign_keys="PrivateComparisonInvitation.creator_account_id",
+        passive_deletes=True,
+    )
+    private_comparisons_as_a: Mapped[list[PrivateComparison]] = relationship(
+        back_populates="account_a",
+        foreign_keys="PrivateComparison.account_a_id",
+        passive_deletes=True,
+    )
+    private_comparisons_as_b: Mapped[list[PrivateComparison]] = relationship(
+        back_populates="account_b",
+        foreign_keys="PrivateComparison.account_b_id",
+        passive_deletes=True,
     )
     pass_service_sessions: Mapped[list[PassServiceSession]] = relationship(
         back_populates="account", cascade="all, delete-orphan"
@@ -1029,6 +1053,209 @@ class LeaderboardProfile(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
     account: Mapped[Account] = relationship(back_populates="leaderboard_profile")
+
+
+class PrivateComparisonInvitation(Base):
+    __tablename__ = "private_comparison_invitations"
+    __table_args__ = (
+        UniqueConstraint("public_id", name="uq_private_comparison_invitations_public_id"),
+        UniqueConstraint("token_digest", name="uq_private_comparison_invitations_token_digest"),
+        CheckConstraint(
+            "length(public_id) = 28 AND substr(public_id, 1, 4) = 'pci_'",
+            name="ck_private_comparison_invitations_public_id",
+        ),
+        CheckConstraint(
+            "length(token_digest) = 64",
+            name="ck_private_comparison_invitations_token_digest",
+        ),
+        CheckConstraint(
+            f"token_version = {PRIVATE_COMPARISON_TOKEN_VERSION}",
+            name="ck_private_comparison_invitations_token_version",
+        ),
+        CheckConstraint(
+            f"consent_version = {PRIVATE_COMPARISON_CONSENT_VERSION}",
+            name="ck_private_comparison_invitations_consent_version",
+        ),
+        CheckConstraint(
+            "validity_days BETWEEN 1 AND 7",
+            name="ck_private_comparison_invitations_validity_days",
+        ),
+        CheckConstraint(
+            f"relationship_duration_days BETWEEN 1 AND {PRIVATE_COMPARISON_MAX_DURATION_DAYS}",
+            name="ck_private_comparison_invitations_relationship_duration",
+        ),
+        CheckConstraint(
+            "expires_at > created_at",
+            name="ck_private_comparison_invitations_expiration",
+        ),
+        CheckConstraint(
+            "(consumed_at IS NULL) = (consumed_by_account_id IS NULL)",
+            name="ck_private_comparison_invitations_consumption",
+        ),
+        CheckConstraint(
+            "consumed_by_account_id IS NULL OR consumed_by_account_id <> creator_account_id",
+            name="ck_private_comparison_invitations_distinct_consumer",
+        ),
+        CheckConstraint(
+            "consumed_at IS NULL OR (consumed_at >= created_at AND consumed_at <= expires_at)",
+            name="ck_private_comparison_invitations_consumption_order",
+        ),
+        CheckConstraint(
+            "NOT (consumed_at IS NOT NULL AND revoked_at IS NOT NULL)",
+            name="ck_private_comparison_invitations_terminal_state",
+        ),
+        CheckConstraint(
+            "(revoked_at IS NULL AND revoked_reason IS NULL) OR "
+            "(revoked_at IS NOT NULL AND revoked_reason IS NOT NULL)",
+            name="ck_private_comparison_invitations_revocation",
+        ),
+        CheckConstraint(
+            "revoked_reason IS NULL OR revoked_reason IN ("
+            + ", ".join(repr(reason) for reason in PRIVATE_COMPARISON_INVITATION_REVOCATION_REASONS)
+            + ")",
+            name="ck_private_comparison_invitations_revoked_reason",
+        ),
+        CheckConstraint(
+            "revoked_at IS NULL OR revoked_at >= created_at",
+            name="ck_private_comparison_invitations_revocation_order",
+        ),
+        Index(
+            "ix_private_comparison_invitations_creator_created",
+            "creator_account_id",
+            "created_at",
+        ),
+        Index("ix_private_comparison_invitations_expires_at", "expires_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    public_id: Mapped[str] = mapped_column(String(32))
+    creator_account_id: Mapped[str] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE")
+    )
+    token_digest: Mapped[str] = mapped_column(String(64))
+    token_version: Mapped[int] = mapped_column(
+        Integer,
+        default=PRIVATE_COMPARISON_TOKEN_VERSION,
+        server_default=str(PRIVATE_COMPARISON_TOKEN_VERSION),
+    )
+    consent_version: Mapped[int] = mapped_column(Integer)
+    validity_days: Mapped[int] = mapped_column(Integer, default=7, server_default="7")
+    relationship_duration_days: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    consumed_by_account_id: Mapped[str | None] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE")
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_reason: Mapped[str | None] = mapped_column(String(32))
+
+    creator: Mapped[Account] = relationship(
+        back_populates="private_comparison_invitations_created",
+        foreign_keys=[creator_account_id],
+    )
+    consumed_by: Mapped[Account | None] = relationship(
+        foreign_keys=[consumed_by_account_id],
+    )
+
+
+class PrivateComparison(Base):
+    __tablename__ = "private_comparisons"
+    __table_args__ = (
+        UniqueConstraint("public_id", name="uq_private_comparisons_public_id"),
+        UniqueConstraint(
+            "account_a_id",
+            "account_b_id",
+            name="uq_private_comparisons_account_pair",
+        ),
+        CheckConstraint(
+            "length(public_id) = 27 AND substr(public_id, 1, 3) = 'pc_'",
+            name="ck_private_comparisons_public_id",
+        ),
+        CheckConstraint(
+            "account_a_id < account_b_id",
+            name="ck_private_comparisons_canonical_pair",
+        ),
+        CheckConstraint(
+            f"consent_version = {PRIVATE_COMPARISON_CONSENT_VERSION}",
+            name="ck_private_comparisons_consent_version",
+        ),
+        CheckConstraint(
+            f"duration_days BETWEEN 1 AND {PRIVATE_COMPARISON_MAX_DURATION_DAYS}",
+            name="ck_private_comparisons_duration",
+        ),
+        CheckConstraint(
+            "expires_at > activated_at",
+            name="ck_private_comparisons_expiration",
+        ),
+        CheckConstraint(
+            "created_at <= activated_at",
+            name="ck_private_comparisons_activation_order",
+        ),
+        CheckConstraint(
+            "account_a_consented_at <= activated_at AND "
+            "account_b_consented_at <= activated_at",
+            name="ck_private_comparisons_consent_order",
+        ),
+        CheckConstraint(
+            "(revoked_at IS NULL AND revoked_by_account_id IS NULL AND revoked_reason IS NULL) OR "
+            "(revoked_at IS NOT NULL AND revoked_by_account_id IS NOT NULL "
+            "AND revoked_reason IS NOT NULL)",
+            name="ck_private_comparisons_revocation",
+        ),
+        CheckConstraint(
+            "revoked_by_account_id IS NULL OR "
+            "revoked_by_account_id IN (account_a_id, account_b_id)",
+            name="ck_private_comparisons_revoker_participant",
+        ),
+        CheckConstraint(
+            "revoked_reason IS NULL OR revoked_reason IN ("
+            + ", ".join(repr(reason) for reason in PRIVATE_COMPARISON_REVOCATION_REASONS)
+            + ")",
+            name="ck_private_comparisons_revoked_reason",
+        ),
+        CheckConstraint(
+            "revoked_at IS NULL OR revoked_at >= activated_at",
+            name="ck_private_comparisons_revocation_order",
+        ),
+        Index("ix_private_comparisons_account_a", "account_a_id"),
+        Index("ix_private_comparisons_account_b", "account_b_id"),
+        Index("ix_private_comparisons_expires_at", "expires_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    public_id: Mapped[str] = mapped_column(String(32))
+    account_a_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"))
+    account_b_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"))
+    created_from_invitation_id: Mapped[str | None] = mapped_column(
+        ForeignKey("private_comparison_invitations.id", ondelete="SET NULL")
+    )
+    consent_version: Mapped[int] = mapped_column(Integer)
+    account_a_consented_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    account_b_consented_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    activated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    duration_days: Mapped[int] = mapped_column(Integer)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_by_account_id: Mapped[str | None] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE")
+    )
+    revoked_reason: Mapped[str | None] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    account_a: Mapped[Account] = relationship(
+        back_populates="private_comparisons_as_a",
+        foreign_keys=[account_a_id],
+    )
+    account_b: Mapped[Account] = relationship(
+        back_populates="private_comparisons_as_b",
+        foreign_keys=[account_b_id],
+    )
+    created_from_invitation: Mapped[PrivateComparisonInvitation | None] = relationship()
+    revoked_by: Mapped[Account | None] = relationship(foreign_keys=[revoked_by_account_id])
 
 
 class AdminUser(Base):

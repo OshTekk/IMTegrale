@@ -71,6 +71,7 @@ class Settings(BaseSettings):
     autonomous_sync_enrollment_enabled: bool = False
     autonomous_sync_rollout: AutonomousSyncRollout = AutonomousSyncRollout.OFF
     autonomous_sync_canary_account_ids: list[str] = Field(default_factory=list)
+    private_comparisons_enabled: bool = False
     sync_runtime_profile: Literal["normal", "migration"] = "normal"
     sync_lock_dir: Path = Path("/run/botnote-sync-locks")
     trusted_proxy_ips: list[str] = Field(default_factory=lambda: ["127.0.0.1"])

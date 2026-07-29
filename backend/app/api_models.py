@@ -581,6 +581,114 @@ class LeaderboardResponse(ApiModel):
     board: LeaderboardBoardResponse | None
 
 
+class PrivateComparisonScopeResponse(ApiModel):
+    official_identity: Literal[True]
+    general_summary: Literal[True]
+    common_ues: Literal[True]
+    detailed_assessments: Literal[False]
+    simulations: Literal[False]
+    leaderboard: Literal[False]
+    published: Literal[False]
+
+
+class PrivateComparisonInvitationCreatedResponse(ApiModel):
+    public_id: str
+    token: str = Field(
+        min_length=50,
+        max_length=50,
+        pattern=r"^pcinv1_[A-Za-z0-9_-]{43}$",
+    )
+    expires_at: datetime
+    relationship_duration_days: int
+    consent_version: int
+    scope: PrivateComparisonScopeResponse
+
+
+class PrivateComparisonInvitationResponse(ApiModel):
+    public_id: str
+    created_at: datetime
+    expires_at: datetime
+    relationship_duration_days: int
+    status: Literal["active", "consumed", "expired", "revoked"]
+
+
+class PrivateComparisonInvitationListResponse(ApiModel):
+    invitations: list[PrivateComparisonInvitationResponse]
+
+
+class PrivateComparisonOfficialIdentityResponse(ApiModel):
+    official_name: str
+
+
+class PrivateComparisonInvitationPreviewResponse(ApiModel):
+    creator: PrivateComparisonOfficialIdentityResponse
+    expires_at: datetime
+    relationship_duration_days: int
+    consent_version: int
+    scope: PrivateComparisonScopeResponse
+
+
+class PrivateComparisonRelationResponse(ApiModel):
+    public_id: str
+    other_participant: PrivateComparisonOfficialIdentityResponse
+    status: Literal["active", "expired", "revoked"]
+    activated_at: datetime
+    expires_at: datetime
+    academic_verified_at: datetime | None
+    freshness: Freshness
+
+
+class PrivateComparisonListResponse(ApiModel):
+    comparisons: list[PrivateComparisonRelationResponse]
+
+
+class PrivateComparisonSummaryResponse(ApiModel):
+    average: float | None
+    gpa: float | None
+    validated_ects: float
+    grade_distribution: dict[Grade, int]
+    academic_verified_at: datetime | None
+    freshness: Freshness
+    ue_count: int
+
+
+class PrivateComparisonParticipantResponse(ApiModel):
+    identity: PrivateComparisonOfficialIdentityResponse
+    summary: PrivateComparisonSummaryResponse
+
+
+class PrivateComparisonUeSideResponse(ApiModel):
+    title: str
+    year: str
+    semester: AcademicSemester | None
+    average: float | None
+    grade: Grade | None
+    gpa: float | None
+    earned_ects: float | None
+    allocated_ects: float | None
+    validated: bool
+    freshness: Freshness
+    verified_at: datetime | None
+
+
+class PrivateComparisonCommonUeResponse(ApiModel):
+    official_code: str
+    current: PrivateComparisonUeSideResponse
+    other: PrivateComparisonUeSideResponse
+
+
+class PrivateComparisonDetailResponse(ApiModel):
+    public_id: str
+    status: Literal["active"]
+    activated_at: datetime
+    expires_at: datetime
+    consent_version: int
+    current: PrivateComparisonParticipantResponse
+    other: PrivateComparisonParticipantResponse
+    common_ues: list[PrivateComparisonCommonUeResponse]
+    calculated_at: datetime
+
+
 class SimulationFormulaResponse(ApiModel):
     version: str
     label: str
@@ -1402,6 +1510,16 @@ class AdminCalendarOperationalMetricsResponse(ApiModel):
     errors_24h: int
 
 
+class AdminPrivateComparisonMetricsResponse(ApiModel):
+    enabled: bool
+    invitations_total: int
+    active_invitations: int
+    relations_total: int
+    active_relations: int
+    inconsistent_invitations: int
+    inconsistent_relations: int
+
+
 class AdminOperationsMetricsResponse(ApiModel):
     generated_at: datetime
     http: AdminHttpRuntimeMetricsResponse
@@ -1410,6 +1528,7 @@ class AdminOperationsMetricsResponse(ApiModel):
     workers: list[AdminWorkerMetricsResponse]
     pass_: AdminPassOperationalMetricsResponse = Field(alias="pass")
     calendar: AdminCalendarOperationalMetricsResponse
+    private_comparisons: AdminPrivateComparisonMetricsResponse
 
 
 class AdminPassSessionResponse(ServiceSessionResponse):

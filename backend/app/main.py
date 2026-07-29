@@ -37,6 +37,7 @@ from app.routers import (
     learning,
     note_simulations,
     notes,
+    private_comparisons,
     settings,
     simulations,
     sync,
@@ -144,6 +145,36 @@ def _is_learning_surface(path: str) -> bool:
     return _is_learning_api_surface(path) or path == "/parcours" or path.startswith("/parcours/")
 
 
+def _is_private_comparison_surface(path: str) -> bool:
+    return path == "/api/v1/private-comparisons" or path.startswith(
+        "/api/v1/private-comparisons/"
+    )
+
+
+def _private_comparison_headers(response) -> None:  # noqa: ANN001
+    response.headers["Cache-Control"] = "private, no-store"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Vary"] = "Cookie"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "no-referrer"
+
+
+@app.middleware("http")
+async def private_comparisons_boundary(request: Request, call_next):  # noqa: ANN001
+    if not _is_private_comparison_surface(request.url.path):
+        return await call_next(request)
+    if not settings_config.private_comparisons_enabled:
+        response = api_error_response(
+            status.HTTP_404_NOT_FOUND,
+            {"code": "ROUTE_NOT_FOUND", "message": "Route introuvable"},
+        )
+        _private_comparison_headers(response)
+        return response
+    response = await call_next(request)
+    _private_comparison_headers(response)
+    return response
+
+
 @app.middleware("http")
 async def personal_learning_ingress(request: Request, call_next):  # noqa: ANN001
     """Hide every Parcours surface outside its configured private ingress."""
@@ -249,7 +280,9 @@ async def security_headers(request: Request, call_next):  # noqa: ANN001
         # versioned build asset. Blob and network workers remain forbidden.
         "worker-src 'self'"
     )
-    if request.url.path.startswith("/api/"):
+    if _is_private_comparison_surface(request.url.path):
+        _private_comparison_headers(response)
+    elif request.url.path.startswith("/api/"):
         response.headers["Cache-Control"] = "no-store"
     if request.url.path.startswith("/api/v1/learning"):
         response.headers["Cache-Control"] = "private, no-store"
@@ -292,6 +325,7 @@ for api_router in (
     leaderboard.router,
     note_simulations.router,
     notes.router,
+    private_comparisons.router,
     simulations.router,
     tokens.router,
     settings.router,
