@@ -73,8 +73,13 @@ class SessionAccountResponse(ApiModel):
     imt_username: str | None
 
 
+class PrivateComparisonsSessionResponse(ApiModel):
+    available: bool
+
+
 class UnauthenticatedSessionResponse(ApiModel):
     authenticated: Literal[False]
+    private_comparisons: PrivateComparisonsSessionResponse
 
 
 class AuthenticatedSessionResponse(ApiModel):
@@ -85,6 +90,7 @@ class AuthenticatedSessionResponse(ApiModel):
     needs_sync_setup: bool
     account: SessionAccountResponse
     learning: LearningSessionResponse
+    private_comparisons: PrivateComparisonsSessionResponse
 
 
 SessionResponse: TypeAlias = UnauthenticatedSessionResponse | AuthenticatedSessionResponse

@@ -27,6 +27,7 @@ function fictitiousSession(audienceLabel: string, levelLabel: string): Session {
     },
     needs_security_setup: false,
     needs_sync_setup: false,
+    private_comparisons: { available: true },
   };
 }
 
@@ -72,7 +73,13 @@ describe("navigation mobile selon le niveau d'accès", () => {
     const session = fictitiousSession("FIP 2028", "2A");
     const navigation = mobileAppNavigation(session, true);
     expect(navigation.primary.map((item) => item.to)).toEqual(["/", "/results", "/calendar", "/simulations/gpa"]);
-    expect(navigation.secondary.map((item) => item.to)).toEqual(["/parcours", "/leaderboard", "/sharing", "/settings"]);
+    expect(navigation.secondary.map((item) => item.to)).toEqual([
+      "/parcours",
+      "/leaderboard",
+      "/comparisons",
+      "/sharing",
+      "/settings",
+    ]);
     expect(navigation.primary).toHaveLength(4);
   });
 
@@ -100,5 +107,21 @@ describe("navigation mobile selon le niveau d'accès", () => {
     expect(navigation.primary.some((item) => item.to === "/calendar" || item.to.startsWith("/simulations"))).toBe(
       false,
     );
+  });
+
+  it("keeps Comparaisons in Plus and active on every private sub-route", () => {
+    const session = fictitiousSession("FIP 2028", "2A");
+    const navigation = mobileAppNavigation(session, true);
+    expect(navigation.primary.map((item) => item.to)).not.toContain("/comparisons");
+    expect(navigation.secondary.map((item) => item.to)).toContain("/comparisons");
+    expect(isAppNavItemActive("/comparisons", "/comparisons")).toBe(true);
+    expect(isAppNavItemActive("/comparisons", "/comparisons/accept")).toBe(true);
+    expect(isAppNavItemActive("/comparisons", "/comparisons/pc_synthetic-public-id")).toBe(true);
+  });
+
+  it("hides Comparaisons as soon as the session capability closes", () => {
+    const session = fictitiousSession("FIP 2028", "2A");
+    session.private_comparisons = { available: false };
+    expect(visibleAppNavigation(session, true).some((item) => item.to === "/comparisons")).toBe(false);
   });
 });

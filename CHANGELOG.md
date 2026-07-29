@@ -2,13 +2,16 @@
 
 ## Non publié
 
-- fondations backend des comparaisons privées V1, entièrement fermées par
+- backend et interface des comparaisons privées V1, entièrement fermés par
   feature flag : invitations one-shot, consentement bilatéral, révocation,
   expiration et intersection exacte des UE officielles ;
 - migration additive `0029`, sans donnée académique copiée et non déployée dans
   ce lot ;
-- contrats OpenAPI, tests IDOR/concurrence/confidentialité et modèle de menace,
-  sans interface React ni intégration au leaderboard.
+- espace lazy `/comparisons`, navigation conditionnelle, traitement mémoire du
+  fragment d'invitation, listes et détail bilatéral sans intégration au
+  leaderboard ;
+- contrats OpenAPI, tests IDOR, concurrence, confidentialité, cache, responsive
+  et Axe, sans activation ni déploiement.
 
 ## 4.8.0 - 23 juillet 2026
 

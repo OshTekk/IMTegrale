@@ -100,7 +100,7 @@ pnpm audit --prod
 ## Documentation
 
 - [classement, confidentialité et modération](docs/leaderboard.md) ;
-- [fondations non publiées des comparaisons privées V1](docs/private-comparisons.md) ;
+- [comparaisons privées V1 non publiées, invitation et consentement](docs/private-comparisons.md) ;
 - [simulations GPA et simulations de notes privées](docs/simulations.md) ;
 - [agenda INPASS et calendrier de formation FIP](docs/calendars.md) ;
 - [relevé académique personnel et transparence](docs/academic-report.md) ;

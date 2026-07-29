@@ -22,6 +22,9 @@ import {
   learningUpdateLearningProgress,
   noteSimulationsScenarioGet,
   noteSimulationsScenarioList,
+  privateComparisonsGetPrivateComparison,
+  privateComparisonsGetPrivateComparisonInvitations,
+  privateComparisonsGetPrivateComparisons,
   settingsGetSettings,
   simulationsSimulationGet,
   simulationsSimulationList,
@@ -68,6 +71,12 @@ export const queryKeys = {
   leaderboardRoot: (accountId: string) => ["account", accountId, "leaderboard"] as const,
   leaderboard: (accountId: string, metric: string, campus: string, cohort: string) =>
     ["account", accountId, "leaderboard", metric, campus, cohort] as const,
+  privateComparisonsRoot: (accountId: string) => ["account", accountId, "private-comparisons"] as const,
+  privateComparisonInvitations: (accountId: string) =>
+    ["account", accountId, "private-comparisons", "invitations"] as const,
+  privateComparisons: (accountId: string) => ["account", accountId, "private-comparisons", "relations"] as const,
+  privateComparison: (accountId: string, publicId: string) =>
+    ["account", accountId, "private-comparisons", "relations", publicId] as const,
 };
 
 function sessionAccountId(session: Session | undefined): string | null {
@@ -83,6 +92,7 @@ function sessionCapabilityScope(session: Session | undefined): string {
     session?.learning?.available === true ? "learning" : "no-learning",
     session?.learning?.reverify_required === true ? "reverify" : "fresh",
     session?.learning?.catalog_version ?? "no-catalog",
+    session?.private_comparisons?.available === true ? "private-comparisons" : "no-private-comparisons",
   ].join("\u001f");
 }
 
@@ -479,6 +489,52 @@ export function useLeaderboard(metric: LeaderboardMetric, campus: string, cohort
     gcTime: 0,
     refetchInterval: 10_000,
     refetchOnWindowFocus: "always",
+  });
+}
+
+export function usePrivateComparisonInvitations(enabled = true) {
+  const client = useQueryClient();
+  const accountId = currentAccountId(client);
+  return useQuery({
+    queryKey: queryKeys.privateComparisonInvitations(accountId),
+    queryFn: () => apiData(privateComparisonsGetPrivateComparisonInvitations({ throwOnError: throwOnApiError })),
+    enabled,
+    staleTime: 0,
+    refetchOnWindowFocus: "always",
+    retry: false,
+  });
+}
+
+export function usePrivateComparisons(enabled = true) {
+  const client = useQueryClient();
+  const accountId = currentAccountId(client);
+  return useQuery({
+    queryKey: queryKeys.privateComparisons(accountId),
+    queryFn: () => apiData(privateComparisonsGetPrivateComparisons({ throwOnError: throwOnApiError })),
+    enabled,
+    staleTime: 0,
+    refetchOnWindowFocus: "always",
+    retry: false,
+  });
+}
+
+export function usePrivateComparison(publicId: string | null, enabled = true) {
+  const client = useQueryClient();
+  const accountId = currentAccountId(client);
+  return useQuery({
+    queryKey: queryKeys.privateComparison(accountId, publicId ?? "none"),
+    queryFn: () =>
+      apiData(
+        privateComparisonsGetPrivateComparison({
+          path: { public_id: publicId! },
+          throwOnError: throwOnApiError,
+        }),
+      ),
+    enabled: enabled && Boolean(publicId),
+    staleTime: 0,
+    gcTime: 0,
+    refetchOnWindowFocus: "always",
+    retry: false,
   });
 }
 

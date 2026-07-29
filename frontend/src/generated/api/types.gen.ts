@@ -1359,6 +1359,7 @@ export type AuthenticatedSessionResponse = {
      * Needs Sync Setup
      */
     needs_sync_setup: boolean;
+    private_comparisons: PrivateComparisonsSessionResponse;
     /**
      * Role
      */
@@ -4437,6 +4438,16 @@ export type PrivateComparisonUeSideResponse = {
 };
 
 /**
+ * PrivateComparisonsSessionResponse
+ */
+export type PrivateComparisonsSessionResponse = {
+    /**
+     * Available
+     */
+    available: boolean;
+};
+
+/**
  * ServiceSessionResponse
  */
 export type ServiceSessionResponse = {
@@ -5456,6 +5467,7 @@ export type UnauthenticatedSessionResponse = {
      * Authenticated
      */
     authenticated: false;
+    private_comparisons: PrivateComparisonsSessionResponse;
 };
 
 /**

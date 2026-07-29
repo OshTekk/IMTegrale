@@ -1,4 +1,5 @@
 import type { LearningSessionAccess } from "./types/learning";
+import type { PrivateComparisonsSessionResponse } from "./generated/api/types.gen";
 
 export * from "./types/learning";
 
@@ -20,6 +21,7 @@ export interface Session {
     imt_username: string | null;
   };
   learning?: LearningSessionAccess;
+  private_comparisons?: PrivateComparisonsSessionResponse;
 }
 
 export interface NoteItem {

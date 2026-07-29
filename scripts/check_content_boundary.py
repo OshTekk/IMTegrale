@@ -39,7 +39,7 @@ FORBIDDEN_PATH_SEGMENTS = frozenset({"private", "content", "contents", "release"
 PRIVATE_NAME_TOKENS = frozenset({"private"})
 
 # These paths implement the public, bilateral "private comparisons" feature.
-# Exact raw-path matching keeps the exception narrow: aliases, case changes,
+# Exact raw-path matching keeps source exceptions narrow: aliases, case changes,
 # suffixes and nested files remain denied, while content rules still apply.
 PUBLIC_PRIVATE_COMPARISON_PATH_ALLOWLIST = frozenset(
     {
@@ -53,11 +53,29 @@ PUBLIC_PRIVATE_COMPARISON_PATH_ALLOWLIST = frozenset(
         "backend/tests/test_private_comparisons_migration.py",
         "docs/private-comparisons.md",
         "docs/security/private-comparisons-threat-model.md",
+        "frontend/e2e/private-comparison-fixtures.ts",
+        "frontend/e2e/private-comparisons.spec.ts",
         "frontend/src/lib/privateComparisonsGenerated.test.ts",
+        "frontend/src/pages/private-comparisons/PrivateComparisonAcceptPage.tsx",
+        "frontend/src/pages/private-comparisons/PrivateComparisonCommonUes.tsx",
+        "frontend/src/pages/private-comparisons/PrivateComparisonConfirmModal.tsx",
+        "frontend/src/pages/private-comparisons/PrivateComparisonConsent.tsx",
+        "frontend/src/pages/private-comparisons/PrivateComparisonDetailPage.tsx",
+        "frontend/src/pages/private-comparisons/PrivateComparisonInvitationModal.tsx",
+        "frontend/src/pages/private-comparisons/PrivateComparisonScope.tsx",
+        "frontend/src/pages/private-comparisons/PrivateComparisonSummary.tsx",
+        "frontend/src/pages/private-comparisons/PrivateComparisonsPage.tsx",
+        "frontend/src/pages/private-comparisons/index.ts",
+        "frontend/src/pages/private-comparisons/privateComparisonPresentation.ts",
+        "frontend/src/pages/private-comparisons/privateComparisons.css",
+        "frontend/src/pages/private-comparisons/privateComparisons.test.tsx",
         "app/private_comparison_contract.py",
         "app/routers/private_comparisons.py",
         "app/services/private_comparisons.py",
     }
+)
+PUBLIC_PRIVATE_COMPARISON_VITE_CHUNK_RE = re.compile(
+    r"^frontend/dist/assets/private-comparisons-[A-Za-z0-9_-]{8}\.(?:css|js)$"
 )
 
 LEARNING_NAME_TOKENS = frozenset(
@@ -274,11 +292,14 @@ def normalize_repo_path(raw_path: str) -> tuple[str | None, tuple[str, ...]]:
     private_name = bool(all_tokens.intersection(PRIVATE_NAME_TOKENS)) or any(
         marker in segment for marker in PRIVATE_NAME_TOKENS for segment in segments
     )
+    public_private_comparison_path = raw_path in PUBLIC_PRIVATE_COMPARISON_PATH_ALLOWLIST or bool(
+        PUBLIC_PRIVATE_COMPARISON_VITE_CHUNK_RE.fullmatch(raw_path)
+    )
     if (
         any(segment in FORBIDDEN_PATH_SEGMENTS for segment in segments)
         or directory_tokens.intersection(FORBIDDEN_PATH_SEGMENTS)
         or private_name
-    ) and raw_path not in PUBLIC_PRIVATE_COMPARISON_PATH_ALLOWLIST:
+    ) and not public_private_comparison_path:
         rules.add("PRIVATE_PATH_TRACKED")
     if normalized in STATIC_ASSET_ALLOWLIST and raw_path != normalized:
         rules.add("STATIC_ALLOWLIST_PATH_MISMATCH")

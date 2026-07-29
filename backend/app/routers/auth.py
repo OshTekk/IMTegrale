@@ -33,6 +33,7 @@ from app.security import (
     create_web_session,
     ensure_utc,
     get_auth_context,
+    is_primary_owner,
     login_global_rate_limiter,
     login_rate_limiter,
     matches_token_digest,
@@ -107,6 +108,13 @@ def _session_payload(
             "imt_username": auth.account.imt_username if auth.role == "owner" else None,
         },
         "learning": learning_session_view(db, auth, settings, request=request),
+        "private_comparisons": {
+            "available": bool(
+                settings.private_comparisons_enabled
+                and not auth.account.is_disabled
+                and is_primary_owner(auth)
+            )
+        },
     }
 
 
@@ -136,7 +144,10 @@ def session_status(
     try:
         auth = get_auth_context(request, db, settings)
     except HTTPException:
-        return {"authenticated": False}
+        return {
+            "authenticated": False,
+            "private_comparisons": {"available": False},
+        }
     return _session_payload(auth, db, settings, request)
 
 

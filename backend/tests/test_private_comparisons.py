@@ -242,6 +242,65 @@ def _accept(client: TestClient, token: str) -> dict:
     return response.json()
 
 
+def test_session_capability_is_minimal_and_primary_owner_scoped(
+    comparisons_enabled,
+) -> None:  # noqa: ANN001
+    imt_owner, imt_account_id = _seed_owner("capability-imt@example.test", "Imt")
+    passkey_owner, _passkey_account_id = _seed_owner(
+        "capability-passkey@example.test",
+        "Passkey",
+        auth_method="passkey",
+    )
+    token_owner, _token_account_id = _seed_owner(
+        "capability-token@example.test",
+        "Token",
+        auth_method="token",
+        token_owner=True,
+    )
+    viewer, _viewer_account_id = _seed_owner(
+        "capability-viewer@example.test",
+        "Viewer",
+        role="viewer",
+        auth_method="token",
+    )
+
+    assert imt_owner.get("/api/v1/auth/session").json()["private_comparisons"] == {
+        "available": True
+    }
+    assert passkey_owner.get("/api/v1/auth/session").json()["private_comparisons"] == {
+        "available": True
+    }
+    assert token_owner.get("/api/v1/auth/session").json()["private_comparisons"] == {
+        "available": False
+    }
+    assert viewer.get("/api/v1/auth/session").json()["private_comparisons"] == {
+        "available": False
+    }
+
+    with SessionLocal() as db:
+        account = db.get(Account, imt_account_id)
+        assert account is not None
+        account.is_disabled = True
+        db.commit()
+    disabled_session = imt_owner.get("/api/v1/auth/session").json()
+    assert disabled_session == {
+        "authenticated": False,
+        "private_comparisons": {"available": False},
+    }
+
+
+def test_session_capability_is_false_for_flag_off_and_anonymous() -> None:
+    owner, _account_id = _seed_owner("capability-off@example.test", "Inactive")
+
+    assert owner.get("/api/v1/auth/session").json()["private_comparisons"] == {
+        "available": False
+    }
+    assert TestClient(app, base_url="https://testserver").get("/api/v1/auth/session").json() == {
+        "authenticated": False,
+        "private_comparisons": {"available": False},
+    }
+
+
 def test_feature_flag_hides_surface_before_body_parsing() -> None:
     assert settings_config.private_comparisons_enabled is False
     response = TestClient(app, base_url="https://testserver").post(

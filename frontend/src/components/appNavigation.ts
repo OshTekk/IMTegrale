@@ -7,6 +7,7 @@ import {
   LibraryBig,
   Settings,
   Trophy,
+  UsersRound,
   type LucideIcon,
 } from "lucide-react";
 import { learningEntryVisible } from "../lib/learning";
@@ -21,6 +22,7 @@ export interface AppNavItem {
   ownerOnly: boolean;
   primaryOwnerOnly?: boolean;
   learningOnly?: boolean;
+  privateComparisonsOnly?: boolean;
 }
 
 export const appNavItems: AppNavItem[] = [
@@ -37,6 +39,15 @@ export const appNavItems: AppNavItem[] = [
     primaryOwnerOnly: true,
   },
   { to: "/leaderboard", label: "Classement", short: "Rangs", icon: Trophy, ownerOnly: true },
+  {
+    to: "/comparisons",
+    label: "Comparaisons",
+    short: "Comparer",
+    icon: UsersRound,
+    ownerOnly: true,
+    primaryOwnerOnly: true,
+    privateComparisonsOnly: true,
+  },
   { to: "/sharing", label: "Partage", short: "Partage", icon: KeyRound, ownerOnly: true },
   { to: "/settings", label: "Paramètres", short: "Réglages", icon: Settings, ownerOnly: false },
 ];
@@ -49,6 +60,7 @@ export const appPageTitles: Record<string, [string, string]> = {
   "/simulations/gpa": ["Simulations", "Projette ton GPA sans modifier tes données officielles"],
   "/simulations/notes": ["Simulations", "Teste tes prochaines notes et leur impact sur ta moyenne"],
   "/leaderboard": ["Classement", "Deux classements privés, calculés depuis PASS"],
+  "/comparisons": ["Comparaisons privées", "Compare tes résultats uniquement après accord mutuel"],
   "/sharing": ["Partage", "Accès révocables liés à ton compte"],
   "/settings": ["Paramètres", "Compte, synchronisation et notifications"],
 };
@@ -57,6 +69,7 @@ export const mobileNavDescriptions: Record<string, string> = {
   "/results": "Grades, crédits et détail des évaluations",
   "/calendar": "Cours personnels et calendrier de formation",
   "/leaderboard": "Classements GPA et moyenne de ta promotion",
+  "/comparisons": "Invitations et résultats partagés avec accord mutuel",
   "/sharing": "Tokens et accès partagés",
   "/settings": "Compte, synchronisation et notifications",
   "/parcours": "Cours, exercices guidés et progression privée",
@@ -65,6 +78,7 @@ export const mobileNavDescriptions: Record<string, string> = {
 export function isAppNavItemActive(to: string, pathname: string): boolean {
   if (to === "/results") return pathname.startsWith("/results") || pathname === "/ues/releve";
   if (to === "/parcours") return pathname.startsWith("/parcours");
+  if (to === "/comparisons") return pathname.startsWith("/comparisons");
   if (to.startsWith("/simulations")) return pathname.startsWith("/simulations");
   return to === pathname;
 }
@@ -72,6 +86,7 @@ export function isAppNavItemActive(to: string, pathname: string): boolean {
 export function visibleAppNavigation(session: Session, primaryOwner: boolean): AppNavItem[] {
   return appNavItems.filter((item) => {
     if (item.learningOnly) return learningEntryVisible(session);
+    if (item.privateComparisonsOnly && session.private_comparisons?.available !== true) return false;
     return (!item.ownerOnly || session.role === "owner") && (!item.primaryOwnerOnly || primaryOwner);
   });
 }
@@ -95,5 +110,6 @@ export function appPageHeading(pathname: string, session: Session): [string, str
   if (pathname.startsWith("/parcours")) {
     return ["Parcours", readerAudienceSubtitle(session.learning?.audience_label, session.learning?.level_label)];
   }
+  if (pathname.startsWith("/comparisons")) return appPageTitles["/comparisons"]!;
   return appPageTitles[pathname] ?? appPageTitles["/"]!;
 }

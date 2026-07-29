@@ -683,7 +683,10 @@ def test_auth_session_exposes_only_the_learning_ux_contract(client, monkeypatch)
         )
         return []
 
-    assert client.get("/api/v1/auth/session").json() == {"authenticated": False}
+    assert client.get("/api/v1/auth/session").json() == {
+        "authenticated": False,
+        "private_comparisons": {"available": False},
+    }
     monkeypatch.setattr(ImtPassClient, "fetch_entries", fictional_login)
     events: list[str] = []
 

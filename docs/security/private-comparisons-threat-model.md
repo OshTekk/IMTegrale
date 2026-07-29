@@ -1,19 +1,20 @@
 # Modèle de menace — Comparaisons privées V1
 
-État : juillet 2026, fondations backend non publiées et feature flag fermé. Ce
-document complète le [modèle général](threat-model.md) sans modifier le
-consentement ni les autorisations du leaderboard.
+État : juillet 2026, backend Lot A et frontend Lot B non publiés, migration non
+déployée et feature flag fermé. Ce document complète le
+[modèle général](threat-model.md) sans modifier le consentement ni les
+autorisations du leaderboard.
 
 ## Actifs et propriétés
 
-| Actif | Propriété attendue |
-| --- | --- |
-| Secret d'invitation | 256 bits, retourné une fois, jamais stocké ou journalisé |
-| Digest d'invitation | HMAC avec séparation de domaine, jamais exposé par l'API |
-| Consentements | Bilatéraux, versionnés, explicites et liés à une durée |
-| Relation | Limitée à deux comptes distincts, révocable et expirante |
-| Résultats académiques | Calculés à la demande, jamais copiés dans les nouvelles tables |
-| Identité officielle | Visible uniquement aux deux participants actifs |
+| Actif                   | Propriété attendue                                                 |
+| ----------------------- | ------------------------------------------------------------------ |
+| Secret d'invitation     | 256 bits, retourné une fois, jamais stocké ou journalisé           |
+| Digest d'invitation     | HMAC avec séparation de domaine, jamais exposé par l'API           |
+| Consentements           | Bilatéraux, versionnés, explicites et liés à une durée             |
+| Relation                | Limitée à deux comptes distincts, révocable et expirante           |
+| Résultats académiques   | Calculés à la demande, jamais copiés dans les nouvelles tables     |
+| Identité officielle     | Visible uniquement aux deux participants actifs                    |
 | Événements et métriques | Métadonnées minimales, aucun résultat, token ou paire identifiable |
 
 ## Frontières
@@ -36,29 +37,33 @@ participation.
 
 ## Menaces et contrôles
 
-| Menace | Impact | Contrôles V1 | Risque résiduel |
-| --- | --- | --- | --- |
-| Énumération des comptes | Découverte d'identités ou profils | Aucun annuaire ni recherche ; invitation bearer ; erreurs d'éligibilité génériques | Le créateur connaît naturellement l'identité après acceptation |
-| Invitation transférée à un tiers | Mauvais participant | Secret à forte entropie, comptes compatibles requis, prévisualisation et consentement explicite | Tout tiers éligible qui reçoit volontairement le secret peut l'accepter |
-| Token volé | Activation non voulue | TTL sept jours, usage unique, refus/révocation, HMAC seul en base, session primaire exigée | Compromission conjointe du lien et d'un compte éligible |
-| Token dans logs ou `Referer` | Réutilisation du lien | Fragment navigateur recommandé, body POST, `no-referrer`, validation sans echo, événements allowlistés | Le canal de partage tiers peut conserver le lien |
-| Token réutilisé | Relations multiples | Verrou `FOR UPDATE`, état consommé atomique, digest unique | Aucun après commit hors restauration d'une ancienne base |
-| Double acceptation simultanée | Deux relations ou destinataires | Verrou invitation, comptes verrouillés dans l'ordre canonique, paire unique, tests PostgreSQL | Blocage transitoire possible sous forte concurrence |
-| Auto-invitation | Contournement du consentement bilatéral | IDs distincts obligatoires, refus générique avant création relationnelle | Aucun connu |
-| Promotions ou cursus incompatibles | Comparaison hors périmètre | Segment exact des deux comptes à l'acceptation et à chaque détail | Une erreur de classification amont reste possible |
-| Viewer ou token `owner` | Accès délégué à des notes croisées | `require_primary_owner`/`action`, auth IMT ou passkey, aucun `share_token_id` | Vol d'une session primaire active |
-| Administrateur lisant une comparaison | Accès privilégié indu | Les sessions admin ne sont pas des sessions étudiantes ; aucune route admin de détail | Root/PostgreSQL peut toujours lire les tables académiques sources |
-| Accès direct par `public_id` / IDOR | Lecture d'une autre paire | ID opaque et filtre participant côté serveur ; erreur identique absent/non autorisé | Bug futur si une route omet le filtre |
-| Révocation pendant une lecture | Réponse après retrait | Verrou partagé de la relation pendant le calcul ; révocation exclusive ; aucune lecture commencée après commit | Une réponse déjà reçue ne peut pas être rappelée |
-| Expiration pendant une lecture | Données après échéance | Vérification sous verrou au début ; expiration à chaque nouvelle lecture | Une réponse commencée juste avant l'échéance peut finir |
-| Compte désactivé ou supprimé | Accès persistant | Auth refuse le compte désactivé ; paire revalidée ; FK cascade à la suppression | Les copies réalisées avant suppression subsistent chez l'autre participant |
-| Changement de cursus/promotion | Ancienne relation devenue incompatible | Éligibilité revalidée à chaque détail et statut non actif dans la liste | Fenêtre jusqu'à la mise à jour locale des attributs officiels |
-| Ancien lien après révocation | Réactivation involontaire | Secret invitation terminal ; nouveau consentement requis ; nouveau `public_id` à la réactivation | Restauration d'une sauvegarde exige une procédure de révocation |
-| Relation existante et nouvelle invitation | Relations parallèles | Une paire canonique unique ; invitation refusée si active ; politique de réactivation explicite | Invitations actives restantes doivent être révoquées manuellement |
-| Fuite dans événements/métriques | Données académiques secondaires | Événements sans score, UE, token, digest ou autre compte ; métriques agrégées | Un volume très faible peut révéler une utilisation générale à l'opérateur |
-| Fuite dans traces SQL | Secret ou résultat | Paramètres liés ; aucun token brut en base ; logs SQL désactivés en production | Un opérateur activant un tracing de bodies pourrait violer la politique |
-| Cache navigateur/proxy | Réponse servie après révocation | `private, no-store`, `Pragma: no-cache`, `Vary: Cookie`, aucun service worker | Le navigateur peut garder une page déjà affichée en mémoire |
-| Capture volontaire | Diffusion hors produit | Copy de consentement explicite et périmètre minimal | Impossible à empêcher : un participant autorisé peut recopier ou capturer l'écran |
+| Menace                                               | Impact                                                  | Contrôles V1                                                                                                                                         | Risque résiduel                                                                   |
+| ---------------------------------------------------- | ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Énumération des comptes                              | Découverte d'identités ou profils                       | Aucun annuaire ni recherche ; invitation bearer ; erreurs d'éligibilité génériques                                                                   | Le créateur connaît naturellement l'identité après acceptation                    |
+| Invitation transférée à un tiers                     | Mauvais participant                                     | Secret à forte entropie, comptes compatibles requis, prévisualisation et consentement explicite                                                      | Tout tiers éligible qui reçoit volontairement le secret peut l'accepter           |
+| Token volé                                           | Activation non voulue                                   | TTL sept jours, usage unique, refus/révocation, HMAC seul en base, session primaire exigée                                                           | Compromission conjointe du lien et d'un compte éligible                           |
+| Token dans logs ou `Referer`                         | Réutilisation du lien                                   | Fragment navigateur, effacement avec `replaceState` avant preview, body POST, `no-referrer`, validation sans echo, événements allowlistés            | Le canal de partage tiers peut conserver le lien                                  |
+| Token dans l'état ou les caches frontend             | Exposition après le flux ou via outils de développement | Référence mémoire éphémère, appels directs du client généré, aucune query/mutation TanStack, aucun storage, `history.state`, titre, toast ou console | Une extension de navigateur compromise peut lire une page ouverte                 |
+| Double effet React StrictMode                        | Preview ou acceptation répétée                          | Capture unique du fragment, garde de montage et appels utilisateur ponctuels ; tests StrictMode                                                      | Un changement futur du cycle de montage doit conserver ces tests                  |
+| Token réutilisé                                      | Relations multiples                                     | Verrou `FOR UPDATE`, état consommé atomique, digest unique                                                                                           | Aucun après commit hors restauration d'une ancienne base                          |
+| Double acceptation simultanée                        | Deux relations ou destinataires                         | Verrou invitation, comptes verrouillés dans l'ordre canonique, paire unique, tests PostgreSQL                                                        | Blocage transitoire possible sous forte concurrence                               |
+| Auto-invitation                                      | Contournement du consentement bilatéral                 | IDs distincts obligatoires, refus générique avant création relationnelle                                                                             | Aucun connu                                                                       |
+| Promotions ou cursus incompatibles                   | Comparaison hors périmètre                              | Segment exact des deux comptes à l'acceptation et à chaque détail                                                                                    | Une erreur de classification amont reste possible                                 |
+| Viewer ou token `owner`                              | Accès délégué à des notes croisées                      | `require_primary_owner`/`action`, auth IMT ou passkey, aucun `share_token_id`                                                                        | Vol d'une session primaire active                                                 |
+| Administrateur lisant une comparaison                | Accès privilégié indu                                   | Les sessions admin ne sont pas des sessions étudiantes ; aucune route admin de détail                                                                | Root/PostgreSQL peut toujours lire les tables académiques sources                 |
+| Accès direct par `public_id` / IDOR                  | Lecture d'une autre paire                               | ID opaque et filtre participant côté serveur ; erreur identique absent/non autorisé                                                                  | Bug futur si une route omet le filtre                                             |
+| Révocation pendant une lecture                       | Réponse après retrait                                   | Verrou partagé de la relation pendant le calcul ; révocation exclusive ; aucune lecture commencée après commit                                       | Une réponse déjà reçue ne peut pas être rappelée                                  |
+| Expiration pendant une lecture                       | Données après échéance                                  | Vérification sous verrou au début ; expiration à chaque nouvelle lecture                                                                             | Une réponse commencée juste avant l'échéance peut finir                           |
+| Compte désactivé ou supprimé                         | Accès persistant                                        | Auth refuse le compte désactivé ; paire revalidée ; FK cascade à la suppression                                                                      | Les copies réalisées avant suppression subsistent chez l'autre participant        |
+| Changement de cursus/promotion                       | Ancienne relation devenue incompatible                  | Éligibilité revalidée à chaque détail et statut non actif dans la liste                                                                              | Fenêtre jusqu'à la mise à jour locale des attributs officiels                     |
+| Ancien lien après révocation                         | Réactivation involontaire                               | Secret invitation terminal ; nouveau consentement requis ; nouveau `public_id` à la réactivation                                                     | Restauration d'une sauvegarde exige une procédure de révocation                   |
+| Relation existante et nouvelle invitation            | Relations parallèles                                    | Une paire canonique unique ; invitation refusée si active ; politique de réactivation explicite                                                      | Invitations actives restantes doivent être révoquées manuellement                 |
+| Fuite dans événements/métriques                      | Données académiques secondaires                         | Événements sans score, UE, token, digest ou autre compte ; métriques agrégées                                                                        | Un volume très faible peut révéler une utilisation générale à l'opérateur         |
+| Fuite dans traces SQL                                | Secret ou résultat                                      | Paramètres liés ; aucun token brut en base ; logs SQL désactivés en production                                                                       | Un opérateur activant un tracing de bodies pourrait violer la politique           |
+| Cache navigateur/proxy                               | Réponse servie après révocation                         | `private, no-store`, `Pragma: no-cache`, `Vary: Cookie`, aucun service worker                                                                        | Le navigateur peut garder une page déjà affichée en mémoire                       |
+| Cache React après révocation ou changement de compte | Affichage croisé devenu non autorisé                    | Clés bornées par compte, `gcTime=0`, retrait au démontage, `404`, révocation, déconnexion et changement de capacité                                  | Une donnée déjà lue reste mémorisable par le participant                          |
+| Token dans trace, vidéo ou capture                   | Secret durable dans un artefact de test                 | Fixtures synthétiques aléatoires, trace/vidéo/capture désactivées pour les flux E2E one-shot                                                         | Une capture manuelle explicite du lien reste hors contrôle du produit             |
+| Capture volontaire                                   | Diffusion hors produit                                  | Copy de consentement explicite et périmètre minimal                                                                                                  | Impossible à empêcher : un participant autorisé peut recopier ou capturer l'écran |
 
 ## Concurrence et atomicité
 
@@ -91,6 +96,13 @@ Les valeurs manuelles, simulations, détails d'évaluation, contenus Parcours et
 données du leaderboard sont absents du contrat V1. Une ambiguïté de code
 officiel du même côté retire l'UE de l'intersection au lieu d'effectuer un
 rapprochement flou.
+
+Le client n'utilise la capacité de session que pour la visibilité et le
+routage. Une route masquée n'est jamais considérée comme autorisée : chaque
+lecture et mutation conserve les contrôles backend de participant, session
+primaire, Origin, CSRF et feature flag. Le titre du document ne reçoit
+l'identité de l'autre participant qu'après chargement autorisé de la relation ;
+il ne contient jamais de token, identifiant public ou résultat académique.
 
 ## Hypothèses et risques acceptés
 

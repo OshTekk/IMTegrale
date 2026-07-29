@@ -142,4 +142,35 @@ describe("replaceSessionState", () => {
 
     expect(queryClient.getQueryData(queryKeys.learningCatalog("account-a", "release-v1"))).toBeUndefined();
   });
+
+  it("purges private comparison data when its session capability changes", () => {
+    const queryClient = new QueryClient();
+    const previous = {
+      authenticated: true,
+      role: "owner" as const,
+      auth_method: "imt" as const,
+      account: { id: "account-a", display_name: "[FICTIF] Compte", imt_username: "fictif" },
+      private_comparisons: { available: true },
+    };
+    queryClient.setQueryData(queryKeys.privateComparisons("account-a"), { comparisons: [{ private: true }] });
+    queryClient.setQueryData(queryKeys.privateComparison("account-a", "pc_synthetic"), { private: true });
+
+    clearAccountStateOnCapabilityChange(queryClient, previous, {
+      ...previous,
+      private_comparisons: { available: false },
+    });
+
+    expect(queryClient.getQueryData(queryKeys.privateComparisons("account-a"))).toBeUndefined();
+    expect(queryClient.getQueryData(queryKeys.privateComparison("account-a", "pc_synthetic"))).toBeUndefined();
+  });
+
+  it("keeps invitation secrets out of every private comparison query key", () => {
+    const rendered = JSON.stringify([
+      queryKeys.privateComparisonsRoot("account-a"),
+      queryKeys.privateComparisonInvitations("account-a"),
+      queryKeys.privateComparisons("account-a"),
+      queryKeys.privateComparison("account-a", "pc_synthetic-public-id"),
+    ]);
+    expect(rendered).not.toContain("pcinv1_");
+  });
 });

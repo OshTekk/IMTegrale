@@ -1,7 +1,8 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { lazy, Suspense, useEffect, useLayoutEffect } from "react";
-import { Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { lazy, Suspense, type ReactNode, useEffect, useLayoutEffect } from "react";
+import { Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AppShell } from "./components/AppShell";
+import { EmptyState } from "./components/EmptyState";
 import { Logo } from "./components/Logo";
 import { PublicLayout } from "./components/PublicLayout";
 import { SecuritySetupModal } from "./components/SecuritySetupModal";
@@ -23,6 +24,7 @@ const loadSimulationsPage = () => import("./pages/SimulationsPage");
 const loadNoteSimulationsPage = () => import("./pages/NoteSimulationsPage");
 const loadCalendarPage = () => import("./pages/CalendarPage");
 const loadLearningPage = () => import("./pages/LearningPage");
+const loadPrivateComparisonPages = () => import("./pages/private-comparisons");
 const OverviewPage = lazy(() => loadOverviewPage().then((module) => ({ default: module.OverviewPage })));
 const ResultsPage = lazy(() => loadResultsPages().then((module) => ({ default: module.ResultsPage })));
 const ResultsUeDetailPage = lazy(() => loadResultsPages().then((module) => ({ default: module.ResultsUeDetailPage })));
@@ -38,6 +40,15 @@ const NoteSimulationsPage = lazy(() =>
 );
 const CalendarPage = lazy(() => loadCalendarPage().then((module) => ({ default: module.CalendarPage })));
 const LearningPage = lazy(() => loadLearningPage().then((module) => ({ default: module.LearningPage })));
+const PrivateComparisonsPage = lazy(() =>
+  loadPrivateComparisonPages().then((module) => ({ default: module.PrivateComparisonsPage })),
+);
+const PrivateComparisonAcceptPage = lazy(() =>
+  loadPrivateComparisonPages().then((module) => ({ default: module.PrivateComparisonAcceptPage })),
+);
+const PrivateComparisonDetailPage = lazy(() =>
+  loadPrivateComparisonPages().then((module) => ({ default: module.PrivateComparisonDetailPage })),
+);
 const AdminPortal = lazy(() => import("./pages/AdminPortal").then((module) => ({ default: module.AdminPortal })));
 const TrustPage = lazy(() => import("./pages/TrustPage").then((module) => ({ default: module.TrustPage })));
 const DemoPage = lazy(() => import("./pages/DemoPage").then((module) => ({ default: module.DemoPage })));
@@ -48,6 +59,7 @@ const studentRouteLoaders: Record<string, () => Promise<unknown>> = {
   "/calendar": loadCalendarPage,
   "/ues/releve": loadAcademicReportPage,
   "/leaderboard": loadLeaderboardPage,
+  "/comparisons": loadPrivateComparisonPages,
   "/simulations": loadSimulationsPage,
   "/simulations/gpa": loadSimulationsPage,
   "/simulations/notes": loadNoteSimulationsPage,
@@ -62,6 +74,7 @@ const documentTitles: Record<string, string> = {
   "/calendar": "Agenda",
   "/ues/releve": "Relevé académique",
   "/leaderboard": "Classement",
+  "/comparisons": "Comparaisons privées",
   "/simulations": "Simulations",
   "/sharing": "Partage",
   "/settings": "Paramètres",
@@ -77,6 +90,8 @@ function preloadStudentRoute(path: string) {
 function studentDocumentTitle(path: string): string | undefined {
   if (path.startsWith("/results")) return "Résultats";
   if (path.startsWith("/simulations")) return "Simulations";
+  if (path.startsWith("/comparisons/")) return "Comparaison privée";
+  if (path === "/comparisons") return "Comparaisons privées";
   if (path.startsWith("/parcours")) return learningDocumentTitle(path);
   return documentTitles[path];
 }
@@ -86,6 +101,42 @@ function LegacyResultsRedirect({ view }: { view: "ues" | "evaluations" }) {
   const params = new URLSearchParams(location.search);
   params.set("view", view);
   return <Navigate to={`/results?${params.toString()}`} replace />;
+}
+
+export function PrivateComparisonAcceptGate({
+  session,
+  children,
+}: {
+  session: NonNullable<ReturnType<typeof useSession>["data"]>;
+  children: ReactNode;
+}) {
+  if (!isPrimaryOwnerSession(session)) {
+    return (
+      <EmptyState
+        title="Compte personnel requis"
+        detail="Ce lien doit être ouvert avec ton compte IMTégrale personnel."
+        action={
+          <Link className="secondary-button" to="/">
+            Revenir à l’accueil
+          </Link>
+        }
+      />
+    );
+  }
+  if (session.private_comparisons?.available !== true) {
+    return (
+      <EmptyState
+        title="Comparaisons privées indisponibles"
+        detail="Cette fonctionnalité n’est pas disponible pour cette session."
+        action={
+          <Link className="secondary-button" to="/">
+            Revenir à l’accueil
+          </Link>
+        }
+      />
+    );
+  }
+  return children;
 }
 
 export default function App() {
@@ -179,6 +230,7 @@ function StudentApp() {
 
   const isOwner = session.data.role === "owner";
   const isPrimaryOwner = isPrimaryOwnerSession(session.data);
+  const privateComparisonsAvailable = Boolean(isPrimaryOwner && session.data.private_comparisons?.available === true);
   return (
     <>
       <Routes>
@@ -194,6 +246,22 @@ function StudentApp() {
           />
           <Route path="ues" element={<LegacyResultsRedirect view="ues" />} />
           <Route path="leaderboard" element={isOwner ? <LeaderboardPage /> : <Navigate to="/" replace />} />
+          <Route
+            path="comparisons"
+            element={privateComparisonsAvailable ? <PrivateComparisonsPage /> : <Navigate to="/" replace />}
+          />
+          <Route
+            path="comparisons/accept"
+            element={
+              <PrivateComparisonAcceptGate session={session.data}>
+                <PrivateComparisonAcceptPage />
+              </PrivateComparisonAcceptGate>
+            }
+          />
+          <Route
+            path="comparisons/:publicId"
+            element={privateComparisonsAvailable ? <PrivateComparisonDetailPage /> : <Navigate to="/" replace />}
+          />
           <Route path="simulations" element={isPrimaryOwner ? <SimulationLayout /> : <Navigate to="/" replace />}>
             <Route index element={<Navigate to="gpa" replace />} />
             <Route path="gpa" element={<SimulationsPage />} />

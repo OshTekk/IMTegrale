@@ -2480,6 +2480,9 @@
             "title": "Needs Sync Setup",
             "type": "boolean"
           },
+          "private_comparisons": {
+            "$ref": "#/components/schemas/PrivateComparisonsSessionResponse"
+          },
           "role": {
             "enum": [
               "owner",
@@ -2497,7 +2500,8 @@
           "needs_security_setup",
           "needs_sync_setup",
           "account",
-          "learning"
+          "learning",
+          "private_comparisons"
         ],
         "title": "AuthenticatedSessionResponse",
         "type": "object"
@@ -8736,6 +8740,20 @@
         "title": "PrivateComparisonUeSideResponse",
         "type": "object"
       },
+      "PrivateComparisonsSessionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "available"
+        ],
+        "title": "PrivateComparisonsSessionResponse",
+        "type": "object"
+      },
       "ServiceSessionResponse": {
         "additionalProperties": false,
         "properties": {
@@ -10892,10 +10910,14 @@
             "const": false,
             "title": "Authenticated",
             "type": "boolean"
+          },
+          "private_comparisons": {
+            "$ref": "#/components/schemas/PrivateComparisonsSessionResponse"
           }
         },
         "required": [
-          "authenticated"
+          "authenticated",
+          "private_comparisons"
         ],
         "title": "UnauthenticatedSessionResponse",
         "type": "object"

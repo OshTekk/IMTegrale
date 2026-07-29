@@ -114,7 +114,22 @@ def test_index_path_bypasses_are_rejected(tmp_path: Path, relative_path: str, ex
         "backend/app/services/private_comparisons.py",
         "docs/private-comparisons.md",
         "docs/security/private-comparisons-threat-model.md",
+        "frontend/e2e/private-comparison-fixtures.ts",
+        "frontend/e2e/private-comparisons.spec.ts",
         "frontend/src/lib/privateComparisonsGenerated.test.ts",
+        "frontend/src/pages/private-comparisons/PrivateComparisonAcceptPage.tsx",
+        "frontend/src/pages/private-comparisons/PrivateComparisonCommonUes.tsx",
+        "frontend/src/pages/private-comparisons/PrivateComparisonConfirmModal.tsx",
+        "frontend/src/pages/private-comparisons/PrivateComparisonConsent.tsx",
+        "frontend/src/pages/private-comparisons/PrivateComparisonDetailPage.tsx",
+        "frontend/src/pages/private-comparisons/PrivateComparisonInvitationModal.tsx",
+        "frontend/src/pages/private-comparisons/PrivateComparisonScope.tsx",
+        "frontend/src/pages/private-comparisons/PrivateComparisonSummary.tsx",
+        "frontend/src/pages/private-comparisons/PrivateComparisonsPage.tsx",
+        "frontend/src/pages/private-comparisons/index.ts",
+        "frontend/src/pages/private-comparisons/privateComparisonPresentation.ts",
+        "frontend/src/pages/private-comparisons/privateComparisons.css",
+        "frontend/src/pages/private-comparisons/privateComparisons.test.tsx",
     ],
 )
 def test_public_private_comparison_paths_are_narrowly_allowlisted(
@@ -136,6 +151,8 @@ def test_public_private_comparison_paths_are_narrowly_allowlisted(
         "backend/app/services/private_comparisons.py.bak",
         "backend/app/services/private_comparisons/notes.py",
         "docs/private-comparisons/notes.md",
+        "frontend/e2e/private-comparisons.spec.ts.bak",
+        "frontend/src/pages/private-comparisons/UnexpectedPage.tsx",
     ],
 )
 def test_private_comparison_path_allowlist_rejects_nearby_paths(
@@ -146,6 +163,48 @@ def test_private_comparison_path_allowlist_rejects_nearby_paths(
     _stage(repo, relative_path)
 
     result = scan_repository(repo)
+
+    assert result.violations["PRIVATE_PATH_TRACKED"] == 1
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "private-comparisons-AbC_1234.js",
+        "private-comparisons-AbC_1234.css",
+    ],
+)
+def test_public_private_comparison_vite_chunks_are_narrowly_allowlisted(
+    tmp_path: Path,
+    filename: str,
+) -> None:
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "assets" / filename).write_bytes(b"PUBLIC_PRIVATE_COMPARISON = true\n")
+
+    result = scan_directory(dist)
+
+    assert result.ok, format_result(result)
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "private-comparisons-AbC_123.js",
+        "private-comparisons-AbC_12345.js",
+        "private-comparisons-AbC_1234.map",
+        "Private-comparisons-AbC_1234.js",
+    ],
+)
+def test_public_private_comparison_vite_chunk_allowlist_rejects_nearby_paths(
+    tmp_path: Path,
+    filename: str,
+) -> None:
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "assets" / filename).write_bytes(b"synthetic test data")
+
+    result = scan_directory(dist)
 
     assert result.violations["PRIVATE_PATH_TRACKED"] == 1
 

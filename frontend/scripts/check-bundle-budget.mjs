@@ -10,8 +10,9 @@ const budgets = {
   largestNonPdfJavaScriptGzip: 110 * 1024,
   largestStylesheetGzip: 36 * 1024,
   learningRoute: { gzip: 115 * 1024, brotli: 98 * 1024 },
+  privateComparisonsRoute: { gzip: 12 * 1024, brotli: 10 * 1024 },
   sourceViewerGzip: 16 * 1024,
-  nonPdfApplication: { gzip: 520 * 1024, brotli: 455 * 1024 },
+  nonPdfApplication: { gzip: 532 * 1024, brotli: 465 * 1024 },
   pdfRuntimeGzip: 135 * 1024,
   pdfWorker: { raw: 1_300 * 1024, gzip: 390 * 1024 },
 };
@@ -19,6 +20,7 @@ const budgets = {
 const entries = Object.entries(manifest);
 const entryKey = entries.find(([, value]) => value.isEntry)?.[0];
 const learningKey = "src/pages/LearningPage.tsx";
+const privateComparisonsKey = "src/pages/private-comparisons/index.ts";
 const viewerKey = "src/components/LearningSourceViewer.tsx";
 const pdfRuntimeKey = entries.find(([key]) => key.includes("pdfjs-dist") && key.endsWith("/build/pdf.mjs"))?.[0];
 const pdfWorkerKey = entries.find(
@@ -29,6 +31,7 @@ const failures = [];
 for (const [label, key] of [
   ["application entry", entryKey],
   ["learning route", learningKey],
+  ["private comparisons route", privateComparisonsKey],
   ["source viewer", viewerKey],
   ["PDF.js runtime", pdfRuntimeKey],
   ["PDF.js worker", pdfWorkerKey],
@@ -89,11 +92,14 @@ function difference(files, excluded) {
 
 const initialFiles = staticGraph(entryKey);
 const learningFiles = staticGraph(learningKey);
+const privateComparisonsFiles = staticGraph(privateComparisonsKey);
 const viewerFiles = staticGraph(viewerKey);
 const learningIncrementalFiles = difference(learningFiles, initialFiles);
+const privateComparisonsIncrementalFiles = difference(privateComparisonsFiles, initialFiles);
 const viewerIncrementalFiles = difference(viewerFiles, new Set([...initialFiles, ...learningIncrementalFiles]));
 const initial = aggregate(initialFiles);
 const learningRoute = aggregate(learningIncrementalFiles);
+const privateComparisonsRoute = aggregate(privateComparisonsIncrementalFiles);
 const sourceViewer = aggregate(viewerIncrementalFiles);
 const pdfRuntime = measure(manifest[pdfRuntimeKey].file);
 const pdfWorker = measure(manifest[pdfWorkerKey].file);
@@ -126,6 +132,8 @@ limit("largest non-PDF JavaScript gzip", largestNonPdfJavaScriptGzip, budgets.la
 limit("largest stylesheet gzip", largestStylesheetGzip, budgets.largestStylesheetGzip);
 limit("learning route gzip", learningRoute.gzip, budgets.learningRoute.gzip);
 limit("learning route brotli", learningRoute.brotli, budgets.learningRoute.brotli);
+limit("private comparisons route gzip", privateComparisonsRoute.gzip, budgets.privateComparisonsRoute.gzip);
+limit("private comparisons route brotli", privateComparisonsRoute.brotli, budgets.privateComparisonsRoute.brotli);
 limit("source viewer gzip", sourceViewer.gzip, budgets.sourceViewerGzip);
 limit("non-PDF application gzip", nonPdfApplication.gzip, budgets.nonPdfApplication.gzip);
 limit("non-PDF application brotli", nonPdfApplication.brotli, budgets.nonPdfApplication.brotli);
@@ -134,6 +142,7 @@ limit("PDF.js worker raw", pdfWorker.raw, budgets.pdfWorker.raw);
 limit("PDF.js worker gzip", pdfWorker.gzip, budgets.pdfWorker.gzip);
 
 const learningEntry = manifest[learningKey];
+const privateComparisonsEntry = manifest[privateComparisonsKey];
 const viewerEntry = manifest[viewerKey];
 if (initialFiles.has(viewerEntry.file) || initialFiles.has(pdfRuntime.file) || initialFiles.has(pdfWorker.file)) {
   failures.push("PDF.js or its viewer leaked into the initial application graph");
@@ -147,6 +156,9 @@ if (!(viewerEntry.dynamicImports ?? []).includes(pdfRuntimeKey)) {
 if (!(viewerEntry.assets ?? []).includes(pdfWorker.file)) {
   failures.push("the local PDF.js worker is not attached to the source viewer chunk");
 }
+if (initialFiles.has(privateComparisonsEntry.file)) {
+  failures.push("the private comparisons route leaked into the initial application graph");
+}
 
 console.log(
   JSON.stringify(
@@ -155,6 +167,7 @@ console.log(
       largestNonPdfJavaScriptGzip,
       largestStylesheetGzip,
       learningRoute,
+      privateComparisonsRoute,
       sourceViewer,
       nonPdfApplication,
       pdfRuntime,

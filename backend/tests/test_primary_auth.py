@@ -214,7 +214,10 @@ def test_passkey_primary_owner_can_manage_passkeys_and_create_owner_token(
         headers=csrf_headers(client),
     )
     assert removed.status_code == 200
-    assert client.get("/api/v1/auth/session").json() == {"authenticated": False}
+    assert client.get("/api/v1/auth/session").json() == {
+        "authenticated": False,
+        "private_comparisons": {"available": False},
+    }
 
     delegated = _login_with_token(client.app, owner_token["token"])
     try:
@@ -334,7 +337,10 @@ def test_owner_token_cannot_bootstrap_primary_access_but_can_delegate_viewer(
         headers=csrf_headers(client),
     )
     assert revoked.status_code == 200
-    assert delegated.get("/api/v1/auth/session").json() == {"authenticated": False}
+    assert delegated.get("/api/v1/auth/session").json() == {
+        "authenticated": False,
+        "private_comparisons": {"available": False},
+    }
 
     with SessionLocal() as db:
         assert session_is_active(db, delegated_session_id, delegated_account_id) is False
@@ -445,7 +451,10 @@ def test_access_generation_rejects_late_session_and_token_writers(client: TestCl
     session_cookie, csrf_cookie = cookie_names(settings)
     client.cookies.set(session_cookie, raw_session)
     client.cookies.set(csrf_cookie, raw_csrf)
-    assert client.get("/api/v1/auth/session").json() == {"authenticated": False}
+    assert client.get("/api/v1/auth/session").json() == {
+        "authenticated": False,
+        "private_comparisons": {"available": False},
+    }
 
     late_token = client.post("/api/v1/auth/login/token", json={"token": raw_token})
     assert late_token.status_code == 401

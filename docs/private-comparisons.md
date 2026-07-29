@@ -1,8 +1,9 @@
 # Comparaisons privées V1
 
-État : fondations backend non publiées. La fonctionnalité est désactivée par
-défaut avec `BOTNOTE_PRIVATE_COMPARISONS_ENABLED=false`, n'a pas d'interface
-React et ne doit pas être activée avant une revue et un lot frontend séparés.
+État : backend Lot A et interface Lot B développés sur une branche et une draft
+PR non publiées. La fonctionnalité reste désactivée par défaut avec
+`BOTNOTE_PRIVATE_COMPARISONS_ENABLED=false`, la migration `0029` n'est pas
+déployée et l'activation exige une revue de sécurité et de déploiement séparée.
 
 ## Positionnement
 
@@ -39,16 +40,48 @@ gagnant ou perdant n'est calculé.
 7. La relation expire au terme choisi, entre 1 et 90 jours, ou est révoquée
    immédiatement par l'un des participants.
 
-L'interface future doit mettre le secret dans le fragment du navigateur :
+L'interface construit le lien avec le secret dans le fragment du navigateur :
 
 ```text
-/leaderboard/comparisons/accept#invite=SECRET
+/comparisons/accept#invite=SECRET
 ```
 
 Le fragment n'est pas envoyé dans la requête HTTP ni dans le `Referer`. Le
 navigateur l'extrait puis envoie le secret uniquement dans le body d'un `POST`.
-Le frontend devra le retirer de l'URL avec `history.replaceState` dès qu'il est
-capturé, sans télémétrie, trace ou stockage persistant.
+Le frontend le retire de l'URL avec `history.replaceState` avant la preview,
+sans télémétrie, trace ou stockage persistant. Un rechargement après cet
+effacement ne restaure pas le secret : l'utilisateur doit rouvrir le lien
+original.
+
+## Interface, session et cache
+
+Les routes frontend sont `/comparisons`, `/comparisons/accept` et
+`/comparisons/:publicId`. Le module est chargé à la demande et reste distinct du
+Classement. La navigation n'est affichée que lorsque la session expose
+`private_comparisons.available=true`, c'est-à-dire pour un propriétaire primaire
+actif lorsque le feature flag est ouvert. Cette capacité améliore l'ergonomie ;
+les dépendances backend restent la frontière d'autorisation.
+
+Le secret one-shot reste uniquement dans l'état mémoire de la modale qui
+l'affiche ou dans une référence éphémère pendant preview, acceptation ou refus.
+Ces appels utilisent directement le client TypeScript généré : le secret
+n'entre dans aucune query key, aucun cache de query ou mutation, aucun storage,
+aucun `history.state`, titre, toast ou libellé accessible. Fermer la modale,
+terminer le flux, changer de session ou démonter la page efface la référence.
+
+Les listes et détails utilisent des clés TanStack Query bornées par l'identifiant
+du compte courant. Les listes sont toujours revérifiées au focus. Un détail a
+`staleTime=0`, `gcTime=0` et est supprimé au démontage, après révocation, après
+un `404`, lors d'une déconnexion ou d'un changement de capacité. Aucun cache
+persistant ou service worker ne conserve les réponses, qui restent `private,
+no-store` côté serveur.
+
+Sur mobile, Comparaisons reste dans le panneau Plus et les résumés/UE communes
+sont présentés en cartes sans table comprimée. Les modales restaurent le focus,
+les actions principales conservent une cible tactile de 44 px et les règles
+`prefers-reduced-motion` sont définies dans la feuille lazy elle-même. La lecture
+reste strictement symétrique, sans écart, rang, gagnant ou code couleur
+compétitif.
 
 ## Consentement version 1
 
@@ -103,17 +136,17 @@ déclenche jamais de synchronisation PASS ou COMPETENCES.
 
 ## API V1
 
-| Méthode | Route | Effet |
-| --- | --- | --- |
-| `POST` | `/api/v1/private-comparisons/invitations` | Crée une invitation et retourne le secret une fois |
-| `GET` | `/api/v1/private-comparisons/invitations` | Liste les invitations du créateur sans secret ni destinataire |
-| `POST` | `/api/v1/private-comparisons/invitations/preview` | Prévisualise le créateur et le périmètre avec le secret |
-| `POST` | `/api/v1/private-comparisons/invitations/accept` | Accepte et active atomiquement la relation |
-| `POST` | `/api/v1/private-comparisons/invitations/decline` | Invalide le lien sans créer de relation |
-| `DELETE` | `/api/v1/private-comparisons/invitations/{public_id}` | Révoque une invitation du créateur |
-| `GET` | `/api/v1/private-comparisons` | Liste uniquement les relations du participant courant |
-| `GET` | `/api/v1/private-comparisons/{public_id}` | Calcule le résumé et les UE communes |
-| `DELETE` | `/api/v1/private-comparisons/{public_id}` | Révoque immédiatement la relation |
+| Méthode  | Route                                                 | Effet                                                         |
+| -------- | ----------------------------------------------------- | ------------------------------------------------------------- |
+| `POST`   | `/api/v1/private-comparisons/invitations`             | Crée une invitation et retourne le secret une fois            |
+| `GET`    | `/api/v1/private-comparisons/invitations`             | Liste les invitations du créateur sans secret ni destinataire |
+| `POST`   | `/api/v1/private-comparisons/invitations/preview`     | Prévisualise le créateur et le périmètre avec le secret       |
+| `POST`   | `/api/v1/private-comparisons/invitations/accept`      | Accepte et active atomiquement la relation                    |
+| `POST`   | `/api/v1/private-comparisons/invitations/decline`     | Invalide le lien sans créer de relation                       |
+| `DELETE` | `/api/v1/private-comparisons/invitations/{public_id}` | Révoque une invitation du créateur                            |
+| `GET`    | `/api/v1/private-comparisons`                         | Liste uniquement les relations du participant courant         |
+| `GET`    | `/api/v1/private-comparisons/{public_id}`             | Calcule le résumé et les UE communes                          |
+| `DELETE` | `/api/v1/private-comparisons/{public_id}`             | Révoque immédiatement la relation                             |
 
 Toutes les réponses de cette surface utilisent `Cache-Control: private,
 no-store`, `Pragma: no-cache`, `Vary: Cookie`, `X-Content-Type-Options: nosniff`
@@ -131,9 +164,10 @@ répond `404` avant le parsing du body et aucune ligne ne peut être créée.
 - la migration `0029` est additive, ne crée aucune donnée et refuse le downgrade
   lorsqu'une invitation ou relation existe.
 
-Avant une activation future : migrer une base isolée, vérifier zéro ligne,
-déployer le backend flag fermé, exécuter les tests d'IDOR/concurrence, puis
-livrer l'interface dans un lot distinct. La V2 éventuelle des évaluations
+Avant une activation future : revoir et fusionner séparément la draft PR,
+migrer une base isolée, vérifier zéro ligne, déployer avec le flag fermé,
+exécuter les contrôles d'IDOR, concurrence, confidentialité, cache et responsive,
+puis décider explicitement de l'ouverture. La V2 éventuelle des évaluations
 détaillées exigera un périmètre, une version de consentement et une revue de
 menace séparés.
 

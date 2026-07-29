@@ -55,12 +55,13 @@ Avant toute exposition Internet, l'administrateur doit adapter les exemples de `
 
 Le [modèle de menace](docs/security/threat-model.md), la [procédure de rotation](docs/security/key-rotation.md) et les [niveaux d'assurance](docs/security/authentication-assurance.md) font partie de la politique maintenue.
 
-Les fondations backend des [comparaisons privées](docs/private-comparisons.md)
-sont séparées du leaderboard, fermées par feature flag et couvertes par un
+Les [comparaisons privées](docs/private-comparisons.md) sont séparées du
+leaderboard, fermées par feature flag et couvertes par un
 [modèle de menace dédié](docs/security/private-comparisons-threat-model.md).
-Elles n'ajoutent ni annuaire, ni publication, ni détail d'évaluation. Un secret
-d'invitation est une capacité temporaire : il ne doit jamais apparaître dans
-une URL serveur, un log, un événement ou une métrique.
+Le backend et l'interface restent non publiés et la migration n'est pas
+déployée. Ils n'ajoutent ni annuaire, ni publication, ni détail d'évaluation.
+Un secret d'invitation est une capacité temporaire : il ne doit jamais apparaître
+dans une URL serveur, un cache persistant, un log, un événement ou une métrique.
 
 ## Niveaux d'assurance propriétaire
 
@@ -106,7 +107,7 @@ Le frontend masque les commandes incompatibles et explique la reconnexion néces
 | Révoquer un credential IMT | `DELETE /api/v1/settings/sync-credential` | Propriétaire primaire, Origin et CSRF | La suppression locale reste disponible même lorsque l'enrôlement est fermé et conserve la session PASS/HUB |
 | Supprimer tout accès PASS/HUB | `POST /api/v1/settings/pass-access/purge` | Propriétaire primaire, Origin et CSRF | Révoque credential et sessions techniques, puis repasse en mode manuel sans supprimer les données académiques |
 | Publier ou retirer les données de classement | `POST` ou `DELETE /api/v1/leaderboard/*` | Toute session `owner`, avec Origin et CSRF | Le retrait et l'effacement doivent rester immédiats. La publication est candidate à un step-up récent, sans changement de comportement dans ce correctif |
-| Créer, accepter, refuser ou révoquer une comparaison privée | `/api/v1/private-comparisons/*` | Propriétaire primaire ; Origin et CSRF pour toute mutation | Le consentement bilatéral donne accès à des résultats académiques croisés. Le feature flag reste fermé tant que le frontend et la revue de déploiement ne sont pas livrés |
+| Créer, accepter, refuser ou révoquer une comparaison privée | `/api/v1/private-comparisons/*` | Propriétaire primaire ; Origin et CSRF pour toute mutation | Le consentement bilatéral donne accès à des résultats académiques croisés. La capacité frontend ne remplace jamais l'autorisation serveur ; le feature flag reste fermé jusqu'à une revue d'activation séparée |
 | Supprimer une simulation | `DELETE /api/v1/simulations/{id}`, `DELETE /api/v1/note-simulations/{id}` | Propriétaire primaire | Données privées modifiables uniquement par le titulaire |
 | Remplacer le mot de passe administrateur | `POST /api/v1/admin/auth/password` | Réseau privé, mot de passe actuel, CSRF, MFA et step-up passkey récent après l'initialisation | Toutes les anciennes sessions admin sont révoquées |
 | Ajouter ou supprimer une passkey admin | `/api/v1/admin/auth/passkeys*` | Mot de passe récent pour la première ; MFA et step-up récent pour les suivantes | La dernière passkey ne peut pas être supprimée |
