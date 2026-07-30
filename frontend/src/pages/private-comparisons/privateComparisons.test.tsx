@@ -17,8 +17,9 @@ import type {
 } from "../../generated/api/types.gen";
 import { PrivateComparisonAcceptGate } from "../../App";
 import { ToastProvider } from "../../components/Toast";
-import { clearAccountStateOnCapabilityChange, queryKeys } from "../../lib/queries";
+import { clearAccountStateOnCapabilityChange, queryKeys, useSession } from "../../lib/queries";
 import { primarySessionScope } from "../../lib/securityScope";
+import { fetchSecuritySession, SessionSecurityBoundary } from "../../lib/sessionSecurity";
 import { apiMockServer } from "../../test/server";
 import type { Session } from "../../types";
 import { PrivateComparisonAcceptPage } from "./PrivateComparisonAcceptPage";
@@ -126,6 +127,8 @@ const consentManifest: PrivateComparisonConsentManifestResponse = {
 const ownerSession: Session = {
   authenticated: true,
   session_scope: `bss1_${"a".repeat(64)}`,
+  session_expires_at: "2099-07-30T12:30:00.000Z",
+  server_time: "2099-07-30T12:00:00.000Z",
   role: "owner",
   auth_method: "imt",
   account: {
@@ -152,6 +155,7 @@ const replacementOwnerSession: Session = {
 const invitationCreated: PrivateComparisonInvitationCreatedResponse = {
   public_id: INVITATION_ID,
   token: TOKEN,
+  session_scope: ownerSession.session_scope!,
   consent_version: 2,
   expires_at: "2099-08-05T12:00:00Z",
   relationship_duration_days: 30,
@@ -179,12 +183,8 @@ const relations: PrivateComparisonListResponse = {
     },
     {
       public_id: OTHER_RELATION_ID,
-      other_participant: { official_name: "Morgan Exemple" },
       status: "revoked",
-      activated_at: "2099-06-01T12:00:00Z",
-      expires_at: "2099-06-20T12:00:00Z",
-      academic_verified_at: null,
-      freshness: "stale",
+      ended_at: "2099-06-20T12:00:00Z",
     },
   ],
 };
@@ -309,9 +309,23 @@ function Providers({
   client: QueryClient;
   strict?: boolean;
 }) {
+  function SecurityBoundary({ children: securedChildren }: { children: ReactNode }) {
+    const currentSession = useSession();
+    return (
+      <SessionSecurityBoundary
+        session={currentSession.data}
+        sessionPending={currentSession.isPending}
+        refetchSession={fetchSecuritySession}
+      >
+        {securedChildren}
+      </SessionSecurityBoundary>
+    );
+  }
   const content = (
     <QueryClientProvider client={client}>
-      <ToastProvider>{children}</ToastProvider>
+      <SecurityBoundary>
+        <ToastProvider>{children}</ToastProvider>
+      </SecurityBoundary>
     </QueryClientProvider>
   );
   return strict ? <StrictMode>{content}</StrictMode> : content;
@@ -378,6 +392,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  apiMockServer.use(http.get("*/api/v1/auth/session", () => HttpResponse.json(ownerSession)));
   Object.defineProperty(navigator, "clipboard", {
     configurable: true,
     value: { writeText: vi.fn().mockResolvedValue(undefined) },
@@ -555,8 +570,51 @@ describe("invitation one-shot", () => {
 
     expect(screen.queryByLabelText("Lien d’invitation")).toBeNull();
     expect(document.documentElement.outerHTML).not.toContain(TOKEN);
-    await userEvent.setup().click(screen.getAllByRole("button", { name: "Créer une invitation" })[0]!);
+    await userEvent.setup().click(await screen.findByRole("button", { name: "Créer une invitation" }));
     expect(screen.queryByLabelText("Lien d’invitation")).toBeNull();
+  });
+
+  it("interdit la copie si un signal inter-onglet arrive pendant la revalidation serveur", async () => {
+    installEmptyPrivateComparisonLists();
+    let authCalls = 0;
+    let releaseRevalidation: (() => void) | undefined;
+    const revalidationGate = new Promise<void>((resolve) => {
+      releaseRevalidation = resolve;
+    });
+    apiMockServer.use(
+      http.get("*/api/v1/auth/session", async () => {
+        authCalls += 1;
+        if (authCalls > 1) await revalidationGate;
+        return HttpResponse.json(ownerSession);
+      }),
+      http.post("*/api/v1/private-comparisons/invitations", () =>
+        HttpResponse.json(invitationCreated, { status: 201 }),
+      ),
+    );
+    const clipboardWrite = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
+    const client = testClient();
+    const user = await renderAndCreateInvitation(client);
+    expect(await screen.findByLabelText("Lien d’invitation")).toBeTruthy();
+    expect(authCalls).toBe(1);
+
+    const copyAttempt = user.click(screen.getByRole("button", { name: "Copier le lien" }));
+    await waitFor(() => expect(authCalls).toBe(2));
+    act(() => {
+      window.dispatchEvent(
+        new StorageEvent("storage", {
+          key: "botnote:session-change",
+          newValue: "synthetic-replacement",
+        }),
+      );
+    });
+
+    expect(screen.queryByLabelText("Lien d’invitation")).toBeNull();
+    expect(clipboardWrite).not.toHaveBeenCalled();
+    act(() => releaseRevalidation?.());
+    await copyAttempt;
+    await waitFor(() => expect(authCalls).toBeGreaterThanOrEqual(3));
+    expect(clipboardWrite).not.toHaveBeenCalled();
+    expect(document.documentElement.outerHTML).not.toContain(TOKEN);
   });
 
   it("ne place le bearer dans aucun cache, stockage, titre, toast, aria-live ou console", async () => {
@@ -712,6 +770,41 @@ describe("invitation one-shot", () => {
     expect(await screen.findByText("Impossible de créer l’invitation pour le moment.")).toBeTruthy();
     expect(screen.queryByLabelText("Lien d’invitation")).toBeNull();
     expect(document.body.textContent).not.toContain("secret-invalide");
+  });
+
+  it("refuse un bearer one-shot lié à une autre portée de session", async () => {
+    apiMockServer.use(
+      http.post("*/api/v1/private-comparisons/invitations", () =>
+        HttpResponse.json(
+          {
+            ...invitationCreated,
+            session_scope: replacementOwnerSession.session_scope,
+          },
+          { status: 201 },
+        ),
+      ),
+    );
+    render(
+      <Providers client={testClient()}>
+        <PrivateComparisonInvitationModal
+          open
+          onClose={() => undefined}
+          onCreated={() => undefined}
+          manifest={consentManifest}
+          manifestPending={false}
+          sessionScope={primarySessionScope(ownerSession)}
+        />
+      </Providers>,
+    );
+    const user = userEvent.setup();
+    for (const checkbox of screen.getAllByRole("checkbox")) {
+      await user.click(checkbox);
+    }
+    await user.click(screen.getByRole("button", { name: "Créer le lien" }));
+
+    expect(await screen.findByText("Impossible de créer l’invitation pour le moment.")).toBeTruthy();
+    expect(screen.queryByLabelText("Lien d’invitation")).toBeNull();
+    expect(document.documentElement.outerHTML).not.toContain(TOKEN);
   });
 
   it("interdit la création lorsque le manifeste est indisponible", () => {
@@ -945,12 +1038,42 @@ describe("acceptation depuis le fragment", () => {
 
     client.setQueryData(queryKeys.session, {
       ...ownerSession,
+      session_scope: `bss1_${"f".repeat(64)}`,
       account: { ...ownerSession.account!, id: "account-fictif-remplacement" },
     });
 
-    expect(await screen.findByText("Cette invitation n’est plus disponible")).toBeTruthy();
+    expect(await screen.findByText("Invitation à rouvrir")).toBeTruthy();
     expect(acceptCalls).toBe(0);
     expect(document.body.textContent).not.toContain(TOKEN);
+  });
+
+  it("purge le bearer d’acceptation à pagehide et exige de rouvrir le lien après BFCache", async () => {
+    let acceptCalls = 0;
+    let declineCalls = 0;
+    apiMockServer.use(
+      http.post("*/api/v1/private-comparisons/invitations/preview", () => HttpResponse.json(invitationPreview)),
+      http.post("*/api/v1/private-comparisons/invitations/accept", () => {
+        acceptCalls += 1;
+        return HttpResponse.json(relations.comparisons[0], { status: 201 });
+      }),
+      http.post("*/api/v1/private-comparisons/invitations/decline", () => {
+        declineCalls += 1;
+        return HttpResponse.json({ ok: true });
+      }),
+    );
+    window.history.replaceState(null, "", `/comparisons/accept#invite=${TOKEN}`);
+    renderRoute(<PrivateComparisonAcceptPage />, "/comparisons/accept");
+    expect(await screen.findByText("Camille Exemple te propose une comparaison")).toBeTruthy();
+
+    act(() => window.dispatchEvent(persistedPageTransition("pagehide")));
+    expect(screen.queryByText("Camille Exemple te propose une comparaison")).toBeNull();
+    expect(document.documentElement.outerHTML).not.toContain(TOKEN);
+
+    act(() => window.dispatchEvent(persistedPageTransition("pageshow")));
+    expect(await screen.findByText("Invitation à rouvrir")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Accepter la comparaison" })).toBeNull();
+    expect(acceptCalls).toBe(0);
+    expect(declineCalls).toBe(0);
   });
 });
 
@@ -975,7 +1098,14 @@ describe("listes et révocation", () => {
       </Providers>,
     );
     expect(await screen.findByText("Camille Exemple")).toBeTruthy();
-    expect(screen.getByText("Morgan Exemple")).toBeTruthy();
+    expect(screen.getByText("Comparaison terminée")).toBeTruthy();
+    expect(screen.queryByText("Morgan Exemple")).toBeNull();
+    expect(screen.getByText(/Révoquée le/)).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Pour protéger les deux participants, les identités et résultats ne sont plus affichés après la fin d’une comparaison.",
+      ),
+    ).toBeTruthy();
     for (const status of ["Active", "Utilisée", "Expirée", "Révoquée"]) {
       expect(screen.getAllByText(status).length).toBeGreaterThan(0);
     }

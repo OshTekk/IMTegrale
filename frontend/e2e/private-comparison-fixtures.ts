@@ -31,6 +31,7 @@ interface SyntheticRelation {
   status: "active" | "expired" | "revoked";
   activatedAt: string;
   expiresAt: string;
+  endedAt?: string;
 }
 
 export interface PrivateComparisonE2eState {
@@ -233,6 +234,8 @@ export function configurePrivateComparisonSession(
     ...appState.session,
     authenticated: true,
     session_scope: `bss1_${createHash("sha256").update(`synthetic-browser-session:${actor}`).digest("hex")}`,
+    session_expires_at: "2099-07-30T12:30:00.000Z",
+    server_time: "2099-07-30T12:00:00.000Z",
     role: value.role,
     auth_method: value.authMethod,
     account: {
@@ -279,6 +282,7 @@ export function seedRelation(state: PrivateComparisonE2eState, status: Synthetic
     status,
     activatedAt: "2099-07-29T11:00:00Z",
     expiresAt: status === "expired" ? "2020-08-28T11:00:00Z" : "2099-08-28T11:00:00Z",
+    endedAt: status === "active" ? undefined : "2020-08-28T11:00:00Z",
   };
   state.relations.push(relation);
   return relation.publicId;
@@ -289,6 +293,13 @@ function relationList(state: PrivateComparisonE2eState, actor: ComparisonActor) 
     comparisons: state.relations
       .filter((relation) => relation.accountA === actor || relation.accountB === actor)
       .map((relation) => {
+        if (relation.status !== "active") {
+          return {
+            public_id: relation.publicId,
+            status: relation.status,
+            ended_at: relation.endedAt ?? relation.expiresAt,
+          };
+        }
         const other = relation.accountA === actor ? relation.accountB : relation.accountA;
         return {
           public_id: relation.publicId,
@@ -424,6 +435,7 @@ export async function installFakePrivateComparisonApi(
         {
           public_id: invitation.publicId,
           token,
+          session_scope: `bss1_${createHash("sha256").update(`synthetic-browser-session:${actor}`).digest("hex")}`,
           consent_version: 2,
           expires_at: invitation.expiresAt,
           relationship_duration_days: invitation.durationDays,
@@ -543,6 +555,7 @@ export async function installFakePrivateComparisonApi(
       if (request.method() === "DELETE") {
         state.revokeRelationCalls += 1;
         relation.status = "revoked";
+        relation.endedAt = new Date().toISOString();
         await json(route, { ok: true });
         return;
       }

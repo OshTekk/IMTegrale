@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { Clock3, ShieldCheck, UserRoundCheck } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Clock3, ShieldCheck } from "lucide-react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import type { PrivateComparisonInvitationPreviewResponse } from "../../generated/api/types.gen";
 import {
@@ -16,8 +16,10 @@ import { queryKeys, useSession } from "../../lib/queries";
 import {
   PRIVATE_COMPARISON_DOCUMENT_TITLE,
   primarySessionScope,
+  useSessionBoundOneShot,
   useSecurityDocumentTitle,
 } from "../../lib/securityScope";
+import { useVerifiedSessionRequest } from "../../lib/sessionSecurity";
 import { PrivateComparisonConfirmModal } from "./PrivateComparisonConfirmModal";
 import {
   emptyPrivateComparisonConsent,
@@ -42,100 +44,90 @@ export function PrivateComparisonAcceptPage() {
   const { showToast } = useToast();
   const accountId = session.data?.account?.id ?? "anonymous";
   const sessionScope = primarySessionScope(session.data);
-  const tokenRef = useRef<string | null>(null);
-  const requestRef = useRef<AbortController | null>(null);
+  const runVerifiedRequest = useVerifiedSessionRequest();
   const processedRef = useRef(false);
-  const mountedRef = useRef(false);
-  const sessionScopeRef = useRef(sessionScope);
   const [state, setState] = useState<AcceptPageState>("checking");
   const [preview, setPreview] = useState<PrivateComparisonInvitationPreviewResponse | null>(null);
   const [consent, setConsent] = useState<PrivateComparisonConsentState>(emptyPrivateComparisonConsent);
   const [pendingAction, setPendingAction] = useState<"accept" | "decline" | null>(null);
   const [declineOpen, setDeclineOpen] = useState(false);
-
-  const clearToken = () => {
-    tokenRef.current = null;
-  };
+  const bearer = useSessionBoundOneShot<string>(sessionScope, true, () => {
+    setPreview(null);
+    setConsent(emptyPrivateComparisonConsent);
+    setPendingAction(null);
+    setDeclineOpen(false);
+    setState("unavailable");
+  });
+  const bearerRef = useRef(bearer);
+  const runVerifiedRequestRef = useRef(runVerifiedRequest);
+  bearerRef.current = bearer;
+  runVerifiedRequestRef.current = runVerifiedRequest;
 
   useLayoutEffect(() => {
-    mountedRef.current = true;
-    if (!processedRef.current) {
-      processedRef.current = true;
-      const fragment = invitationFromFragment(window.location.hash);
-      const cleanUrl = `${window.location.pathname}${window.location.search}`;
-      window.history.replaceState(window.history.state, "", cleanUrl);
-      if (fragment.state !== "valid") {
-        setState(fragment.state === "missing" ? "missing" : "unavailable");
-      } else {
-        tokenRef.current = fragment.token;
-        const request = new AbortController();
-        requestRef.current = request;
-        void apiData(
+    if (processedRef.current) return;
+    processedRef.current = true;
+    const fragment = invitationFromFragment(window.location.hash);
+    const cleanUrl = `${window.location.pathname}${window.location.search}`;
+    window.history.replaceState(window.history.state, "", cleanUrl);
+    if (fragment.state !== "valid") {
+      setState(fragment.state === "missing" ? "missing" : "unavailable");
+      return;
+    }
+    const currentBearer = bearerRef.current;
+    const request = currentBearer.begin();
+    if (!currentBearer.set(request, fragment.token)) {
+      currentBearer.purge();
+      return;
+    }
+    void runVerifiedRequestRef
+      .current(request.scope, (signal) =>
+        apiData(
           privateComparisonsPreviewPrivateComparisonInvitation({
             body: { token: fragment.token },
-            signal: request.signal,
+            signal,
             throwOnError: throwOnApiError,
           }),
-        )
-          .then((value) => {
-            if (!mountedRef.current) return;
-            if (
-              value.consent_version !== value.consent_manifest.consent_version ||
-              !usablePrivateComparisonConsentManifest(value.consent_manifest)
-            ) {
-              throw new Error("Private comparison consent manifest mismatch");
-            }
-            setPreview(value);
-            setState("preview");
-          })
-          .catch((error: unknown) => {
-            if (!mountedRef.current || request.signal.aborted) return;
-            clearToken();
-            setState("unavailable");
-            if (import.meta.env.DEV && error instanceof Error && error.name === "AbortError") return;
-          });
-      }
-    }
-
-    return () => {
-      mountedRef.current = false;
-      queueMicrotask(() => {
-        if (mountedRef.current) return;
-        requestRef.current?.abort();
-        requestRef.current = null;
-        clearToken();
+        ),
+      )
+      .then((value) => {
+        if (!currentBearer.finish(request)) return;
+        if (
+          value.consent_version !== value.consent_manifest.consent_version ||
+          !usablePrivateComparisonConsentManifest(value.consent_manifest)
+        ) {
+          throw new Error("Private comparison consent manifest mismatch");
+        }
+        setPreview(value);
+        setState("preview");
+      })
+      .catch(() => {
+        if (currentBearer.usable(request)) currentBearer.purge();
       });
-    };
   }, []);
 
-  useEffect(() => {
-    if (sessionScopeRef.current === sessionScope) return;
-    sessionScopeRef.current = sessionScope;
-    requestRef.current?.abort();
-    requestRef.current = null;
-    clearToken();
-    setPreview(null);
-    setState("unavailable");
-  }, [sessionScope]);
-
   const accept = async () => {
-    const token = tokenRef.current;
+    const token = bearer.current();
+    const requestScope = sessionScope;
     if (!token || !preview || !privateComparisonConsentComplete(consent) || pendingAction) return;
     setPendingAction("accept");
     try {
-      const relation = await apiData(
-        privateComparisonsAcceptPrivateComparisonInvitation({
-          body: {
-            token,
-            consent_version: preview.consent_manifest.consent_version,
-            acknowledge_identity_visibility: consent.identity,
-            acknowledge_academic_scope: consent.academic,
-            acknowledge_copy_risk: consent.copyRisk,
-          },
-          throwOnError: throwOnApiError,
-        }),
+      const relation = await runVerifiedRequest(requestScope, (signal) =>
+        apiData(
+          privateComparisonsAcceptPrivateComparisonInvitation({
+            body: {
+              token,
+              consent_version: preview.consent_manifest.consent_version,
+              acknowledge_identity_visibility: consent.identity,
+              acknowledge_academic_scope: consent.academic,
+              acknowledge_copy_risk: consent.copyRisk,
+            },
+            signal,
+            throwOnError: throwOnApiError,
+          }),
+        ),
       );
-      clearToken();
+      if (bearer.current() !== token) return;
+      bearer.clear();
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.privateComparisons(accountId) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.privateComparisonInvitations(accountId) }),
@@ -143,42 +135,39 @@ export function PrivateComparisonAcceptPage() {
       showToast("Comparaison acceptée.");
       navigate(`/comparisons/${relation.public_id}`, { replace: true });
     } catch (error) {
-      clearToken();
-      setPreview(null);
-      setState("unavailable");
+      if (bearer.current() !== token) return;
+      bearer.purge();
       showToast(privateComparisonErrorMessage(error, "conflict"), "error");
-    } finally {
-      setPendingAction(null);
     }
   };
 
   const decline = async () => {
-    const token = tokenRef.current;
+    const token = bearer.current();
+    const requestScope = sessionScope;
     if (!token || pendingAction) return;
     setPendingAction("decline");
     try {
-      await apiData(
-        privateComparisonsDeclinePrivateComparisonInvitation({
-          body: { token },
-          throwOnError: throwOnApiError,
-        }),
+      await runVerifiedRequest(requestScope, (signal) =>
+        apiData(
+          privateComparisonsDeclinePrivateComparisonInvitation({
+            body: { token },
+            signal,
+            throwOnError: throwOnApiError,
+          }),
+        ),
       );
-      clearToken();
+      if (bearer.current() !== token) return;
+      bearer.clear();
       setDeclineOpen(false);
       showToast("Invitation refusée.");
       navigate("/comparisons", { replace: true });
     } catch {
-      clearToken();
-      setPreview(null);
-      setDeclineOpen(false);
-      setState("unavailable");
-    } finally {
-      setPendingAction(null);
+      if (bearer.current() === token) bearer.purge();
     }
   };
 
   const cancel = () => {
-    clearToken();
+    bearer.purge();
     navigate("/comparisons", { replace: true });
   };
 
@@ -220,7 +209,7 @@ export function PrivateComparisonAcceptPage() {
     <div className="private-comparison-accept-page">
       <header className="private-comparison-accept-header">
         <span className="private-comparison-accept-icon">
-          <UserRoundCheck size={26} aria-hidden="true" />
+          <ShieldCheck size={26} aria-hidden="true" />
         </span>
         <div>
           <p className="private-comparisons-eyebrow">Invitation privée</p>

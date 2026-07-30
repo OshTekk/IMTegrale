@@ -7,6 +7,7 @@ import type {
 import { privateComparisonsCreatePrivateComparisonInvitation } from "../../generated/api/sdk.gen";
 import { apiData, throwOnApiError } from "../../lib/generatedApi";
 import { useSessionBoundOneShot } from "../../lib/securityScope";
+import { useSessionSecurity, useVerifiedSessionRequest } from "../../lib/sessionSecurity";
 import { Modal } from "../../components/Modal";
 import {
   emptyPrivateComparisonConsent,
@@ -44,6 +45,8 @@ export function PrivateComparisonInvitationModal({
   const [error, setError] = useState<string | null>(null);
   const [copyStatus, setCopyStatus] = useState("");
   const durationRef = useRef<HTMLSelectElement>(null);
+  const { revalidateScope } = useSessionSecurity();
+  const runVerifiedRequest = useVerifiedSessionRequest();
   const oneShot = useSessionBoundOneShot<PrivateComparisonInvitationCreatedResponse>(sessionScope, open, () => {
     setCopyStatus("");
     setError(null);
@@ -53,7 +56,7 @@ export function PrivateComparisonInvitationModal({
     onClose();
   });
   const usableManifest = manifest && usablePrivateComparisonConsentManifest(manifest) ? manifest : null;
-  const scopedCreated = oneShot.value;
+  const scopedCreated = oneShot.value?.session_scope === sessionScope ? oneShot.value : null;
 
   const close = oneShot.purge;
 
@@ -64,24 +67,27 @@ export function PrivateComparisonInvitationModal({
     setPending(true);
     setError(null);
     try {
-      const response = await apiData(
-        privateComparisonsCreatePrivateComparisonInvitation({
-          body: {
-            consent_version: usableManifest.consent_version,
-            acknowledge_identity_visibility: consent.identity,
-            acknowledge_academic_scope: consent.academic,
-            acknowledge_copy_risk: consent.copyRisk,
-            duration_days: duration,
-          },
-          signal: request.controller.signal,
-          throwOnError: throwOnApiError,
-        }),
+      const response = await runVerifiedRequest(request.scope, (sessionSignal) =>
+        apiData(
+          privateComparisonsCreatePrivateComparisonInvitation({
+            body: {
+              consent_version: usableManifest.consent_version,
+              acknowledge_identity_visibility: consent.identity,
+              acknowledge_academic_scope: consent.academic,
+              acknowledge_copy_risk: consent.copyRisk,
+              duration_days: duration,
+            },
+            signal: AbortSignal.any([request.controller.signal, sessionSignal]),
+            throwOnError: throwOnApiError,
+          }),
+        ),
       );
       if (!oneShot.usable(request)) return;
       if (!validInvitationToken(response.token)) {
         throw new Error("Invalid private comparison invitation token");
       }
       if (
+        response.session_scope !== request.scope ||
         response.consent_version !== requestManifestVersion ||
         !usablePrivateComparisonConsentManifest(response.consent_manifest) ||
         response.consent_manifest.consent_version !== requestManifestVersion
@@ -103,7 +109,16 @@ export function PrivateComparisonInvitationModal({
       oneShot.purge();
       return;
     }
+    const expectedScope = current.session_scope;
     try {
+      if (!(await revalidateScope(expectedScope))) {
+        oneShot.purge();
+        return;
+      }
+      if (oneShot.current() !== current) {
+        oneShot.purge();
+        return;
+      }
       await navigator.clipboard.writeText(invitationUrl(current.token));
       if (oneShot.current() === current) setCopyStatus("Lien copié.");
     } catch {
