@@ -674,18 +674,30 @@ class PrivateComparisonInvitationPreviewResponse(ApiModel):
     consent_manifest: PrivateComparisonConsentManifestResponse
 
 
-class PrivateComparisonRelationResponse(ApiModel):
+class ActivePrivateComparisonListItem(ApiModel):
     public_id: str
     other_participant: PrivateComparisonOfficialIdentityResponse
-    status: Literal["active", "expired", "revoked"]
+    status: Literal["active"]
     activated_at: datetime
     expires_at: datetime
     academic_verified_at: datetime | None
     freshness: Freshness
 
 
+class TerminalPrivateComparisonHistoryItem(ApiModel):
+    public_id: str
+    status: Literal["expired", "revoked"]
+    ended_at: datetime
+
+
+PrivateComparisonListItem: TypeAlias = Annotated[
+    ActivePrivateComparisonListItem | TerminalPrivateComparisonHistoryItem,
+    Field(discriminator="status"),
+]
+
+
 class PrivateComparisonListResponse(ApiModel):
-    comparisons: list[PrivateComparisonRelationResponse]
+    comparisons: list[PrivateComparisonListItem]
 
 
 class PrivateComparisonSummaryResponse(ApiModel):

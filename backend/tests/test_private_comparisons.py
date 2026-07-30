@@ -33,6 +33,7 @@ from app.security import (
     create_web_session,
     ensure_utc,
 )
+from app.services import private_comparisons as private_comparisons_service
 from app.services.events import record_event
 from app.services.operations import operational_alert_codes
 from app.services.private_comparisons import private_comparison_token_digest
@@ -868,6 +869,89 @@ def test_revocation_is_immediate_and_does_not_change_academic_rows(
         row = db.scalar(select(PrivateComparison))
         assert row is not None and row.revoked_at is not None
     assert after == before
+
+
+def test_terminal_history_never_projects_live_peer_data_after_revocation(
+    comparisons_enabled,
+    monkeypatch,
+) -> None:  # noqa: ANN001
+    creator, _creator_id = _seed_owner("history-revoked-a@example.test", "Ariane")
+    recipient, recipient_id = _seed_owner("history-revoked-b@example.test", "Basile")
+    relation = _accept(recipient, _create_invitation(creator)["token"])
+
+    active = creator.get("/api/v1/private-comparisons").json()["comparisons"][0]
+    assert active["status"] == "active"
+    assert active["other_participant"] == {"official_name": "Basile FIXTURE"}
+
+    revoked = creator.delete(
+        f"/api/v1/private-comparisons/{relation['public_id']}",
+        headers=csrf_headers(creator),
+    )
+    assert revoked.status_code == 200
+
+    def forbidden_live_projection(*_args, **_kwargs):  # noqa: ANN202
+        raise AssertionError("terminal history must not inspect eligibility or academic snapshots")
+
+    monkeypatch.setattr(private_comparisons_service, "_eligible_pair", forbidden_live_projection)
+    monkeypatch.setattr(
+        private_comparisons_service,
+        "_official_academic_snapshot",
+        forbidden_live_projection,
+    )
+    terminal_before = creator.get("/api/v1/private-comparisons").json()["comparisons"][0]
+    assert set(terminal_before) == {"public_id", "status", "ended_at"}
+    assert terminal_before["status"] == "revoked"
+
+    with SessionLocal() as db:
+        peer = db.get(Account, recipient_id)
+        assert peer is not None
+        peer.official_first_name = "Nouveau"
+        peer.official_last_name = "Nom"
+        peer.last_successful_sync_at = utcnow() - timedelta(days=90)
+        peer.academic_verified_at = utcnow() - timedelta(days=90)
+        peer.is_disabled = True
+        db.commit()
+
+    terminal_after = creator.get("/api/v1/private-comparisons").json()["comparisons"][0]
+    assert terminal_after == terminal_before
+    assert "Basile" not in str(terminal_after)
+    assert "Nouveau" not in str(terminal_after)
+
+
+def test_terminal_history_never_projects_live_peer_data_after_expiration(
+    comparisons_enabled,
+) -> None:  # noqa: ANN001
+    creator, _creator_id = _seed_owner("history-expired-a@example.test", "Celeste")
+    recipient, recipient_id = _seed_owner("history-expired-b@example.test", "Dorian")
+    _accept(recipient, _create_invitation(creator, duration_days=1)["token"])
+    with SessionLocal() as db:
+        relation = db.scalar(select(PrivateComparison))
+        assert relation is not None
+        now = utcnow()
+        activated_at = now - timedelta(days=2)
+        relation.created_at = activated_at
+        relation.account_a_consented_at = activated_at
+        relation.account_b_consented_at = activated_at
+        relation.activated_at = activated_at
+        relation.expires_at = now - timedelta(seconds=1)
+        db.commit()
+
+    terminal_before = creator.get("/api/v1/private-comparisons").json()["comparisons"][0]
+    assert set(terminal_before) == {"public_id", "status", "ended_at"}
+    assert terminal_before["status"] == "expired"
+
+    with SessionLocal() as db:
+        peer = db.get(Account, recipient_id)
+        assert peer is not None
+        peer.official_first_name = "Identite"
+        peer.last_successful_sync_at = utcnow()
+        peer.promotion_year = 2037
+        db.commit()
+
+    terminal_after = creator.get("/api/v1/private-comparisons").json()["comparisons"][0]
+    assert terminal_after == terminal_before
+    assert "Dorian" not in str(terminal_after)
+    assert "Identite" not in str(terminal_after)
 
 
 def test_stale_invitation_cannot_reactivate_revoked_relation(

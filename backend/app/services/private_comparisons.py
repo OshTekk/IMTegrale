@@ -238,20 +238,67 @@ def _eligible_pair(db: Session, first: Account, second: Account) -> bool:
     )
 
 
-def _locked_accounts(db: Session, account_ids: tuple[str, str]) -> dict[str, Account]:
-    rows = list(
-        db.scalars(select(Account).where(Account.id.in_(account_ids)).order_by(Account.id).with_for_update())
-    )
-    return {account.id: account for account in rows}
-
-
-def _shared_locked_accounts(db: Session, account_ids: tuple[str, str]) -> dict[str, Account]:
+def _locked_accounts(db: Session, account_ids: tuple[str, ...]) -> dict[str, Account]:
     rows = list(
         db.scalars(
-            select(Account).where(Account.id.in_(account_ids)).order_by(Account.id).with_for_update(read=True)
+            select(Account)
+            .where(
+                Account.id.in_(account_ids),
+                Account.is_disabled.is_(False),
+            )
+            .order_by(Account.id)
+            .execution_options(populate_existing=True)
+            .with_for_update()
         )
     )
     return {account.id: account for account in rows}
+
+
+def _shared_locked_accounts(db: Session, account_ids: tuple[str, ...]) -> dict[str, Account]:
+    rows = list(
+        db.scalars(
+            select(Account)
+            .where(
+                Account.id.in_(account_ids),
+                Account.is_disabled.is_(False),
+            )
+            .order_by(Account.id)
+            .execution_options(populate_existing=True)
+            .with_for_update(read=True)
+        )
+    )
+    return {account.id: account for account in rows}
+
+
+def _locked_accounts_including_disabled(
+    db: Session,
+    account_ids: tuple[str, ...],
+) -> dict[str, Account]:
+    rows = list(
+        db.scalars(
+            select(Account)
+            .where(Account.id.in_(account_ids))
+            .order_by(Account.id)
+            .execution_options(populate_existing=True)
+            .with_for_update()
+        )
+    )
+    return {account.id: account for account in rows}
+
+
+def load_fresh_active_primary_account_for_update(
+    db: Session,
+    account_id: str,
+) -> Account | None:
+    return db.scalar(
+        select(Account)
+        .where(
+            Account.id == account_id,
+            Account.is_disabled.is_(False),
+        )
+        .execution_options(populate_existing=True)
+        .with_for_update()
+    )
 
 
 def create_invitation(
@@ -264,7 +311,7 @@ def create_invitation(
 ) -> tuple[PrivateComparisonInvitation, str]:
     if consent_version != PRIVATE_COMPARISON_CONSENT_VERSION:
         _eligibility_error()
-    creator = db.scalar(select(Account).where(Account.id == creator_account_id).with_for_update())
+    creator = load_fresh_active_primary_account_for_update(db, creator_account_id)
     if creator is None or not _account_has_official_data(db, creator):
         _eligibility_error()
     now = utcnow()
@@ -322,6 +369,9 @@ def create_invitation(
 
 
 def list_invitations(db: Session, creator_account_id: str) -> list[dict]:
+    creator = _shared_locked_accounts(db, (creator_account_id,)).get(creator_account_id)
+    if creator is None:
+        return []
     rows = list(
         db.scalars(
             select(PrivateComparisonInvitation)
@@ -358,9 +408,12 @@ def revoke_invitation(
             PrivateComparisonInvitation.public_id == public_id,
             PrivateComparisonInvitation.creator_account_id == creator_account_id,
         )
+        .execution_options(populate_existing=True)
         .with_for_update()
     )
     if invitation is None:
+        raise_private_comparison_invitation_unavailable()
+    if load_fresh_active_primary_account_for_update(db, creator_account_id) is None:
         raise_private_comparison_invitation_unavailable()
     if invitation_status(invitation) is not PrivateComparisonInvitationStatus.ACTIVE:
         return False
@@ -380,7 +433,7 @@ def _invitation_for_token(
         raise_private_comparison_invitation_unavailable()
     statement = select(PrivateComparisonInvitation).where(
         PrivateComparisonInvitation.token_digest.in_(_private_comparison_token_digests(raw_token, settings))
-    )
+    ).execution_options(populate_existing=True)
     if lock:
         statement = statement.with_for_update()
     invitation = db.scalar(statement)
@@ -446,6 +499,7 @@ def accept_invitation(
             PrivateComparison.account_a_id == account_ids[0],
             PrivateComparison.account_b_id == account_ids[1],
         )
+        .execution_options(populate_existing=True)
         .with_for_update()
     )
     now = utcnow()
@@ -505,6 +559,8 @@ def decline_invitation(
 ) -> PrivateComparisonInvitation:
     invitation = _invitation_for_token(db, raw_token, settings, lock=True)
     if invitation.creator_account_id == decliner_account_id:
+        raise_private_comparison_invitation_unavailable()
+    if load_fresh_active_primary_account_for_update(db, decliner_account_id) is None:
         raise_private_comparison_invitation_unavailable()
     invitation.revoked_at = utcnow()
     invitation.revoked_reason = "declined"
@@ -594,19 +650,107 @@ def _ue_side(ue: dict) -> dict:
     }
 
 
-def _relation_accounts(db: Session, comparison: PrivateComparison) -> tuple[Account, Account]:
-    accounts = _shared_locked_accounts(db, (comparison.account_a_id, comparison.account_b_id))
-    first = accounts.get(comparison.account_a_id)
-    second = accounts.get(comparison.account_b_id)
-    if first is None or second is None or not _eligible_pair(db, first, second):
+def _relation_coordinates(
+    db: Session,
+    *,
+    account_id: str,
+    public_id: str,
+) -> tuple[str, str, str] | None:
+    row = db.execute(
+        select(
+            PrivateComparison.id,
+            PrivateComparison.account_a_id,
+            PrivateComparison.account_b_id,
+        ).where(
+            PrivateComparison.public_id == public_id,
+            or_(
+                PrivateComparison.account_a_id == account_id,
+                PrivateComparison.account_b_id == account_id,
+            ),
+        )
+    ).one_or_none()
+    if row is None:
+        return None
+    return row.id, row.account_a_id, row.account_b_id
+
+
+def _find_fresh_active_private_comparison(
+    db: Session,
+    *,
+    account_id: str,
+    public_id: str,
+    now: datetime,
+    lock_for_update: bool = False,
+) -> PrivateComparison | None:
+    statement = (
+        select(PrivateComparison)
+        .where(
+            PrivateComparison.public_id == public_id,
+            or_(
+                PrivateComparison.account_a_id == account_id,
+                PrivateComparison.account_b_id == account_id,
+            ),
+            PrivateComparison.revoked_at.is_(None),
+            PrivateComparison.expires_at > now,
+            PrivateComparison.activated_at.is_not(None),
+            PrivateComparison.account_a_consented_at.is_not(None),
+            PrivateComparison.account_b_consented_at.is_not(None),
+            PrivateComparison.consent_version == PRIVATE_COMPARISON_CONSENT_VERSION,
+        )
+        .execution_options(populate_existing=True)
+    )
+    statement = statement.with_for_update() if lock_for_update else statement.with_for_update(read=True)
+    return db.scalar(statement)
+
+
+def load_fresh_active_private_comparison(
+    db: Session,
+    *,
+    account_id: str,
+    public_id: str,
+    now: datetime | None = None,
+) -> PrivateComparison:
+    comparison = _find_fresh_active_private_comparison(
+        db,
+        account_id=account_id,
+        public_id=public_id,
+        now=now or utcnow(),
+    )
+    if comparison is None:
         _comparison_unavailable()
-    return first, second
+    return comparison
+
+
+def _terminal_history_item(
+    *,
+    public_id: str,
+    relation_status: PrivateComparisonStatus,
+    ended_at: datetime,
+) -> dict:
+    if relation_status is PrivateComparisonStatus.ACTIVE:
+        raise RuntimeError("Active relation cannot be serialized as terminal history")
+    return {
+        "public_id": public_id,
+        "status": relation_status,
+        "ended_at": ended_at,
+    }
 
 
 def list_comparisons(db: Session, account_id: str) -> list[dict]:
-    comparisons = list(
-        db.scalars(
-            select(PrivateComparison)
+    if _shared_locked_accounts(db, (account_id,)).get(account_id) is None:
+        return []
+    comparison_rows = list(
+        db.execute(
+            select(
+                PrivateComparison.id,
+                PrivateComparison.public_id,
+                PrivateComparison.account_a_id,
+                PrivateComparison.account_b_id,
+                PrivateComparison.activated_at,
+                PrivateComparison.expires_at,
+                PrivateComparison.revoked_at,
+                PrivateComparison.updated_at,
+            )
             .where(
                 or_(
                     PrivateComparison.account_a_id == account_id,
@@ -616,31 +760,83 @@ def list_comparisons(db: Session, account_id: str) -> list[dict]:
             .order_by(PrivateComparison.updated_at.desc(), PrivateComparison.id.desc())
         )
     )
-    participant_ids = {
-        account_id,
-        *(row.account_b_id if row.account_a_id == account_id else row.account_a_id for row in comparisons),
-    }
-    accounts = {
-        account.id: account for account in db.scalars(select(Account).where(Account.id.in_(participant_ids)))
-    }
-    current = accounts.get(account_id)
+    now = utcnow()
     result: list[dict] = []
-    for row in comparisons:
+    for row in comparison_rows:
+        if row.revoked_at is not None:
+            result.append(
+                _terminal_history_item(
+                    public_id=row.public_id,
+                    relation_status=PrivateComparisonStatus.REVOKED,
+                    ended_at=row.revoked_at,
+                )
+            )
+            continue
+        if ensure_utc(row.expires_at) <= ensure_utc(now):
+            result.append(
+                _terminal_history_item(
+                    public_id=row.public_id,
+                    relation_status=PrivateComparisonStatus.EXPIRED,
+                    ended_at=row.expires_at,
+                )
+            )
+            continue
+
+        accounts = _shared_locked_accounts(db, (row.account_a_id, row.account_b_id))
+        current = accounts.get(account_id)
         other_id = row.account_b_id if row.account_a_id == account_id else row.account_a_id
         other = accounts.get(other_id)
-        other_name = official_name(other) if other is not None else None
-        if other is None or other_name is None:
+        comparison = _find_fresh_active_private_comparison(
+            db,
+            account_id=account_id,
+            public_id=row.public_id,
+            now=now,
+        )
+        if comparison is None:
+            terminal = db.execute(
+                select(
+                    PrivateComparison.public_id,
+                    PrivateComparison.expires_at,
+                    PrivateComparison.revoked_at,
+                ).where(
+                    PrivateComparison.id == row.id,
+                    PrivateComparison.public_id == row.public_id,
+                )
+            ).one_or_none()
+            if terminal is not None and terminal.revoked_at is not None:
+                result.append(
+                    _terminal_history_item(
+                        public_id=terminal.public_id,
+                        relation_status=PrivateComparisonStatus.REVOKED,
+                        ended_at=terminal.revoked_at,
+                    )
+                )
+            elif terminal is not None and ensure_utc(terminal.expires_at) <= ensure_utc(now):
+                result.append(
+                    _terminal_history_item(
+                        public_id=terminal.public_id,
+                        relation_status=PrivateComparisonStatus.EXPIRED,
+                        ended_at=terminal.expires_at,
+                    )
+                )
             continue
-        relation_state = _comparison_status(row)
-        if current is None or not _eligible_pair(db, current, other):
-            relation_state = PrivateComparisonStatus.REVOKED
+        other_name = official_name(other) if other is not None else None
+        if current is None or other is None or other_name is None or not _eligible_pair(db, current, other):
+            result.append(
+                _terminal_history_item(
+                    public_id=comparison.public_id,
+                    relation_status=PrivateComparisonStatus.REVOKED,
+                    ended_at=comparison.updated_at,
+                )
+            )
+            continue
         result.append(
             {
-                "public_id": row.public_id,
+                "public_id": comparison.public_id,
                 "other_participant": {"official_name": other_name},
-                "status": relation_state,
-                "activated_at": row.activated_at,
-                "expires_at": row.expires_at,
+                "status": PrivateComparisonStatus.ACTIVE,
+                "activated_at": comparison.activated_at,
+                "expires_at": comparison.expires_at,
                 "academic_verified_at": other.last_successful_sync_at,
                 "freshness": _freshness(other.last_successful_sync_at),
             }
@@ -656,31 +852,25 @@ def comparison_detail(
 ) -> dict:
     if not valid_private_comparison_public_id(public_id):
         _comparison_unavailable()
-    candidate = db.scalar(
-        select(PrivateComparison).where(
-            PrivateComparison.public_id == public_id,
-            or_(
-                PrivateComparison.account_a_id == account_id,
-                PrivateComparison.account_b_id == account_id,
-            ),
-        )
-    )
-    if candidate is None:
+    coordinates = _relation_coordinates(db, account_id=account_id, public_id=public_id)
+    if coordinates is None:
         _comparison_unavailable()
-    account_a, account_b = _relation_accounts(db, candidate)
-    comparison = db.scalar(
-        select(PrivateComparison)
-        .where(
-            PrivateComparison.id == candidate.id,
-            PrivateComparison.public_id == public_id,
-            or_(
-                PrivateComparison.account_a_id == account_id,
-                PrivateComparison.account_b_id == account_id,
-            ),
-        )
-        .with_for_update(read=True)
+    relation_id, account_a_id, account_b_id = coordinates
+    accounts = _shared_locked_accounts(db, (account_a_id, account_b_id))
+    comparison = load_fresh_active_private_comparison(
+        db,
+        account_id=account_id,
+        public_id=public_id,
     )
-    if comparison is None or _comparison_status(comparison) is not PrivateComparisonStatus.ACTIVE:
+    if (
+        comparison.id != relation_id
+        or comparison.account_a_id != account_a_id
+        or comparison.account_b_id != account_b_id
+    ):
+        _comparison_unavailable()
+    account_a = accounts.get(comparison.account_a_id)
+    account_b = accounts.get(comparison.account_b_id)
+    if account_a is None or account_b is None or not _eligible_pair(db, account_a, account_b):
         _comparison_unavailable()
     current_account = account_a if account_a.id == account_id else account_b
     other_account = account_b if current_account is account_a else account_a
@@ -721,24 +911,19 @@ def revoke_comparison(
 ) -> bool:
     if not valid_private_comparison_public_id(public_id):
         _comparison_unavailable()
-    candidate = db.scalar(
-        select(PrivateComparison).where(
-            PrivateComparison.public_id == public_id,
-            or_(
-                PrivateComparison.account_a_id == account_id,
-                PrivateComparison.account_b_id == account_id,
-            ),
-        )
-    )
-    if candidate is None:
+    coordinates = _relation_coordinates(db, account_id=account_id, public_id=public_id)
+    if coordinates is None:
         _comparison_unavailable()
-    account_ids = (candidate.account_a_id, candidate.account_b_id)
-    if len(_locked_accounts(db, account_ids)) != 2:
+    relation_id, account_a_id, account_b_id = coordinates
+    account_ids = (account_a_id, account_b_id)
+    accounts = _locked_accounts_including_disabled(db, account_ids)
+    current = accounts.get(account_id)
+    if current is None or current.is_disabled or len(accounts) != 2:
         _comparison_unavailable()
     comparison = db.scalar(
         select(PrivateComparison)
         .where(
-            PrivateComparison.id == candidate.id,
+            PrivateComparison.id == relation_id,
             PrivateComparison.public_id == public_id,
             or_(
                 PrivateComparison.account_a_id == account_id,

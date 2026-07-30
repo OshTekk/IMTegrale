@@ -12,6 +12,7 @@ from app.config import get_settings
 from app.database import SessionLocal, engine, utcnow
 from app.models import Account, Note, PrivateComparison, PrivateComparisonInvitation, UeSetting
 from app.private_comparison_contract import PRIVATE_COMPARISON_CONSENT_VERSION
+from app.services import private_comparisons as private_comparisons_service
 from app.services.private_comparisons import (
     SupersededPrivateComparisonInvitation,
     accept_invitation,
@@ -561,3 +562,82 @@ def test_postgres_read_and_revocation_serialize_without_stale_post_commit_read()
     with SessionLocal() as db, pytest.raises(HTTPException) as exc_info:
         comparison_detail(db, account_id=creator_id, public_id=public_id)
     assert exc_info.value.status_code == 404
+
+
+def test_postgres_preloaded_relation_cannot_authorize_after_committed_revocation(
+    monkeypatch,
+) -> None:  # noqa: ANN001
+    creator_id = _eligible_account("stale-detail-creator@example.test")
+    recipient_id = _eligible_account("stale-detail-recipient@example.test")
+    public_id = _accepted_relation(creator_id, recipient_id)
+    snapshot_calls = 0
+    original_snapshot = private_comparisons_service._official_academic_snapshot
+
+    def counted_snapshot(db, account):  # noqa: ANN001, ANN202
+        nonlocal snapshot_calls
+        snapshot_calls += 1
+        return original_snapshot(db, account)
+
+    monkeypatch.setattr(
+        private_comparisons_service,
+        "_official_academic_snapshot",
+        counted_snapshot,
+    )
+    with SessionLocal() as stale_session:
+        preloaded = stale_session.scalar(
+            select(PrivateComparison).where(PrivateComparison.public_id == public_id)
+        )
+        assert preloaded is not None and preloaded.revoked_at is None
+
+        with SessionLocal() as writer:
+            assert revoke_comparison(writer, account_id=recipient_id, public_id=public_id)
+            writer.commit()
+
+        with pytest.raises(HTTPException) as exc_info:
+            comparison_detail(stale_session, account_id=creator_id, public_id=public_id)
+
+    assert exc_info.value.status_code == 404
+    assert snapshot_calls == 0
+
+
+def test_postgres_preloaded_account_cannot_create_after_committed_disable(
+    monkeypatch,
+) -> None:  # noqa: ANN001
+    creator_id = _eligible_account("stale-create-creator@example.test")
+    token_generated = False
+    original_generate = private_comparisons_service.generate_private_comparison_token
+
+    def counted_generate() -> str:
+        nonlocal token_generated
+        token_generated = True
+        return original_generate()
+
+    monkeypatch.setattr(
+        private_comparisons_service,
+        "generate_private_comparison_token",
+        counted_generate,
+    )
+    with SessionLocal() as stale_session:
+        preloaded = stale_session.get(Account, creator_id)
+        assert preloaded is not None and not preloaded.is_disabled
+
+        with SessionLocal() as writer:
+            current = writer.get(Account, creator_id)
+            assert current is not None
+            current.is_disabled = True
+            writer.commit()
+
+        with pytest.raises(HTTPException) as exc_info:
+            create_invitation(
+                stale_session,
+                creator_account_id=creator_id,
+                consent_version=PRIVATE_COMPARISON_CONSENT_VERSION,
+                duration_days=30,
+                settings=get_settings(),
+            )
+        stale_session.rollback()
+
+    assert exc_info.value.status_code == 409
+    assert token_generated is False
+    with SessionLocal() as db:
+        assert db.scalar(select(func.count(PrivateComparisonInvitation.id))) == 0

@@ -200,10 +200,13 @@ def private_comparison_consent_manifest() -> dict[str, object]:
             "expiration": "La consultation cesse automatiquement à l’expiration.",
             "immediate_revocation": ("Chaque participant peut révoquer immédiatement la comparaison."),
             "minimal_history": (
-                "L’historique conserve seulement le statut et les dates de la relation, "
-                "sans résultat académique."
+                "Les identités et résultats bilatéraux sont visibles uniquement tant que la "
+                "relation est active. Après sa fin, l’historique conserve seulement un statut "
+                "minimal et sa date, sans identité ni résultat vivant."
             ),
-            "private_only": "La comparaison reste privée aux deux participants.",
+            "private_only": (
+                "La comparaison reste privée aux deux participants tant que la relation est active."
+            ),
         },
         "copy_risk": (
             "L’autre participant peut recopier ou capturer les informations visibles avant une révocation."

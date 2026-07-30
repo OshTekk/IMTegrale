@@ -5,6 +5,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api_models import (
+    ActivePrivateComparisonListItem,
     OkResponse,
     PrivateComparisonConsentManifestResponse,
     PrivateComparisonDetailResponse,
@@ -12,7 +13,6 @@ from app.api_models import (
     PrivateComparisonInvitationListResponse,
     PrivateComparisonInvitationPreviewResponse,
     PrivateComparisonListResponse,
-    PrivateComparisonRelationResponse,
 )
 from app.config import Settings, get_settings
 from app.database import get_db
@@ -65,7 +65,11 @@ def _feature_settings(settings: Settings = Depends(get_settings)) -> Settings:
 
 def _relation_view(db: Session, account_id: str, public_id: str) -> dict:
     relation = next(
-        (row for row in list_comparisons(db, account_id) if row["public_id"] == public_id),
+        (
+            row
+            for row in list_comparisons(db, account_id)
+            if row["public_id"] == public_id and row["status"] == "active"
+        ),
         None,
     )
     if relation is None:
@@ -166,7 +170,7 @@ def preview_private_comparison_invitation(
 @router.post(
     "/invitations/accept",
     status_code=status.HTTP_201_CREATED,
-    response_model=PrivateComparisonRelationResponse,
+    response_model=ActivePrivateComparisonListItem,
 )
 def accept_private_comparison_invitation(
     payload: PrivateComparisonInvitationAccept,
