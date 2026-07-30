@@ -13,6 +13,11 @@ from app.database import SessionLocal, utcnow
 from app.models import Event
 from app.observability import runtime_metrics
 from app.security import get_auth_context, session_is_active
+from app.services.event_visibility import (
+    EventVisibilityContext,
+    event_visibility_filters,
+    event_visibility_for,
+)
 
 router = APIRouter(prefix="/api/v1/events", tags=["events"])
 
@@ -21,7 +26,7 @@ router = APIRouter(prefix="/api/v1/events", tags=["events"])
 class StreamAuth:
     account_id: str
     session_id: str
-    include_simulations: bool
+    visibility: EventVisibilityContext
 
 
 def stream_event_payload(event: Event) -> dict[str, int]:
@@ -37,7 +42,7 @@ def get_stream_auth(
         return StreamAuth(
             account_id=auth.account.id,
             session_id=auth.session.id,
-            include_simulations=getattr(auth.session, "share_token_id", None) is None,
+            visibility=event_visibility_for(auth),
         )
 
 
@@ -53,7 +58,7 @@ async def stream_events(
 ) -> StreamingResponse:
     account_id = auth.account_id
     session_id = auth.session_id
-    include_simulations = auth.include_simulations
+    visibility_filters = event_visibility_filters(auth.visibility)
 
     async def event_stream():
         runtime_metrics.open_sse()
@@ -68,7 +73,11 @@ async def stream_events(
                         list(
                             db.scalars(
                                 select(Event)
-                                .where(Event.account_id == account_id, Event.id > last_id)
+                                .where(
+                                    Event.account_id == account_id,
+                                    Event.id > last_id,
+                                    *visibility_filters,
+                                )
                                 .order_by(Event.id.asc())
                                 .limit(100)
                             )
@@ -82,12 +91,9 @@ async def stream_events(
                     break
                 for event in events:
                     last_id = event.id
-                    if not include_simulations and event.kind.startswith("simulation:"):
-                        continue
                     payload = stream_event_payload(event)
                     yield (
-                        f"id: {event.id}\nevent: update\n"
-                        f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                        f"id: {event.id}\nevent: update\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
                     )
                     idle = 0
                 idle += 1

@@ -153,6 +153,13 @@ lire ou révoquer une comparaison. Les mutations ajoutent Origin et CSRF. Les
 `public_id` aléatoires ne sont jamais une autorisation : chaque requête filtre
 aussi la relation par le compte de la session.
 
+Les événements de cycle de vie `private_comparison:*` suivent la même assurance :
+seuls les propriétaires primaires IMT ou passkey peuvent les lire. Une politique
+commune filtre la requête du dashboard, son `latest_event_id`, le polling et le
+flux SSE avant chargement. Un token délégué `owner` ne reçoit donc ni événement,
+ni payload, ni progression de curseur permettant d'en déduire l'existence. Les
+autres familles d'événements conservent leurs règles de visibilité antérieures.
+
 ## Cycle de vie
 
 Une paire de comptes possède au plus une ligne relationnelle. Une invitation
@@ -201,6 +208,8 @@ répond `404` avant le parsing du body et aucune ligne ne peut être créée.
 - limitation complémentaire par client, sans métrique nominative ;
 - aucun token, digest, résultat académique ou identifiant croisé dans les
   événements et logs ;
+- événements Comparaisons limités au propriétaire primaire, y compris dans les
+  curseurs dashboard et SSE ;
 - le contrôle opérationnel expose uniquement l'état du flag et des compteurs
   agrégés, et alerte sur les lignes incohérentes ou présentes flag fermé ;
 - la migration `0029` est additive, ne crée aucune donnée et refuse le downgrade

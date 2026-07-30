@@ -70,6 +70,10 @@ version diverge ; tout élargissement du détail exige une nouvelle version. Le
 bearer one-shot est lié au scope opaque de la session primaire qui l'a créé :
 un remplacement de compte, une délégation, une perte de capacité, une réponse
 tardive ou une restauration BFCache le purge avant tout rendu ou copie.
+Les événements `private_comparison:*` sont eux aussi réservés au propriétaire
+primaire. Cette assurance est appliquée avant lecture au dashboard, à son
+`latest_event_id` et au flux SSE afin qu'un token `owner` ne puisse pas déduire
+une activité privée par progression de curseur.
 
 ## Niveaux d'assurance propriétaire
 

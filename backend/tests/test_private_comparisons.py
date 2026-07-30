@@ -33,6 +33,7 @@ from app.security import (
     create_web_session,
     ensure_utc,
 )
+from app.services.events import record_event
 from app.services.operations import operational_alert_codes
 from app.services.private_comparisons import private_comparison_token_digest
 from fastapi.testclient import TestClient
@@ -506,6 +507,10 @@ def test_owner_flow_is_one_shot_private_and_limited_to_common_ues(
     with SessionLocal() as db:
         private_events = list(db.scalars(select(Event).where(Event.kind.startswith("private_comparison:"))))
         rendered_events = " ".join(str(event.payload) for event in private_events)
+        for event in private_events:
+            assert set(event.payload) <= {"consent_version"}
+            if "consent_version" in event.payload:
+                assert event.payload["consent_version"] == PRIVATE_COMPARISON_CONSENT_VERSION
     assert token not in rendered_events
     assert "OFFICIAL-COMMON-1" not in rendered_events
     assert "15.5" not in rendered_events
@@ -541,6 +546,80 @@ def test_only_primary_owners_create_invitations(
         headers=csrf_headers(client),
     )
     assert response.status_code == expected
+
+
+@pytest.mark.parametrize(
+    ("role", "auth_method", "token_owner", "expected_private", "expected_latest_kind"),
+    [
+        ("owner", "imt", False, True, "private_comparison:activated"),
+        ("owner", "passkey", False, True, "private_comparison:activated"),
+        ("owner", "token", True, False, "token:created"),
+        ("editor", "token", True, False, "sync:completed"),
+        ("viewer", "token", False, False, "sync:completed"),
+    ],
+)
+def test_dashboard_event_visibility_matches_primary_owner_assurance(
+    role: str,
+    auth_method: str,
+    token_owner: bool,
+    expected_private: bool,
+    expected_latest_kind: str,
+) -> None:
+    client, account_id = _seed_owner(
+        f"event-visibility-{role}-{auth_method}-{token_owner}@example.test",
+        "Evenement",
+        role=role,
+        auth_method=auth_method,
+        token_owner=token_owner,
+    )
+    with SessionLocal() as db:
+        recorded = [
+            record_event(
+                db,
+                account_id=account_id,
+                kind="note:new",
+                payload={"ue_code": "SYN101", "label": "Evaluation synthetique"},
+            ),
+            record_event(
+                db,
+                account_id=account_id,
+                kind="sync:completed",
+                payload={"total": 2, "inserted": 1, "updated": 1},
+            ),
+            record_event(
+                db,
+                account_id=account_id,
+                kind="token:created",
+                payload={"role": "viewer"},
+            ),
+            record_event(
+                db,
+                account_id=account_id,
+                kind="simulation:saved",
+                payload={"kind": "gpa"},
+            ),
+            record_event(
+                db,
+                account_id=account_id,
+                kind="private_comparison:activated",
+                payload={"consent_version": PRIVATE_COMPARISON_CONSENT_VERSION},
+            ),
+        ]
+        db.commit()
+        ids_by_kind = {event.kind: event.id for event in recorded}
+
+    response = client.get("/api/v1/dashboard")
+    assert response.status_code == 200
+    body = response.json()
+    kinds = {event["kind"] for event in body["events"]}
+    assert ("private_comparison:activated" in kinds) is expected_private
+    assert body["latest_event_id"] == ids_by_kind[expected_latest_kind]
+    assert "note:new" in kinds
+    assert "sync:completed" in kinds
+    assert ("token:created" in kinds) is (role == "owner")
+    assert ("simulation:saved" in kinds) is (expected_private and role == "owner")
+    if not expected_private:
+        assert "private_comparison" not in response.text
 
 
 @pytest.mark.parametrize(

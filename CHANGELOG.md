@@ -20,6 +20,8 @@
 - bearer d'invitation one-shot lié au scope opaque de la session primaire,
   réponses tardives rejetées, purge sur changement de principal ou BFCache et
   titre de document générique.
+- événements Comparaisons réservés au propriétaire primaire dans le dashboard,
+  son curseur visible et le flux SSE, sans canal latéral pour un token `owner`.
 
 ## 4.8.0 - 23 juillet 2026
 

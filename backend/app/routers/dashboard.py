@@ -5,6 +5,7 @@ from app.api_models import DashboardResponse
 from app.database import get_db
 from app.security import AuthContext, get_auth_context
 from app.services.dashboard import dashboard_snapshot
+from app.services.event_visibility import event_visibility_for
 
 router = APIRouter(prefix="/api/v1", tags=["dashboard"])
 
@@ -17,6 +18,5 @@ def get_dashboard(
     return dashboard_snapshot(
         db,
         auth.account,
-        role=auth.role,
-        include_simulations=auth.session.share_token_id is None,
+        event_visibility=event_visibility_for(auth),
     )

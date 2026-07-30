@@ -10,6 +10,11 @@ from app.calculations import GRADE_SCALE, grade_for_average, grade_from_code, ue
 from app.database import utcnow
 from app.limits import MAX_DASHBOARD_NOTES
 from app.models import Account, Event, Note, UeSetting
+from app.services.event_visibility import (
+    EventVisibilityContext,
+    event_is_visible,
+    event_visibility_filters,
+)
 from app.services.sync_control import manual_sync_view
 
 
@@ -30,17 +35,6 @@ def note_view(note: Note) -> dict:
     }
 
 
-OWNER_ONLY_EVENT_PREFIXES = (
-    "account:",
-    "auth:",
-    "leaderboard:",
-    "private_comparison:",
-    "simulation:",
-    "telegram:",
-    "token:",
-)
-
-
 def _validated_credits(items: list[dict]) -> float:
     return round(
         sum(
@@ -57,14 +51,12 @@ def _validated_credits(items: list[dict]) -> float:
     )
 
 
-def event_view(event: Event, role: str, *, include_simulations: bool = True) -> dict | None:
-    if not include_simulations and event.kind.startswith("simulation:"):
-        return None
-    if role != "owner" and event.kind.startswith(OWNER_ONLY_EVENT_PREFIXES):
+def event_view(event: Event, visibility: EventVisibilityContext) -> dict | None:
+    if not event_is_visible(event.kind, visibility):
         return None
     payload = event.payload
     actor = event.actor
-    if role != "owner":
+    if visibility.role != "owner":
         payload = {}
         if event.kind.startswith(("note:", "ue:")) and event.payload.get("ue_code"):
             payload = {"ue_code": event.payload["ue_code"]}
@@ -168,9 +160,9 @@ def dashboard_snapshot(
     db: Session,
     account: Account,
     *,
-    role: str = "owner",
-    include_simulations: bool = True,
+    event_visibility: EventVisibilityContext,
 ) -> dict:
+    role = event_visibility.role
     notes = list(
         db.scalars(
             select(Note)
@@ -235,18 +227,18 @@ def dashboard_snapshot(
         )
 
     grade_counts = Counter(item["grade"] for item in ues if item["grade"])
-    latest_event_query = select(func.max(Event.id)).where(Event.account_id == account.id)
-    if not include_simulations:
-        latest_event_query = latest_event_query.where(~Event.kind.startswith("simulation:"))
+    visibility_filters = event_visibility_filters(event_visibility)
+    latest_event_query = select(func.max(Event.id)).where(Event.account_id == account.id, *visibility_filters)
     latest_event_id = db.scalar(latest_event_query) or 0
     event_rows = list(
-        db.scalars(select(Event).where(Event.account_id == account.id).order_by(Event.id.desc()).limit(100))
+        db.scalars(
+            select(Event)
+            .where(Event.account_id == account.id, *visibility_filters)
+            .order_by(Event.id.desc())
+            .limit(100)
+        )
     )
-    events = [
-        view
-        for event in event_rows
-        if (view := event_view(event, role, include_simulations=include_simulations)) is not None
-    ][:30]
+    events = [view for event in event_rows if (view := event_view(event, event_visibility)) is not None][:30]
     grade_scale = [
         {"grade": row["grade"], "description": row["description"], "gpa": row["gpa"]}
         for row in GRADE_SCALE[:4]

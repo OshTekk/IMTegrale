@@ -61,6 +61,7 @@ participation.
 | Ancien lien après révocation                         | Réactivation involontaire                               | Consentement créateur strictement postérieur à la borne terminale sous verrou ; invitation obsolète terminalisée ; nouveau `public_id`               | Restauration d'une sauvegarde exige une procédure de révocation                   |
 | Relation existante et nouvelle invitation            | Relations parallèles                                    | Une paire canonique unique ; invitation obsolète terminalisée ; seule une invitation postérieure au cycle peut réactiver                             | Une invitation transférée reste une capacité jusqu'à son usage ou sa terminaison  |
 | Fuite dans événements/métriques                      | Données académiques secondaires                         | Événements sans score, UE, token, digest ou autre compte ; métriques agrégées                                                                        | Un volume très faible peut révéler une utilisation générale à l'opérateur         |
+| Token `owner` observant les événements privés        | Déduction d'une invitation ou relation                  | Préfixe `private_comparison:` réservé au propriétaire primaire ; politique unique appliquée aux requêtes dashboard/SSE, au dernier ID visible et au rendu | L'opérateur conserve les seuls agrégats opérationnels explicitement autorisés     |
 | Fuite dans traces SQL                                | Secret ou résultat                                      | Paramètres liés ; aucun token brut en base ; logs SQL désactivés en production                                                                       | Un opérateur activant un tracing de bodies pourrait violer la politique           |
 | Cache navigateur/proxy                               | Réponse servie après révocation                         | `private, no-store`, `Pragma: no-cache`, `Vary: Cookie`, aucun service worker                                                                        | Le navigateur peut garder une page déjà affichée en mémoire                       |
 | Cache React après révocation ou changement de compte | Affichage croisé devenu non autorisé                    | Clés bornées par compte, `gcTime=0`, retrait au démontage, `404`, révocation, déconnexion et changement de capacité                                  | Une donnée déjà lue reste mémorisable par le participant                          |
@@ -121,6 +122,13 @@ délégation, la génération d'accès et la capacité Comparaisons. Le bearer
 one-shot n'est rendu que sous son scope créateur et toute réponse arrivée après
 un changement de scope est jetée. Le titre du document reste toujours
 « Comparaison privée · IMTégrale » et ne contient aucune identité.
+
+Les événements de cycle de vie sont soumis à une assurance distincte des
+événements historiquement visibles par un rôle `owner`. Le serveur dérive
+`primary_owner` depuis le contexte d'authentification autoritatif, puis applique
+une seule politique à la sélection SQL, au `latest_event_id`, au dashboard et
+au flux SSE. Un token délégué ne peut donc ni lire ces événements ni observer
+un curseur qui avancerait uniquement à cause d'eux.
 
 ## Hypothèses et risques acceptés
 

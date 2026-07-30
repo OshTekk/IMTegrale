@@ -42,6 +42,7 @@ from app.calculations import weighted_average
 from app.database import utcnow
 from app.models import Account
 from app.services.dashboard import dashboard_snapshot
+from app.services.event_visibility import EventVisibilityContext
 
 REPOSITORY_URL = "https://github.com/OshTekk/IMTegrale"
 PASS_URL = "https://pass.imt-atlantique.fr/"  # noqa: S105 - public service URL
@@ -417,7 +418,15 @@ def academic_report_snapshot(
 ) -> dict[str, Any]:
     if semester != "all" and semester not in VALID_SEMESTERS:
         raise ValueError("Semestre invalide")
-    dashboard = dashboard_snapshot(db, account, role="owner", include_simulations=False)
+    dashboard = dashboard_snapshot(
+        db,
+        account,
+        event_visibility=EventVisibilityContext(
+            role="owner",
+            primary_owner=True,
+            include_simulations=False,
+        ),
+    )
     ues = [ue for ue in dashboard["ues"] if semester == "all" or ue["semester"] == semester]
     if not ues:
         raise AcademicReportUnavailable("Aucune UE n'est disponible pour ce périmètre")

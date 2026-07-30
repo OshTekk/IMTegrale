@@ -425,6 +425,62 @@ def test_viewer_dashboard_filters_owner_events_and_sensitive_payloads(
     assert note_event["payload"] == {"ue_code": "SIT130"}
 
 
+def test_owner_token_dashboard_cannot_observe_private_comparison_events(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(ImtPassClient, "fetch_entries", fake_notes)
+    owner_session = login_owner(client)
+    delegated, _token = _delegated_client(client, "owner", name="Owner delegated event visibility")
+    before = delegated.get("/api/v1/dashboard")
+    assert before.status_code == 200
+    before_body = before.json()
+
+    with SessionLocal() as db:
+        record_event(
+            db,
+            account_id=owner_session["account"]["id"],
+            kind="private_comparison:invitation_created",
+            actor="owner",
+            payload={"consent_version": "synthetic-private-consent-marker"},
+        )
+        db.commit()
+
+    after = delegated.get("/api/v1/dashboard")
+    assert after.status_code == 200
+    after_body = after.json()
+    assert after_body["latest_event_id"] == before_body["latest_event_id"]
+    assert all(not item["kind"].startswith("private_comparison:") for item in after_body["events"])
+    assert "synthetic-private-consent-marker" not in after.text
+
+
+def test_anonymous_and_disabled_accounts_cannot_observe_private_comparison_events(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    assert client.get("/api/v1/dashboard").status_code == 401
+
+    monkeypatch.setattr(ImtPassClient, "fetch_entries", fake_notes)
+    owner_session = login_owner(client)
+    with SessionLocal() as db:
+        record_event(
+            db,
+            account_id=owner_session["account"]["id"],
+            kind="private_comparison:activated",
+            actor="owner",
+            payload={"consent_version": "synthetic-disabled-account-marker"},
+        )
+        account = db.get(Account, owner_session["account"]["id"])
+        assert account is not None
+        account.is_disabled = True
+        db.commit()
+
+    disabled = client.get("/api/v1/dashboard")
+    assert disabled.status_code == 403
+    assert "private_comparison" not in disabled.text
+    assert "synthetic-disabled-account-marker" not in disabled.text
+
+
 def test_note_mutation_routes_are_not_exposed(client: TestClient, monkeypatch) -> None:
     monkeypatch.setattr(ImtPassClient, "fetch_entries", fake_notes)
     login_owner(client)
