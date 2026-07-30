@@ -277,8 +277,19 @@ def test_session_capability_is_minimal_and_primary_owner_scoped(
         auth_method="token",
     )
 
-    assert imt_owner.get("/api/v1/auth/session").json()["private_comparisons"] == {"available": True}
-    assert passkey_owner.get("/api/v1/auth/session").json()["private_comparisons"] == {"available": True}
+    imt_session_response = imt_owner.get("/api/v1/auth/session")
+    imt_session = imt_session_response.json()
+    assert imt_session["private_comparisons"] == {"available": True}
+    assert "no-store" in imt_session_response.headers["Cache-Control"]
+    assert imt_session["session_expires_at"] > imt_session["server_time"]
+    assert set(imt_session) >= {
+        "session_scope",
+        "session_expires_at",
+        "server_time",
+    }
+    passkey_session = passkey_owner.get("/api/v1/auth/session").json()
+    assert passkey_session["private_comparisons"] == {"available": True}
+    assert passkey_session["session_expires_at"] > passkey_session["server_time"]
     assert token_owner.get("/api/v1/auth/session").json()["private_comparisons"] == {"available": False}
     assert viewer.get("/api/v1/auth/session").json()["private_comparisons"] == {"available": False}
 

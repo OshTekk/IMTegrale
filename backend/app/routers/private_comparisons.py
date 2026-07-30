@@ -25,6 +25,7 @@ from app.schemas import (
 from app.security import (
     AuthContext,
     LoginRateLimiter,
+    browser_session_scope,
     client_identity,
     require_primary_owner,
     require_primary_owner_action,
@@ -129,6 +130,11 @@ def create_private_comparison_invitation(
         raise_private_comparison_conflict()
     return {
         "public_id": invitation.public_id,
+        "session_scope": browser_session_scope(
+            auth.session,
+            settings,
+            private_comparisons_available=True,
+        ),
         "token": raw_token,
         "expires_at": invitation.expires_at,
         "relationship_duration_days": invitation.relationship_duration_days,

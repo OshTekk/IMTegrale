@@ -97,9 +97,21 @@ def _session_payload(
     settings: Settings,
     request: Request,
 ) -> dict:
+    server_time = utcnow()
+    private_comparisons_available = bool(
+        settings.private_comparisons_enabled
+        and not auth.account.is_disabled
+        and is_primary_owner(auth)
+    )
     return {
         "authenticated": True,
-        "session_scope": browser_session_scope(auth.session, settings),
+        "session_scope": browser_session_scope(
+            auth.session,
+            settings,
+            private_comparisons_available=private_comparisons_available,
+        ),
+        "session_expires_at": auth.session.expires_at,
+        "server_time": server_time,
         "role": auth.role,
         "auth_method": auth.session.auth_method,
         "needs_security_setup": auth.account.security_setup_completed_at is None,
@@ -111,11 +123,7 @@ def _session_payload(
         },
         "learning": learning_session_view(db, auth, settings, request=request),
         "private_comparisons": {
-            "available": bool(
-                settings.private_comparisons_enabled
-                and not auth.account.is_disabled
-                and is_primary_owner(auth)
-            )
+            "available": private_comparisons_available
         },
     }
 

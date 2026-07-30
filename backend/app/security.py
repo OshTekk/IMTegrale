@@ -105,7 +105,12 @@ def token_digest(token: str, settings: Settings | None = None) -> str:
     return hmac.new(pepper, token.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
-def browser_session_scope(session: WebSession, settings: Settings | None = None) -> str:
+def browser_session_scope(
+    session: WebSession,
+    settings: Settings | None = None,
+    *,
+    private_comparisons_available: bool,
+) -> str:
     material = "\x1f".join(
         (
             "browser-session-scope:v1",
@@ -115,6 +120,7 @@ def browser_session_scope(session: WebSession, settings: Settings | None = None)
             session.auth_method,
             session.share_token_id or "primary",
             str(session.access_generation),
+            "private-comparisons" if private_comparisons_available else "no-private-comparisons",
         )
     )
     digest = token_digest(material, settings)

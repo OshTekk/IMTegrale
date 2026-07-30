@@ -93,8 +93,16 @@ def test_browser_session_scope_is_opaque_stable_and_bound_to_the_security_sessio
         expires_at=utcnow() + timedelta(hours=1),
     )
 
-    first = browser_session_scope(session, settings)
-    assert first == browser_session_scope(session, settings)
+    first = browser_session_scope(
+        session,
+        settings,
+        private_comparisons_available=True,
+    )
+    assert first == browser_session_scope(
+        session,
+        settings,
+        private_comparisons_available=True,
+    )
     assert first.startswith("bss1_")
     assert len(first) == 69
     assert session.id not in first
@@ -121,7 +129,23 @@ def test_browser_session_scope_is_opaque_stable_and_bound_to_the_security_sessio
             expires_at=session.expires_at,
         )
         setattr(changed, attribute, value)
-        assert browser_session_scope(changed, settings) != first
+        assert (
+            browser_session_scope(
+                changed,
+                settings,
+                private_comparisons_available=True,
+            )
+            != first
+        )
+
+    assert (
+        browser_session_scope(
+            session,
+            settings,
+            private_comparisons_available=False,
+        )
+        != first
+    )
 
 
 def test_web_session_digest_is_migrated_when_previous_pepper_matches() -> None:

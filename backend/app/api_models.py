@@ -85,6 +85,8 @@ class UnauthenticatedSessionResponse(ApiModel):
 class AuthenticatedSessionResponse(ApiModel):
     authenticated: Literal[True]
     session_scope: Annotated[str, Field(pattern=r"^bss1_[0-9a-f]{64}$")]
+    session_expires_at: datetime
+    server_time: datetime
     role: Role
     auth_method: AuthMethod
     needs_security_setup: bool
@@ -639,6 +641,7 @@ class PrivateComparisonConsentManifestResponse(ApiModel):
 
 class PrivateComparisonInvitationCreatedResponse(ApiModel):
     public_id: str
+    session_scope: Annotated[str, Field(pattern=r"^bss1_[0-9a-f]{64}$")]
     token: str = Field(
         min_length=50,
         max_length=50,
