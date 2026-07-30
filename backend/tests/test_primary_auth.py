@@ -150,6 +150,21 @@ def _install_passkey_owner_session(client: TestClient) -> tuple[str, str]:
     return account_id, passkey_id
 
 
+def test_authenticated_session_exposes_a_stable_opaque_scope_per_web_session(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    first = _login_imt(client, monkeypatch, "session-scope@example.test")
+    first_scope = first["session_scope"]
+    assert first_scope.startswith("bss1_")
+    assert len(first_scope) == 69
+    assert client.get("/api/v1/auth/session").json()["session_scope"] == first_scope
+
+    replacement = _login_imt(client, monkeypatch, "session-scope@example.test")
+    assert replacement["session_scope"] != first_scope
+    assert client.get("/api/v1/auth/session").json()["session_scope"] == replacement["session_scope"]
+
+
 def test_imt_primary_owner_can_manage_passkeys_and_create_owner_token(
     client: TestClient,
     monkeypatch,

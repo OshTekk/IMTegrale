@@ -11,6 +11,7 @@ export type SimulationSemester = AcademicSemester;
 
 export interface Session {
   authenticated: boolean;
+  session_scope?: string;
   role?: Role;
   auth_method?: "imt" | "token" | "passkey";
   needs_security_setup?: boolean;

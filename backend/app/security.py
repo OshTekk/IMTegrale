@@ -105,6 +105,22 @@ def token_digest(token: str, settings: Settings | None = None) -> str:
     return hmac.new(pepper, token.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
+def browser_session_scope(session: WebSession, settings: Settings | None = None) -> str:
+    material = "\x1f".join(
+        (
+            "browser-session-scope:v1",
+            session.id,
+            session.account_id,
+            session.role,
+            session.auth_method,
+            session.share_token_id or "primary",
+            str(session.access_generation),
+        )
+    )
+    digest = token_digest(material, settings)
+    return f"bss1_{digest}"
+
+
 def token_digests(token: str, settings: Settings | None = None) -> tuple[str, ...]:
     resolved = settings or get_settings()
     peppers = (resolved.token_pepper, *resolved.token_previous_peppers)

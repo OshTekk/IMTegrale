@@ -44,7 +44,8 @@ participation.
 | Invitation transférée à un tiers                     | Mauvais participant                                     | Secret à forte entropie, comptes compatibles requis, prévisualisation et consentement explicite                                                      | Tout tiers éligible qui reçoit volontairement le secret peut l'accepter           |
 | Token volé                                           | Activation non voulue                                   | TTL sept jours, usage unique, refus/révocation, HMAC seul en base, session primaire exigée                                                           | Compromission conjointe du lien et d'un compte éligible                           |
 | Token dans logs ou `Referer`                         | Réutilisation du lien                                   | Fragment navigateur, effacement avec `replaceState` avant preview, body POST, `no-referrer`, validation sans echo, événements allowlistés            | Le canal de partage tiers peut conserver le lien                                  |
-| Token dans l'état ou les caches frontend             | Exposition après le flux ou via outils de développement | Référence mémoire éphémère, appels directs du client généré, aucune query/mutation TanStack, aucun storage, `history.state`, titre, toast ou console | Une extension de navigateur compromise peut lire une page ouverte                 |
+| Token dans l'état ou les caches frontend             | Exposition après le flux ou via outils de développement | Référence mémoire liée au scope opaque de la session primaire, remount au changement de principal, appels directs du client généré, aucune query/mutation TanStack, aucun storage, `history.state`, titre, toast ou console | Une extension de navigateur compromise peut lire une page ouverte                 |
+| Remplacement direct de compte ou BFCache             | Le nouveau principal récupère le bearer one-shot         | Garde synchrone de rendu et de copie, purge au changement de scope/page cache, annulation et rejet des réponses tardives                         | Un lien déjà copié volontairement dans le presse-papiers reste hors du contrôle de l'application |
 | Double effet React StrictMode                        | Preview ou acceptation répétée                          | Capture unique du fragment, garde de montage et appels utilisateur ponctuels ; tests StrictMode                                                      | Un changement futur du cycle de montage doit conserver ces tests                  |
 | Token réutilisé                                      | Relations multiples                                     | Verrou `FOR UPDATE`, état consommé atomique, digest unique                                                                                           | Aucun après commit hors restauration d'une ancienne base                          |
 | Double acceptation simultanée                        | Deux relations ou destinataires                         | Verrou invitation, comptes verrouillés dans l'ordre canonique, paire unique, tests PostgreSQL                                                        | Blocage transitoire possible sous forte concurrence                               |
@@ -113,9 +114,13 @@ migration `0029`.
 Le client n'utilise la capacité de session que pour la visibilité et le
 routage. Une route masquée n'est jamais considérée comme autorisée : chaque
 lecture et mutation conserve les contrôles backend de participant, session
-primaire, Origin, CSRF et feature flag. Le titre du document ne reçoit
-l'identité de l'autre participant qu'après chargement autorisé de la relation ;
-il ne contient jamais de token, identifiant public ou résultat académique.
+primaire, Origin, CSRF et feature flag. Le serveur dérive en outre un scope
+opaque propre à la session web ; il ne révèle ni identifiant de session ni
+secret, mais varie avec le compte, la méthode d'authentification, le rôle, la
+délégation, la génération d'accès et la capacité Comparaisons. Le bearer
+one-shot n'est rendu que sous son scope créateur et toute réponse arrivée après
+un changement de scope est jetée. Le titre du document reste toujours
+« Comparaison privée · IMTégrale » et ne contient aucune identité.
 
 ## Hypothèses et risques acceptés
 

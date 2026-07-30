@@ -8,6 +8,7 @@ import { useToast } from "../../components/Toast";
 import { formatDate } from "../../lib/format";
 import { apiData, throwOnApiError } from "../../lib/generatedApi";
 import { queryKeys, usePrivateComparison, useSession } from "../../lib/queries";
+import { PRIVATE_COMPARISON_DOCUMENT_TITLE, useSecurityDocumentTitle } from "../../lib/securityScope";
 import { PrivateComparisonCommonUes } from "./PrivateComparisonCommonUes";
 import { PrivateComparisonConfirmModal } from "./PrivateComparisonConfirmModal";
 import { PrivateComparisonSummary } from "./PrivateComparisonSummary";
@@ -19,6 +20,7 @@ import {
 } from "./privateComparisonPresentation";
 
 export function PrivateComparisonDetailPage() {
+  useSecurityDocumentTitle(PRIVATE_COMPARISON_DOCUMENT_TITLE);
   const { publicId } = useParams();
   const validPublicId = validPrivateComparisonPublicId(publicId) ? publicId : null;
   const session = useSession();
@@ -29,15 +31,6 @@ export function PrivateComparisonDetailPage() {
   const detail = usePrivateComparison(validPublicId, Boolean(validPublicId));
   const [revokeOpen, setRevokeOpen] = useState(false);
   const unavailable = !validPublicId || privateComparisonUnavailable(detail.error);
-
-  useEffect(() => {
-    document.title = detail.data
-      ? `Comparaison avec ${detail.data.other.identity.official_name} · IMTégrale`
-      : "Comparaison privée · IMTégrale";
-    return () => {
-      document.title = "Comparaisons privées · IMTégrale";
-    };
-  }, [detail.data]);
 
   useEffect(() => {
     if (!validPublicId || !privateComparisonUnavailable(detail.error)) return;

@@ -84,6 +84,7 @@ class UnauthenticatedSessionResponse(ApiModel):
 
 class AuthenticatedSessionResponse(ApiModel):
     authenticated: Literal[True]
+    session_scope: Annotated[str, Field(pattern=r"^bss1_[0-9a-f]{64}$")]
     role: Role
     auth_method: AuthMethod
     needs_security_setup: bool

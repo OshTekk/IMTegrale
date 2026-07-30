@@ -232,6 +232,7 @@ export function configurePrivateComparisonSession(
   appState.session = {
     ...appState.session,
     authenticated: true,
+    session_scope: `bss1_${createHash("sha256").update(`synthetic-browser-session:${actor}`).digest("hex")}`,
     role: value.role,
     auth_method: value.authMethod,
     account: {

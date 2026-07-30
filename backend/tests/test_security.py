@@ -10,6 +10,7 @@ from app.routers import auth as auth_router
 from app.security import (
     CredentialCipher,
     LoginRateLimiter,
+    browser_session_scope,
     client_identity,
     cookie_names,
     generate_share_token,
@@ -75,6 +76,52 @@ def test_token_peppers_are_ordered_active_then_previous() -> None:
 
     assert len(digests) == 2
     assert digests[0] != digests[1]
+
+
+def test_browser_session_scope_is_opaque_stable_and_bound_to_the_security_session() -> None:
+    settings = get_settings()
+    session = WebSession(
+        id="00000000-0000-4000-8000-000000000001",
+        account_id="00000000-0000-4000-8000-000000000002",
+        share_token_id=None,
+        access_generation=1,
+        digest="d" * 64,
+        csrf_digest="c" * 64,
+        role="owner",
+        auth_method="imt",
+        user_agent="synthetic",
+        expires_at=utcnow() + timedelta(hours=1),
+    )
+
+    first = browser_session_scope(session, settings)
+    assert first == browser_session_scope(session, settings)
+    assert first.startswith("bss1_")
+    assert len(first) == 69
+    assert session.id not in first
+    assert session.account_id not in first
+
+    for attribute, value in (
+        ("id", "00000000-0000-4000-8000-000000000003"),
+        ("account_id", "00000000-0000-4000-8000-000000000004"),
+        ("share_token_id", "00000000-0000-4000-8000-000000000005"),
+        ("access_generation", 2),
+        ("role", "viewer"),
+        ("auth_method", "token"),
+    ):
+        changed = WebSession(
+            id=session.id,
+            account_id=session.account_id,
+            share_token_id=session.share_token_id,
+            access_generation=session.access_generation,
+            digest=session.digest,
+            csrf_digest=session.csrf_digest,
+            role=session.role,
+            auth_method=session.auth_method,
+            user_agent=session.user_agent,
+            expires_at=session.expires_at,
+        )
+        setattr(changed, attribute, value)
+        assert browser_session_scope(changed, settings) != first
 
 
 def test_web_session_digest_is_migrated_when_previous_pepper_matches() -> None:

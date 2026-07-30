@@ -10,6 +10,7 @@ import { SyncSetupModal } from "./components/SyncSetupModal";
 import { SimulationLayout } from "./components/SimulationLayout";
 import { LoginPage } from "./pages/LoginPage";
 import { isPrimaryOwnerSession } from "./lib/auth";
+import { primarySessionScope } from "./lib/securityScope";
 import { learningDocumentTitle } from "./lib/learning";
 import { clearAccountState, queryKeys, replaceSessionState, useSession } from "./lib/queries";
 import { broadcastSessionChange, subscribeToSessionChanges } from "./lib/sessionSync";
@@ -74,7 +75,7 @@ const documentTitles: Record<string, string> = {
   "/calendar": "Agenda",
   "/ues/releve": "Relevé académique",
   "/leaderboard": "Classement",
-  "/comparisons": "Comparaisons privées",
+  "/comparisons": "Comparaison privée",
   "/simulations": "Simulations",
   "/sharing": "Partage",
   "/settings": "Paramètres",
@@ -91,7 +92,7 @@ function studentDocumentTitle(path: string): string | undefined {
   if (path.startsWith("/results")) return "Résultats";
   if (path.startsWith("/simulations")) return "Simulations";
   if (path.startsWith("/comparisons/")) return "Comparaison privée";
-  if (path === "/comparisons") return "Comparaisons privées";
+  if (path === "/comparisons") return "Comparaison privée";
   if (path.startsWith("/parcours")) return learningDocumentTitle(path);
   return documentTitles[path];
 }
@@ -231,6 +232,7 @@ function StudentApp() {
   const isOwner = session.data.role === "owner";
   const isPrimaryOwner = isPrimaryOwnerSession(session.data);
   const privateComparisonsAvailable = Boolean(isPrimaryOwner && session.data.private_comparisons?.available === true);
+  const privateComparisonSessionScope = primarySessionScope(session.data);
   return (
     <>
       <Routes>
@@ -248,19 +250,31 @@ function StudentApp() {
           <Route path="leaderboard" element={isOwner ? <LeaderboardPage /> : <Navigate to="/" replace />} />
           <Route
             path="comparisons"
-            element={privateComparisonsAvailable ? <PrivateComparisonsPage /> : <Navigate to="/" replace />}
+            element={
+              privateComparisonsAvailable ? (
+                <PrivateComparisonsPage key={privateComparisonSessionScope} />
+              ) : (
+                <Navigate to="/" replace />
+              )
+            }
           />
           <Route
             path="comparisons/accept"
             element={
               <PrivateComparisonAcceptGate session={session.data}>
-                <PrivateComparisonAcceptPage />
+                <PrivateComparisonAcceptPage key={privateComparisonSessionScope} />
               </PrivateComparisonAcceptGate>
             }
           />
           <Route
             path="comparisons/:publicId"
-            element={privateComparisonsAvailable ? <PrivateComparisonDetailPage /> : <Navigate to="/" replace />}
+            element={
+              privateComparisonsAvailable ? (
+                <PrivateComparisonDetailPage key={privateComparisonSessionScope} />
+              ) : (
+                <Navigate to="/" replace />
+              )
+            }
           />
           <Route path="simulations" element={isPrimaryOwner ? <SimulationLayout /> : <Navigate to="/" replace />}>
             <Route index element={<Navigate to="gpa" replace />} />

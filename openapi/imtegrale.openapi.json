@@ -2491,10 +2491,16 @@
             ],
             "title": "Role",
             "type": "string"
+          },
+          "session_scope": {
+            "pattern": "^bss1_[0-9a-f]{64}$",
+            "title": "Session Scope",
+            "type": "string"
           }
         },
         "required": [
           "authenticated",
+          "session_scope",
           "role",
           "auth_method",
           "needs_security_setup",

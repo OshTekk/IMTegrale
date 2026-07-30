@@ -83,6 +83,7 @@ test("le parcours bilatéral one-shot accepte, compare puis révoque sans fuite 
   await alice.page.setViewportSize({ width: 390, height: 844 });
   await alice.page.goto("/comparisons");
   await expect(alice.page.getByRole("heading", { name: "Comparaisons privées" })).toBeVisible();
+  await expect(alice.page).toHaveTitle("Comparaison privée · IMTégrale");
   await alice.page.getByRole("button", { name: "Créer une invitation" }).first().click();
   const creation = alice.page.getByRole("dialog", { name: "Créer une invitation" });
   await expect(creation.getByLabel("Durée de la comparaison après acceptation")).toHaveValue("30");
@@ -104,6 +105,7 @@ test("le parcours bilatéral one-shot accepte, compare puis révoque sans fuite 
   await camille.page.getByRole("button", { name: "Accepter la comparaison" }).click();
   await expect(camille.page).toHaveURL(/\/comparisons\/pc_[A-Za-z0-9_-]{24}$/);
   await expect(camille.page.getByRole("heading", { name: "Comparaison avec Alice Exemple" })).toBeVisible();
+  await expect(camille.page).toHaveTitle("Comparaison privée · IMTégrale");
   const relationPath = new URL(camille.page.url()).pathname;
 
   await alice.page.goto(relationPath);
@@ -134,6 +136,40 @@ test("le parcours bilatéral one-shot accepte, compare puis révoque sans fuite 
   await checkPrivateHeaders(privateResponses);
   await alice.context.close();
   await camille.context.close();
+});
+
+test("un remplacement direct de session purge le bearer one-shot avant le rendu du nouveau compte", async ({
+  browser,
+}) => {
+  const shared = createPrivateComparisonE2eState();
+  const alice = await actorBrowser(browser, shared, "alice");
+  await alice.page.goto("/comparisons");
+  await alice.page.getByRole("button", { name: "Créer une invitation" }).first().click();
+  const creation = alice.page.getByRole("dialog", { name: "Créer une invitation" });
+  await acceptConsent(creation);
+  await creation.getByRole("button", { name: "Créer le lien" }).click();
+  const oneShot = alice.page.getByRole("dialog", { name: "Lien d’invitation créé" });
+  const invitationLink = await oneShot.getByLabel("Lien d’invitation").inputValue();
+  const token = new URLSearchParams(new URL(invitationLink).hash.slice(1)).get("invite");
+  expect(token).toBeTruthy();
+
+  configurePrivateComparisonSession(alice.app, shared, "camille");
+  await alice.page.evaluate(() => {
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: "botnote:session-change",
+        newValue: "synthetic-direct-account-replacement",
+      }),
+    );
+  });
+
+  await expect(alice.page.getByLabel("Lien d’invitation")).toHaveCount(0);
+  await expect(alice.page.getByRole("button", { name: "Copier le lien" })).toHaveCount(0);
+  await expect(alice.page.locator("body")).not.toContainText(token!);
+  await expect(alice.page).toHaveTitle("Comparaison privée · IMTégrale");
+  expect(JSON.stringify(await alice.page.evaluate(() => window.history.state))).not.toContain(token!);
+  expect(shared.createCalls).toBe(1);
+  await alice.context.close();
 });
 
 test("le refus et toutes les invitations inéligibles restent génériques", async ({ browser }) => {

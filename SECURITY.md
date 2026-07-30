@@ -66,7 +66,10 @@ Le consentement des deux participants utilise le manifeste backend V2 unique :
 il énumère les champs du résumé et des UE communes, les métadonnées de relation,
 les catégories exclues, la révocation et le risque de copie. La création et
 l'acceptation sont bloquées si ce manifeste n'est pas disponible ou si sa
-version diverge ; tout élargissement du détail exige une nouvelle version.
+version diverge ; tout élargissement du détail exige une nouvelle version. Le
+bearer one-shot est lié au scope opaque de la session primaire qui l'a créé :
+un remplacement de compte, une délégation, une perte de capacité, une réponse
+tardive ou une restauration BFCache le purge avant tout rendu ou copie.
 
 ## Niveaux d'assurance propriétaire
 

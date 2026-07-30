@@ -27,6 +27,7 @@ from app.schemas import (
 )
 from app.security import (
     AuthContext,
+    browser_session_scope,
     cleanup_sessions,
     clear_session_cookies,
     client_identity,
@@ -98,6 +99,7 @@ def _session_payload(
 ) -> dict:
     return {
         "authenticated": True,
+        "session_scope": browser_session_scope(auth.session, settings),
         "role": auth.role,
         "auth_method": auth.session.auth_method,
         "needs_security_setup": auth.account.security_setup_completed_at is None,

@@ -6,6 +6,7 @@ import type {
 } from "../../generated/api/types.gen";
 import { privateComparisonsCreatePrivateComparisonInvitation } from "../../generated/api/sdk.gen";
 import { apiData, throwOnApiError } from "../../lib/generatedApi";
+import { useSessionBoundOneShot } from "../../lib/securityScope";
 import { Modal } from "../../components/Modal";
 import {
   emptyPrivateComparisonConsent,
@@ -28,38 +29,38 @@ export function PrivateComparisonInvitationModal({
   onCreated,
   manifest,
   manifestPending,
+  sessionScope,
 }: {
   open: boolean;
   onClose: () => void;
   onCreated: () => void;
   manifest: PrivateComparisonConsentManifestResponse | null;
   manifestPending: boolean;
+  sessionScope: string;
 }) {
   const [duration, setDuration] = useState<(typeof PRIVATE_COMPARISON_DURATIONS)[number]>(30);
   const [consent, setConsent] = useState<PrivateComparisonConsentState>(emptyPrivateComparisonConsent);
-  const [created, setCreated] = useState<PrivateComparisonInvitationCreatedResponse | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copyStatus, setCopyStatus] = useState("");
   const durationRef = useRef<HTMLSelectElement>(null);
-  const usableManifest = manifest && usablePrivateComparisonConsentManifest(manifest) ? manifest : null;
-
-  const clearSensitiveState = () => {
-    setCreated(null);
+  const oneShot = useSessionBoundOneShot<PrivateComparisonInvitationCreatedResponse>(sessionScope, open, () => {
     setCopyStatus("");
     setError(null);
     setPending(false);
-  };
-
-  const close = () => {
-    clearSensitiveState();
     setConsent(emptyPrivateComparisonConsent);
     setDuration(30);
     onClose();
-  };
+  });
+  const usableManifest = manifest && usablePrivateComparisonConsentManifest(manifest) ? manifest : null;
+  const scopedCreated = oneShot.value;
+
+  const close = oneShot.purge;
 
   const create = async () => {
     if (!usableManifest || !privateComparisonConsentComplete(consent)) return;
+    const requestManifestVersion = usableManifest.consent_version;
+    const request = oneShot.begin();
     setPending(true);
     setError(null);
     try {
@@ -72,54 +73,62 @@ export function PrivateComparisonInvitationModal({
             acknowledge_copy_risk: consent.copyRisk,
             duration_days: duration,
           },
+          signal: request.controller.signal,
           throwOnError: throwOnApiError,
         }),
       );
+      if (!oneShot.usable(request)) return;
       if (!validInvitationToken(response.token)) {
         throw new Error("Invalid private comparison invitation token");
       }
       if (
-        response.consent_version !== usableManifest.consent_version ||
+        response.consent_version !== requestManifestVersion ||
         !usablePrivateComparisonConsentManifest(response.consent_manifest) ||
-        response.consent_manifest.consent_version !== usableManifest.consent_version
+        response.consent_manifest.consent_version !== requestManifestVersion
       ) {
         throw new Error("Private comparison consent manifest changed");
       }
-      setCreated(response);
-      onCreated();
+      if (oneShot.set(request, response)) onCreated();
     } catch (caught) {
+      if (!oneShot.usable(request)) return;
       setError(privateComparisonErrorMessage(caught, "create"));
     } finally {
-      setPending(false);
+      if (oneShot.finish(request)) setPending(false);
     }
   };
 
   const copy = async () => {
-    if (!created) return;
+    const current = oneShot.current();
+    if (!current) {
+      oneShot.purge();
+      return;
+    }
     try {
-      await navigator.clipboard.writeText(invitationUrl(created.token));
-      setCopyStatus("Lien copié.");
+      await navigator.clipboard.writeText(invitationUrl(current.token));
+      if (oneShot.current() === current) setCopyStatus("Lien copié.");
     } catch {
-      setCopyStatus("Copie impossible. Sélectionne le lien puis copie-le manuellement.");
+      if (oneShot.current() === current) {
+        setCopyStatus("Copie impossible. Sélectionne le lien puis copie-le manuellement.");
+      }
     }
   };
 
-  const link = created ? invitationUrl(created.token) : "";
+  const link = scopedCreated ? invitationUrl(scopedCreated.token) : "";
   return (
     <Modal
       open={open}
-      title={created ? "Lien d’invitation créé" : "Créer une invitation"}
+      title={scopedCreated ? "Lien d’invitation créé" : "Créer une invitation"}
       description={
-        created
-          ? "Ce lien ne sera affiché qu’une fois. Copie-le avant de fermer cette fenêtre."
-          : "Choisis la durée de la future comparaison et confirme précisément son périmètre."
+        scopedCreated
+          ? "Ce lien ne s’affiche qu’une fois. Copie-le avant de fermer."
+          : "Choisis la durée de la comparaison et confirme précisément son périmètre."
       }
       onClose={close}
       size="large"
       className="private-comparison-invitation-modal"
-      initialFocusRef={created ? undefined : durationRef}
+      initialFocusRef={scopedCreated ? undefined : durationRef}
     >
-      {created ? (
+      {scopedCreated ? (
         <div className="private-comparison-one-shot">
           <div className="private-comparison-one-shot-notice">
             <LockKeyhole size={20} aria-hidden="true" />

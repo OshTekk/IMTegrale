@@ -21,6 +21,11 @@ import {
   usePrivateComparisons,
   useSession,
 } from "../../lib/queries";
+import {
+  PRIVATE_COMPARISON_DOCUMENT_TITLE,
+  primarySessionScope,
+  useSecurityDocumentTitle,
+} from "../../lib/securityScope";
 import { PrivateComparisonConfirmModal } from "./PrivateComparisonConfirmModal";
 import { PrivateComparisonInvitationModal } from "./PrivateComparisonInvitationModal";
 import { PrivateComparisonScope } from "./PrivateComparisonScope";
@@ -110,10 +115,12 @@ function ComparisonItem({
 }
 
 export function PrivateComparisonsPage() {
+  useSecurityDocumentTitle(PRIVATE_COMPARISON_DOCUMENT_TITLE);
   const session = useSession();
   const queryClient = useQueryClient();
   const { showToast } = useToast();
   const accountId = session.data?.account?.id ?? "anonymous";
+  const sessionScope = primarySessionScope(session.data);
   const invitations = usePrivateComparisonInvitations();
   const comparisons = usePrivateComparisons();
   const consentManifest = usePrivateComparisonConsentManifest();
@@ -275,6 +282,7 @@ export function PrivateComparisonsPage() {
         onCreated={() => queryClient.invalidateQueries({ queryKey: queryKeys.privateComparisonInvitations(accountId) })}
         manifest={usableConsentManifest}
         manifestPending={consentManifest.isPending}
+        sessionScope={sessionScope}
       />
       <PrivateComparisonConfirmModal
         open={Boolean(invitationToRevoke)}

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { StrictMode, useState, type ReactNode } from "react";
@@ -17,7 +17,8 @@ import type {
 } from "../../generated/api/types.gen";
 import { PrivateComparisonAcceptGate } from "../../App";
 import { ToastProvider } from "../../components/Toast";
-import { queryKeys } from "../../lib/queries";
+import { clearAccountStateOnCapabilityChange, queryKeys } from "../../lib/queries";
+import { primarySessionScope } from "../../lib/securityScope";
 import { apiMockServer } from "../../test/server";
 import type { Session } from "../../types";
 import { PrivateComparisonAcceptPage } from "./PrivateComparisonAcceptPage";
@@ -124,6 +125,7 @@ const consentManifest: PrivateComparisonConsentManifestResponse = {
 
 const ownerSession: Session = {
   authenticated: true,
+  session_scope: `bss1_${"a".repeat(64)}`,
   role: "owner",
   auth_method: "imt",
   account: {
@@ -134,6 +136,17 @@ const ownerSession: Session = {
   private_comparisons: { available: true },
   needs_security_setup: false,
   needs_sync_setup: false,
+};
+
+const replacementOwnerSession: Session = {
+  ...ownerSession,
+  session_scope: `bss1_${"b".repeat(64)}`,
+  auth_method: "passkey",
+  account: {
+    id: "account-fictif-basile",
+    display_name: "Basile Exemple",
+    imt_username: "basile.exemple",
+  },
 };
 
 const invitationCreated: PrivateComparisonInvitationCreatedResponse = {
@@ -281,6 +294,12 @@ function testClient() {
   return client;
 }
 
+function installTestSession(client: QueryClient, next: Session) {
+  const previous = client.getQueryData<Session>(queryKeys.session);
+  clearAccountStateOnCapabilityChange(client, previous, next);
+  client.setQueryData(queryKeys.session, next);
+}
+
 function Providers({
   children,
   client,
@@ -320,11 +339,41 @@ function renderRoute(element: ReactNode, initialEntry: string, client = testClie
   return { ...result, client };
 }
 
+function installEmptyPrivateComparisonLists() {
+  apiMockServer.use(
+    http.get("*/api/v1/private-comparisons/consent-manifest", () => HttpResponse.json(consentManifest)),
+    http.get("*/api/v1/private-comparisons", () => HttpResponse.json({ comparisons: [] })),
+    http.get("*/api/v1/private-comparisons/invitations", () => HttpResponse.json({ invitations: [] })),
+  );
+}
+
+async function renderAndCreateInvitation(client: QueryClient, strict = false) {
+  render(
+    <Providers client={client} strict={strict}>
+      <MemoryRouter>
+        <PrivateComparisonsPage />
+      </MemoryRouter>
+    </Providers>,
+  );
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "Créer une invitation" }));
+  for (const checkbox of screen.getAllByRole("checkbox")) await user.click(checkbox);
+  await user.click(screen.getByRole("button", { name: "Créer le lien" }));
+  return user;
+}
+
+function persistedPageTransition(type: "pagehide" | "pageshow"): Event {
+  const event = new Event(type);
+  Object.defineProperty(event, "persisted", { value: true });
+  return event;
+}
+
 afterEach(() => {
   cleanup();
   window.localStorage.clear();
   window.sessionStorage.clear();
   window.history.replaceState(null, "", "/");
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
@@ -360,6 +409,199 @@ describe("présentation et validation locales", () => {
 });
 
 describe("invitation one-shot", () => {
+  it("efface le bearer avant de rendre un remplacement direct de compte", async () => {
+    apiMockServer.use(
+      http.get("*/api/v1/private-comparisons/consent-manifest", () => HttpResponse.json(consentManifest)),
+      http.get("*/api/v1/private-comparisons", () => HttpResponse.json({ comparisons: [] })),
+      http.get("*/api/v1/private-comparisons/invitations", () => HttpResponse.json({ invitations: [] })),
+      http.post("*/api/v1/private-comparisons/invitations", () =>
+        HttpResponse.json(invitationCreated, { status: 201 }),
+      ),
+    );
+    const client = testClient();
+    render(
+      <Providers client={client}>
+        <MemoryRouter>
+          <PrivateComparisonsPage />
+        </MemoryRouter>
+      </Providers>,
+    );
+    const user = userEvent.setup();
+    const clipboardWrite = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
+    await user.click(await screen.findByRole("button", { name: "Créer une invitation" }));
+    for (const checkbox of screen.getAllByRole("checkbox")) await user.click(checkbox);
+    await user.click(screen.getByRole("button", { name: "Créer le lien" }));
+    expect(((await screen.findByLabelText("Lien d’invitation")) as HTMLInputElement).value).toBe(
+      `${window.location.origin}/comparisons/accept#invite=${TOKEN}`,
+    );
+
+    act(() => installTestSession(client, replacementOwnerSession));
+
+    await waitFor(() => expect(client.getQueryData(queryKeys.session)).toEqual(replacementOwnerSession));
+    expect(screen.queryByLabelText("Lien d’invitation")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Copier le lien" })).toBeNull();
+    expect(document.documentElement.outerHTML).not.toContain(TOKEN);
+    expect(clipboardWrite).not.toHaveBeenCalled();
+  });
+
+  it("jette une réponse one-shot arrivée après le passage direct de A à B", async () => {
+    installEmptyPrivateComparisonLists();
+    let releaseResponse: (() => void) | undefined;
+    let requestStarted = false;
+    const responseGate = new Promise<void>((resolve) => {
+      releaseResponse = resolve;
+    });
+    apiMockServer.use(
+      http.post("*/api/v1/private-comparisons/invitations", async () => {
+        requestStarted = true;
+        await responseGate;
+        return HttpResponse.json(invitationCreated, { status: 201 });
+      }),
+    );
+    const client = testClient();
+    const creation = renderAndCreateInvitation(client);
+    await waitFor(() => expect(requestStarted).toBe(true));
+    expect(releaseResponse).toBeTypeOf("function");
+    const clipboardWrite = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
+
+    act(() => installTestSession(client, replacementOwnerSession));
+    await waitFor(() => expect(client.getQueryData(queryKeys.session)).toEqual(replacementOwnerSession));
+    act(() => releaseResponse?.());
+    await creation;
+
+    await waitFor(() => expect(screen.queryByLabelText("Lien d’invitation")).toBeNull());
+    expect(document.documentElement.outerHTML).not.toContain(TOKEN);
+    expect(screen.queryByText("Lien d’invitation créé")).toBeNull();
+    expect(clipboardWrite).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "owner délégué par token",
+      {
+        ...ownerSession,
+        session_scope: `bss1_${"c".repeat(64)}`,
+        auth_method: "token" as const,
+        private_comparisons: { available: false },
+      },
+    ],
+    [
+      "viewer",
+      {
+        ...ownerSession,
+        session_scope: `bss1_${"d".repeat(64)}`,
+        role: "viewer" as const,
+        private_comparisons: { available: false },
+      },
+    ],
+    ["session expirée", { authenticated: false, private_comparisons: { available: false } }],
+    [
+      "compte désactivé ou capacité retirée",
+      {
+        ...ownerSession,
+        session_scope: `bss1_${"e".repeat(64)}`,
+        private_comparisons: { available: false },
+      },
+    ],
+  ] satisfies Array<[string, Session]>)("purge le bearer lors du downgrade vers %s", async (_label, nextSession) => {
+    installEmptyPrivateComparisonLists();
+    apiMockServer.use(
+      http.post("*/api/v1/private-comparisons/invitations", () =>
+        HttpResponse.json(invitationCreated, { status: 201 }),
+      ),
+    );
+    const client = testClient();
+    await renderAndCreateInvitation(client);
+    expect(await screen.findByLabelText("Lien d’invitation")).toBeTruthy();
+
+    act(() => installTestSession(client, nextSession));
+
+    await waitFor(() => expect(screen.queryByLabelText("Lien d’invitation")).toBeNull());
+    expect(screen.queryByRole("button", { name: "Copier le lien" })).toBeNull();
+    expect(document.documentElement.outerHTML).not.toContain(TOKEN);
+  });
+
+  it("ne restaure pas le bearer sous StrictMode après un remplacement de principal", async () => {
+    installEmptyPrivateComparisonLists();
+    apiMockServer.use(
+      http.post("*/api/v1/private-comparisons/invitations", () =>
+        HttpResponse.json(invitationCreated, { status: 201 }),
+      ),
+    );
+    const client = testClient();
+    await renderAndCreateInvitation(client, true);
+    expect(await screen.findAllByLabelText("Lien d’invitation")).toHaveLength(1);
+
+    act(() => installTestSession(client, replacementOwnerSession));
+
+    await waitFor(() => expect(screen.queryByLabelText("Lien d’invitation")).toBeNull());
+    expect(document.documentElement.outerHTML).not.toContain(TOKEN);
+  });
+
+  it("purge le bearer avant une mise en BFCache et ne le restaure pas au pageshow", async () => {
+    installEmptyPrivateComparisonLists();
+    apiMockServer.use(
+      http.post("*/api/v1/private-comparisons/invitations", () =>
+        HttpResponse.json(invitationCreated, { status: 201 }),
+      ),
+    );
+    const client = testClient();
+    await renderAndCreateInvitation(client);
+    expect(await screen.findByLabelText("Lien d’invitation")).toBeTruthy();
+
+    act(() => window.dispatchEvent(persistedPageTransition("pagehide")));
+    await waitFor(() => expect(screen.queryByLabelText("Lien d’invitation")).toBeNull());
+    act(() => window.dispatchEvent(persistedPageTransition("pageshow")));
+
+    expect(screen.queryByLabelText("Lien d’invitation")).toBeNull();
+    expect(document.documentElement.outerHTML).not.toContain(TOKEN);
+    await userEvent.setup().click(screen.getAllByRole("button", { name: "Créer une invitation" })[0]!);
+    expect(screen.queryByLabelText("Lien d’invitation")).toBeNull();
+  });
+
+  it("ne place le bearer dans aucun cache, stockage, titre, toast, aria-live ou console", async () => {
+    installEmptyPrivateComparisonLists();
+    apiMockServer.use(
+      http.post("*/api/v1/private-comparisons/invitations", () =>
+        HttpResponse.json(invitationCreated, { status: 201 }),
+      ),
+    );
+    const cacheOpen = vi.fn();
+    const indexedDbOpen = vi.fn();
+    const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    vi.stubGlobal("caches", { open: cacheOpen });
+    vi.stubGlobal("indexedDB", { open: indexedDbOpen });
+    const client = testClient();
+
+    await renderAndCreateInvitation(client);
+    expect(await screen.findByLabelText("Lien d’invitation")).toBeTruthy();
+
+    const querySnapshot = client
+      .getQueryCache()
+      .getAll()
+      .map((query) => ({ key: query.queryKey, data: query.state.data }));
+    const mutationSnapshot = client
+      .getMutationCache()
+      .getAll()
+      .map((mutation) => ({ data: mutation.state.data, variables: mutation.state.variables }));
+    expect(JSON.stringify(querySnapshot)).not.toContain(TOKEN);
+    expect(JSON.stringify(mutationSnapshot)).not.toContain(TOKEN);
+    expect(JSON.stringify(window.localStorage)).not.toContain(TOKEN);
+    expect(JSON.stringify(window.sessionStorage)).not.toContain(TOKEN);
+    expect(JSON.stringify(window.history.state)).not.toContain(TOKEN);
+    expect(document.title).toBe("Comparaison privée · IMTégrale");
+    expect(document.title).not.toContain("Alice Exemple");
+    expect(
+      Array.from(document.querySelectorAll("[aria-live]"))
+        .map((node) => node.textContent)
+        .join(""),
+    ).not.toContain(TOKEN);
+    expect(document.querySelector("[role='status']")?.textContent ?? "").not.toContain(TOKEN);
+    expect(cacheOpen).not.toHaveBeenCalled();
+    expect(indexedDbOpen).not.toHaveBeenCalled();
+    expect(JSON.stringify(consoleInfo.mock.calls)).not.toContain(TOKEN);
+  });
+
   it("ne persiste jamais le secret et l’efface du DOM à la fermeture", async () => {
     let requestBody: unknown;
     apiMockServer.use(
@@ -382,6 +624,7 @@ describe("invitation one-shot", () => {
             onCreated={() => undefined}
             manifest={consentManifest}
             manifestPending={false}
+            sessionScope={primarySessionScope(ownerSession)}
           />
         </>
       );
@@ -459,6 +702,7 @@ describe("invitation one-shot", () => {
           onCreated={() => undefined}
           manifest={consentManifest}
           manifestPending={false}
+          sessionScope={primarySessionScope(ownerSession)}
         />
       </Providers>,
     );
@@ -479,6 +723,7 @@ describe("invitation one-shot", () => {
           onCreated={() => undefined}
           manifest={null}
           manifestPending={false}
+          sessionScope={primarySessionScope(ownerSession)}
         />
       </Providers>,
     );
@@ -499,6 +744,7 @@ describe("invitation one-shot", () => {
           onCreated={() => undefined}
           manifest={{ ...consentManifest, included_sections: [] }}
           manifestPending={false}
+          sessionScope={primarySessionScope(ownerSession)}
         />
       </Providers>,
     );
@@ -530,6 +776,7 @@ describe("invitation one-shot", () => {
           onCreated={() => undefined}
           manifest={consentManifest}
           manifestPending={false}
+          sessionScope={primarySessionScope(ownerSession)}
         />
       </Providers>,
     );
@@ -751,7 +998,7 @@ describe("détail bilatéral et cache privé", () => {
     expect(screen.getByText("UE-FICTIVE-201")).toBeTruthy();
     expect(screen.queryByText("UE-NON-COMMUNE")).toBeNull();
     expect(document.body.textContent).not.toMatch(/gagnant|perdant|meilleur|moins bon|évaluation|simulation/i);
-    expect(document.title).toBe("Comparaison avec Camille Exemple · IMTégrale");
+    expect(document.title).toBe("Comparaison privée · IMTégrale");
     expect(client.getQueryData(queryKeys.privateComparison(ownerSession.account!.id, RELATION_ID))).toEqual(detail);
     unmount();
     await waitFor(() =>

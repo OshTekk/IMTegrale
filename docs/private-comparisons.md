@@ -68,6 +68,14 @@ Ces appels utilisent directement le client TypeScript généré : le secret
 n'entre dans aucune query key, aucun cache de query ou mutation, aucun storage,
 aucun `history.state`, titre, toast ou libellé accessible. Fermer la modale,
 terminer le flux, changer de session ou démonter la page efface la référence.
+Le serveur fournit à chaque session web un scope opaque dérivé de son identité
+de sécurité. Le sous-arbre Comparaisons est remonté quand ce scope change et le
+secret conserve le scope exact de sa création. Une garde de rendu, une garde
+avant copie et une garde sur les réponses asynchrones interdisent donc qu'un
+remplacement direct de compte, une délégation par token, une perte de capacité
+ou une restauration BFCache réaffiche le bearer. Les requêtes en cours sont
+annulées lorsque le navigateur le permet, sans faire de cette annulation
+l'unique contrôle.
 
 Les listes et détails utilisent des clés TanStack Query bornées par l'identifiant
 du compte courant. Les listes sont toujours revérifiées au focus. Un détail a
@@ -81,7 +89,9 @@ sont présentés en cartes sans table comprimée. Les modales restaurent le focu
 les actions principales conservent une cible tactile de 44 px et les règles
 `prefers-reduced-motion` sont définies dans la feuille lazy elle-même. La lecture
 reste strictement symétrique, sans écart, rang, gagnant ou code couleur
-compétitif.
+compétitif. Les routes liste, acceptation et détail utilisent toutes le titre
+générique « Comparaison privée · IMTégrale » ; l'identité de l'autre
+participant reste uniquement dans le contenu autorisé de la page.
 
 ## Consentement version 2
 

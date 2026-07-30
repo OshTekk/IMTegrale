@@ -1364,6 +1364,10 @@ export type AuthenticatedSessionResponse = {
      * Role
      */
     role: 'owner' | 'editor' | 'viewer';
+    /**
+     * Session Scope
+     */
+    session_scope: string;
 };
 
 /**

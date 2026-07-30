@@ -13,6 +13,11 @@ import { useToast } from "../../components/Toast";
 import { formatDate } from "../../lib/format";
 import { apiData, throwOnApiError } from "../../lib/generatedApi";
 import { queryKeys, useSession } from "../../lib/queries";
+import {
+  PRIVATE_COMPARISON_DOCUMENT_TITLE,
+  primarySessionScope,
+  useSecurityDocumentTitle,
+} from "../../lib/securityScope";
 import { PrivateComparisonConfirmModal } from "./PrivateComparisonConfirmModal";
 import {
   emptyPrivateComparisonConsent,
@@ -30,17 +35,13 @@ import {
 type AcceptPageState = "checking" | "preview" | "missing" | "unavailable";
 
 export function PrivateComparisonAcceptPage() {
+  useSecurityDocumentTitle(PRIVATE_COMPARISON_DOCUMENT_TITLE);
   const session = useSession();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { showToast } = useToast();
   const accountId = session.data?.account?.id ?? "anonymous";
-  const sessionScope = [
-    accountId,
-    session.data?.role ?? "none",
-    session.data?.auth_method ?? "none",
-    session.data?.private_comparisons?.available === true ? "available" : "unavailable",
-  ].join("\u001f");
+  const sessionScope = primarySessionScope(session.data);
   const tokenRef = useRef<string | null>(null);
   const requestRef = useRef<AbortController | null>(null);
   const processedRef = useRef(false);

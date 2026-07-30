@@ -17,6 +17,9 @@
 - consentement Comparaisons privées V2 issu d'un manifeste backend canonique :
   champs inclus et catégories exclues exhaustifs, création et acceptation
   fermées en cas d'indisponibilité ou de divergence.
+- bearer d'invitation one-shot lié au scope opaque de la session primaire,
+  réponses tardives rejetées, purge sur changement de principal ou BFCache et
+  titre de document générique.
 
 ## 4.8.0 - 23 juillet 2026
 
