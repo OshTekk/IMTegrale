@@ -12,6 +12,8 @@
   leaderboard ;
 - contrats OpenAPI, tests IDOR, concurrence, confidentialité, cache, responsive
   et Axe, sans activation ni déploiement.
+- correction C2 des invitations antérieures à un cycle terminé : borne
+  terminale stricte, bearer obsolète invalidé et courses PostgreSQL sérialisées.
 
 ## 4.8.0 - 23 juillet 2026
 

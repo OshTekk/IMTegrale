@@ -80,7 +80,8 @@ def upgrade() -> None:
             name="ck_private_comparison_invitations_revocation",
         ),
         sa.CheckConstraint(
-            "revoked_reason IS NULL OR revoked_reason IN ('creator_revoked', 'declined', 'operator_revoked')",
+            "revoked_reason IS NULL OR revoked_reason IN "
+            "('creator_revoked', 'declined', 'operator_revoked', 'superseded_relation_cycle')",
             name="ck_private_comparison_invitations_revoked_reason",
         ),
         sa.CheckConstraint(

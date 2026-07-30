@@ -118,10 +118,12 @@ aussi la relation par le compte de la session.
 
 Une paire de comptes possède au plus une ligne relationnelle. Une invitation
 pour une relation déjà active échoue. Après expiration ou révocation, une
-nouvelle invitation et deux nouveaux consentements peuvent réactiver cette
-ligne ; elle reçoit alors un nouveau `public_id`, ce qui invalide l'ancien lien
-de relation. Cette politique évite plusieurs historiques concurrents pour une
-même paire.
+invitation créée strictement après la fin du cycle et deux nouveaux
+consentements peuvent réactiver cette ligne ; elle reçoit alors un nouveau
+`public_id`, ce qui invalide l'ancien lien de relation. Une invitation créée
+avant ou exactement à la fin du cycle devient terminale et ne peut pas effacer
+la révocation ni restaurer un consentement antérieur. Cette politique évite
+plusieurs historiques concurrents pour une même paire.
 
 Une révocation commitée bloque toute lecture suivante. Une expiration est
 évaluée à chaque lecture et ne dépend d'aucun worker. La suppression d'un compte

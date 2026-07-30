@@ -21,6 +21,7 @@ from app.security import (
     LoginRateLimiter,
     cookie_names,
     create_web_session,
+    ensure_utc,
 )
 from app.services.operations import operational_alert_codes
 from app.services.private_comparisons import private_comparison_token_digest
@@ -689,6 +690,243 @@ def test_revocation_is_immediate_and_does_not_change_academic_rows(
         row = db.scalar(select(PrivateComparison))
         assert row is not None and row.revoked_at is not None
     assert after == before
+
+
+def test_stale_invitation_cannot_reactivate_revoked_relation(
+    comparisons_enabled,
+) -> None:  # noqa: ANN001
+    creator, _creator_id = _seed_owner("stale-creator@example.test", "Karine")
+    recipient, _recipient_id = _seed_owner("stale-recipient@example.test", "Lionel")
+    accepted_invitation = _create_invitation(creator)
+    stale_invitation = _create_invitation(creator)
+    relation = _accept(recipient, accepted_invitation["token"])
+
+    revoked = creator.delete(
+        f"/api/v1/private-comparisons/{relation['public_id']}",
+        headers=csrf_headers(creator),
+    )
+    assert revoked.status_code == 200
+    with SessionLocal() as db:
+        terminal_relation = db.scalar(select(PrivateComparison))
+        assert terminal_relation is not None
+        terminal_state = (
+            terminal_relation.public_id,
+            terminal_relation.expires_at,
+            terminal_relation.revoked_at,
+            terminal_relation.revoked_by_account_id,
+            terminal_relation.revoked_reason,
+        )
+
+    response = recipient.post(
+        "/api/v1/private-comparisons/invitations/accept",
+        json={**CONSENT, "token": stale_invitation["token"]},
+        headers=csrf_headers(recipient),
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "PRIVATE_COMPARISON_INVITATION_UNAVAILABLE"
+    with SessionLocal() as db:
+        persisted_relation = db.scalar(select(PrivateComparison))
+        persisted_invitation = db.scalar(
+            select(PrivateComparisonInvitation).where(
+                PrivateComparisonInvitation.public_id == stale_invitation["public_id"]
+            )
+        )
+        assert persisted_relation is not None
+        assert persisted_invitation is not None
+        assert (
+            persisted_relation.public_id,
+            persisted_relation.expires_at,
+            persisted_relation.revoked_at,
+            persisted_relation.revoked_by_account_id,
+            persisted_relation.revoked_reason,
+        ) == terminal_state
+        assert persisted_invitation.consumed_at is None
+        assert persisted_invitation.consumed_by_account_id is None
+        assert persisted_invitation.revoked_at is not None
+        assert persisted_invitation.revoked_reason == "superseded_relation_cycle"
+
+
+def test_active_pair_probe_does_not_preserve_stale_invitation_for_reactivation(
+    comparisons_enabled,
+) -> None:  # noqa: ANN001
+    creator, _creator_id = _seed_owner("probe-creator@example.test", "Marion")
+    recipient, _recipient_id = _seed_owner("probe-recipient@example.test", "Nicolas")
+    accepted_invitation = _create_invitation(creator)
+    stale_invitation = _create_invitation(creator)
+    relation = _accept(recipient, accepted_invitation["token"])
+
+    probe = recipient.post(
+        "/api/v1/private-comparisons/invitations/accept",
+        json={**CONSENT, "token": stale_invitation["token"]},
+        headers=csrf_headers(recipient),
+    )
+    assert probe.status_code == 404
+    assert probe.json()["detail"]["code"] == "PRIVATE_COMPARISON_INVITATION_UNAVAILABLE"
+    assert (
+        creator.delete(
+            f"/api/v1/private-comparisons/{relation['public_id']}",
+            headers=csrf_headers(creator),
+        ).status_code
+        == 200
+    )
+
+    replay = recipient.post(
+        "/api/v1/private-comparisons/invitations/accept",
+        json={**CONSENT, "token": stale_invitation["token"]},
+        headers=csrf_headers(recipient),
+    )
+
+    assert replay.status_code == 404
+    with SessionLocal() as db:
+        stale = db.scalar(
+            select(PrivateComparisonInvitation).where(
+                PrivateComparisonInvitation.public_id == stale_invitation["public_id"]
+            )
+        )
+        relation_row = db.scalar(select(PrivateComparison))
+        assert stale is not None and stale.consumed_at is None
+        assert stale.revoked_reason == "superseded_relation_cycle"
+        assert relation_row is not None and relation_row.revoked_at is not None
+
+
+def test_pre_expiry_invitation_cannot_reactivate_expired_relation(
+    comparisons_enabled,
+) -> None:  # noqa: ANN001
+    creator, _creator_id = _seed_owner("stale-expiry-creator@example.test", "Oceane")
+    recipient, _recipient_id = _seed_owner("stale-expiry-recipient@example.test", "Pascal")
+    stale_invitation = _create_invitation(creator)
+    relation = _accept(recipient, _create_invitation(creator, duration_days=1)["token"])
+    now = utcnow()
+    with SessionLocal() as db:
+        relation_row = db.scalar(select(PrivateComparison))
+        stale_row = db.scalar(
+            select(PrivateComparisonInvitation).where(
+                PrivateComparisonInvitation.public_id == stale_invitation["public_id"]
+            )
+        )
+        assert relation_row is not None and stale_row is not None
+        activated_at = now - timedelta(days=2)
+        relation_row.created_at = activated_at
+        relation_row.account_a_consented_at = activated_at
+        relation_row.account_b_consented_at = activated_at
+        relation_row.activated_at = activated_at
+        relation_row.expires_at = now - timedelta(seconds=1)
+        stale_row.created_at = activated_at - timedelta(days=1)
+        stale_row.expires_at = now + timedelta(days=1)
+        terminal_public_id = relation_row.public_id
+        terminal_expires_at = relation_row.expires_at
+        db.commit()
+
+    replay = recipient.post(
+        "/api/v1/private-comparisons/invitations/accept",
+        json={**CONSENT, "token": stale_invitation["token"]},
+        headers=csrf_headers(recipient),
+    )
+
+    assert replay.status_code == 404
+    assert recipient.get(f"/api/v1/private-comparisons/{relation['public_id']}").status_code == 404
+    with SessionLocal() as db:
+        relation_row = db.scalar(select(PrivateComparison))
+        stale_row = db.scalar(
+            select(PrivateComparisonInvitation).where(
+                PrivateComparisonInvitation.public_id == stale_invitation["public_id"]
+            )
+        )
+        assert relation_row is not None and stale_row is not None
+        assert relation_row.public_id == terminal_public_id
+        assert ensure_utc(relation_row.expires_at) == ensure_utc(terminal_expires_at)
+        assert relation_row.revoked_at is None
+        assert stale_row.revoked_reason == "superseded_relation_cycle"
+
+
+def test_invitation_at_terminal_boundary_is_rejected(
+    comparisons_enabled,
+) -> None:  # noqa: ANN001
+    creator, _creator_id = _seed_owner("boundary-creator@example.test", "Romain")
+    recipient, _recipient_id = _seed_owner("boundary-recipient@example.test", "Sarah")
+    stale_invitation = _create_invitation(creator)
+    relation = _accept(recipient, _create_invitation(creator)["token"])
+    assert (
+        creator.delete(
+            f"/api/v1/private-comparisons/{relation['public_id']}",
+            headers=csrf_headers(creator),
+        ).status_code
+        == 200
+    )
+    with SessionLocal() as db:
+        relation_row = db.scalar(select(PrivateComparison))
+        stale_row = db.scalar(
+            select(PrivateComparisonInvitation).where(
+                PrivateComparisonInvitation.public_id == stale_invitation["public_id"]
+            )
+        )
+        assert relation_row is not None and relation_row.revoked_at is not None
+        assert stale_row is not None
+        stale_row.created_at = relation_row.revoked_at
+        stale_row.expires_at = relation_row.revoked_at + timedelta(days=7)
+        db.commit()
+
+    replay = recipient.post(
+        "/api/v1/private-comparisons/invitations/accept",
+        json={**CONSENT, "token": stale_invitation["token"]},
+        headers=csrf_headers(recipient),
+    )
+
+    assert replay.status_code == 404
+    with SessionLocal() as db:
+        stale_row = db.scalar(
+            select(PrivateComparisonInvitation).where(
+                PrivateComparisonInvitation.public_id == stale_invitation["public_id"]
+            )
+        )
+        relation_row = db.scalar(select(PrivateComparison))
+        assert stale_row is not None and stale_row.revoked_reason == "superseded_relation_cycle"
+        assert relation_row is not None and relation_row.revoked_at is not None
+
+
+def test_fresh_invitation_can_start_a_new_cycle_after_revocation(
+    comparisons_enabled,
+) -> None:  # noqa: ANN001
+    creator, creator_id = _seed_owner("fresh-cycle-creator@example.test", "Thomas")
+    recipient, _recipient_id = _seed_owner("fresh-cycle-recipient@example.test", "Uma")
+    first_relation = _accept(recipient, _create_invitation(creator)["token"])
+    assert (
+        creator.delete(
+            f"/api/v1/private-comparisons/{first_relation['public_id']}",
+            headers=csrf_headers(creator),
+        ).status_code
+        == 200
+    )
+    fresh_invitation = _create_invitation(creator, duration_days=45)
+    with SessionLocal() as db:
+        relation_row = db.scalar(select(PrivateComparison))
+        fresh_row = db.scalar(
+            select(PrivateComparisonInvitation).where(
+                PrivateComparisonInvitation.public_id == fresh_invitation["public_id"]
+            )
+        )
+        assert relation_row is not None and relation_row.revoked_at is not None
+        assert fresh_row is not None
+        terminal_at = relation_row.revoked_at
+        assert ensure_utc(fresh_row.created_at) > ensure_utc(terminal_at)
+
+    next_relation = _accept(recipient, fresh_invitation["token"])
+
+    assert next_relation["public_id"] != first_relation["public_id"]
+    with SessionLocal() as db:
+        relation_row = db.scalar(select(PrivateComparison))
+        assert relation_row is not None
+        creator_consent = (
+            relation_row.account_a_consented_at
+            if relation_row.account_a_id == creator_id
+            else relation_row.account_b_consented_at
+        )
+        assert ensure_utc(creator_consent) > ensure_utc(terminal_at)
+        assert relation_row.duration_days == 45
+        assert relation_row.revoked_at is None
+        assert relation_row.revoked_by_account_id is None
+        assert relation_row.revoked_reason is None
 
 
 def test_academic_segment_change_disables_detail_immediately(comparisons_enabled) -> None:  # noqa: ANN001

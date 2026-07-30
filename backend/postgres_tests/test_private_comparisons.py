@@ -12,6 +12,7 @@ from app.config import get_settings
 from app.database import SessionLocal, engine, utcnow
 from app.models import Account, Note, PrivateComparison, PrivateComparisonInvitation, UeSetting
 from app.services.private_comparisons import (
+    SupersededPrivateComparisonInvitation,
     accept_invitation,
     comparison_detail,
     create_invitation,
@@ -137,6 +138,9 @@ def test_postgres_concurrent_acceptance_consumes_invitation_once() -> None:
             except HTTPException as exc:
                 db.rollback()
                 return f"error:{exc.status_code}"
+            except SupersededPrivateComparisonInvitation:
+                db.commit()
+                return "error:404"
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         outcomes = list(pool.map(accept, (recipient_a, recipient_b)))
@@ -172,18 +176,193 @@ def test_postgres_two_invitations_cannot_create_two_relations_for_one_pair() -> 
             except HTTPException as exc:
                 db.rollback()
                 return f"error:{exc.status_code}"
+            except SupersededPrivateComparisonInvitation:
+                db.commit()
+                return "error:404"
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         outcomes = list(pool.map(accept, invitation_ids_and_tokens))
 
     assert sum(not outcome.startswith("error:") for outcome in outcomes) == 1
-    assert sum(outcome == "error:409" for outcome in outcomes) == 1
+    assert sum(outcome == "error:404" for outcome in outcomes) == 1
     with SessionLocal() as db:
         assert db.scalar(select(func.count(PrivateComparison.id))) == 1
         assert (
             db.scalar(
                 select(func.count(PrivateComparisonInvitation.id)).where(
                     PrivateComparisonInvitation.consumed_at.is_not(None)
+                )
+            )
+            == 1
+        )
+        assert (
+            db.scalar(
+                select(func.count(PrivateComparisonInvitation.id)).where(
+                    PrivateComparisonInvitation.revoked_reason == "superseded_relation_cycle"
+                )
+            )
+            == 1
+        )
+
+
+def test_postgres_stale_and_fresh_reactivation_only_uses_fresh_consent() -> None:
+    creator_id = _eligible_account("cycle-race-creator@example.test")
+    recipient_id = _eligible_account("cycle-race-recipient@example.test")
+    stale_id, stale_token = _invitation(creator_id)
+    public_id = _accepted_relation(creator_id, recipient_id)
+    with SessionLocal() as db:
+        assert revoke_comparison(db, account_id=creator_id, public_id=public_id)
+        relation = db.scalar(select(PrivateComparison))
+        assert relation is not None and relation.revoked_at is not None
+        terminal_at = relation.revoked_at
+        db.commit()
+    fresh_id, fresh_token = _invitation(creator_id)
+    barrier = Barrier(2)
+
+    def accept(item: tuple[str, str]) -> str:
+        _invitation_id, token = item
+        barrier.wait(timeout=5)
+        with SessionLocal() as db:
+            try:
+                relation = accept_invitation(
+                    db,
+                    accepter_account_id=recipient_id,
+                    raw_token=token,
+                    consent_version=1,
+                    settings=get_settings(),
+                )
+                db.commit()
+                return f"accepted:{relation.created_from_invitation_id}"
+            except SupersededPrivateComparisonInvitation:
+                db.commit()
+                return "superseded"
+            except HTTPException as exc:
+                db.rollback()
+                return f"error:{exc.status_code}"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(accept, ((stale_id, stale_token), (fresh_id, fresh_token))))
+
+    assert outcomes.count("superseded") == 1
+    assert outcomes.count(f"accepted:{fresh_id}") == 1
+    with SessionLocal() as db:
+        relation = db.scalar(select(PrivateComparison))
+        stale = db.get(PrivateComparisonInvitation, stale_id)
+        fresh = db.get(PrivateComparisonInvitation, fresh_id)
+        assert relation is not None and stale is not None and fresh is not None
+        creator_consent = (
+            relation.account_a_consented_at
+            if relation.account_a_id == creator_id
+            else relation.account_b_consented_at
+        )
+        assert creator_consent > terminal_at
+        assert relation.created_from_invitation_id == fresh_id
+        assert relation.revoked_at is None
+        assert stale.revoked_reason == "superseded_relation_cycle"
+        assert stale.consumed_at is None
+        assert fresh.consumed_at is not None
+
+
+def test_postgres_stale_acceptance_serializes_with_relation_revocation() -> None:
+    creator_id = _eligible_account("revoke-cycle-creator@example.test")
+    recipient_id = _eligible_account("revoke-cycle-recipient@example.test")
+    stale_id, stale_token = _invitation(creator_id)
+    public_id = _accepted_relation(creator_id, recipient_id)
+    barrier = Barrier(2)
+
+    def accept_stale() -> str:
+        barrier.wait(timeout=5)
+        with SessionLocal() as db:
+            try:
+                accept_invitation(
+                    db,
+                    accepter_account_id=recipient_id,
+                    raw_token=stale_token,
+                    consent_version=1,
+                    settings=get_settings(),
+                )
+                db.commit()
+                return "accepted"
+            except SupersededPrivateComparisonInvitation:
+                db.commit()
+                return "superseded"
+            except HTTPException as exc:
+                db.rollback()
+                return f"error:{exc.status_code}"
+
+    def revoke() -> bool:
+        barrier.wait(timeout=5)
+        with SessionLocal() as db:
+            changed = revoke_comparison(db, account_id=creator_id, public_id=public_id)
+            db.commit()
+            return changed
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        accept_future = pool.submit(accept_stale)
+        revoke_future = pool.submit(revoke)
+        outcomes = (accept_future.result(timeout=10), revoke_future.result(timeout=10))
+
+    assert outcomes == ("superseded", True)
+    with SessionLocal() as db:
+        relation = db.scalar(select(PrivateComparison))
+        stale = db.get(PrivateComparisonInvitation, stale_id)
+        assert relation is not None and relation.revoked_at is not None
+        assert stale is not None and stale.revoked_reason == "superseded_relation_cycle"
+        assert stale.consumed_at is None
+
+
+def test_postgres_two_fresh_invitations_create_one_new_cycle() -> None:
+    creator_id = _eligible_account("fresh-race-creator@example.test")
+    recipient_id = _eligible_account("fresh-race-recipient@example.test")
+    public_id = _accepted_relation(creator_id, recipient_id)
+    with SessionLocal() as db:
+        assert revoke_comparison(db, account_id=recipient_id, public_id=public_id)
+        db.commit()
+    invitations = [_invitation(creator_id), _invitation(creator_id)]
+    barrier = Barrier(2)
+
+    def accept(item: tuple[str, str]) -> str:
+        invitation_id, token = item
+        barrier.wait(timeout=5)
+        with SessionLocal() as db:
+            try:
+                relation = accept_invitation(
+                    db,
+                    accepter_account_id=recipient_id,
+                    raw_token=token,
+                    consent_version=1,
+                    settings=get_settings(),
+                )
+                db.commit()
+                return f"accepted:{relation.created_from_invitation_id}"
+            except SupersededPrivateComparisonInvitation:
+                db.commit()
+                return "superseded"
+            except HTTPException as exc:
+                db.rollback()
+                return f"error:{exc.status_code}"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(accept, invitations))
+
+    assert sum(outcome.startswith("accepted:") for outcome in outcomes) == 1
+    assert outcomes.count("superseded") == 1
+    with SessionLocal() as db:
+        relation = db.scalar(select(PrivateComparison))
+        assert relation is not None and relation.revoked_at is None
+        assert db.scalar(select(func.count(PrivateComparison.id))) == 1
+        assert (
+            db.scalar(
+                select(func.count(PrivateComparisonInvitation.id)).where(
+                    PrivateComparisonInvitation.consumed_at.is_not(None)
+                )
+            )
+            == 2
+        )
+        assert (
+            db.scalar(
+                select(func.count(PrivateComparisonInvitation.id)).where(
+                    PrivateComparisonInvitation.revoked_reason == "superseded_relation_cycle"
                 )
             )
             == 1

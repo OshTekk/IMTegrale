@@ -56,8 +56,8 @@ participation.
 | Expiration pendant une lecture                       | Données après échéance                                  | Vérification sous verrou au début ; expiration à chaque nouvelle lecture                                                                             | Une réponse commencée juste avant l'échéance peut finir                           |
 | Compte désactivé ou supprimé                         | Accès persistant                                        | Auth refuse le compte désactivé ; paire revalidée ; FK cascade à la suppression                                                                      | Les copies réalisées avant suppression subsistent chez l'autre participant        |
 | Changement de cursus/promotion                       | Ancienne relation devenue incompatible                  | Éligibilité revalidée à chaque détail et statut non actif dans la liste                                                                              | Fenêtre jusqu'à la mise à jour locale des attributs officiels                     |
-| Ancien lien après révocation                         | Réactivation involontaire                               | Secret invitation terminal ; nouveau consentement requis ; nouveau `public_id` à la réactivation                                                     | Restauration d'une sauvegarde exige une procédure de révocation                   |
-| Relation existante et nouvelle invitation            | Relations parallèles                                    | Une paire canonique unique ; invitation refusée si active ; politique de réactivation explicite                                                      | Invitations actives restantes doivent être révoquées manuellement                 |
+| Ancien lien après révocation                         | Réactivation involontaire                               | Consentement créateur strictement postérieur à la borne terminale sous verrou ; invitation obsolète terminalisée ; nouveau `public_id`                | Restauration d'une sauvegarde exige une procédure de révocation                   |
+| Relation existante et nouvelle invitation            | Relations parallèles                                    | Une paire canonique unique ; invitation obsolète terminalisée ; seule une invitation postérieure au cycle peut réactiver                             | Une invitation transférée reste une capacité jusqu'à son usage ou sa terminaison |
 | Fuite dans événements/métriques                      | Données académiques secondaires                         | Événements sans score, UE, token, digest ou autre compte ; métriques agrégées                                                                        | Un volume très faible peut révéler une utilisation générale à l'opérateur         |
 | Fuite dans traces SQL                                | Secret ou résultat                                      | Paramètres liés ; aucun token brut en base ; logs SQL désactivés en production                                                                       | Un opérateur activant un tracing de bodies pourrait violer la politique           |
 | Cache navigateur/proxy                               | Réponse servie après révocation                         | `private, no-store`, `Pragma: no-cache`, `Vary: Cookie`, aucun service worker                                                                        | Le navigateur peut garder une page déjà affichée en mémoire                       |
@@ -69,7 +69,8 @@ participation.
 
 L'acceptation verrouille d'abord l'invitation, puis les deux comptes triés par
 UUID, puis la relation canonique. La consommation et l'activation sont dans le
-même commit. Une révocation verrouille la relation. Un détail repère la
+même commit. Une révocation repère la relation, verrouille les comptes dans le
+même ordre canonique, puis relit et verrouille la relation. Un détail repère la
 relation, verrouille en lecture les comptes dans l'ordre canonique, puis relit
 et verrouille la relation avant de calculer les données officielles. Cet ordre
 évite un cycle avec l'acceptation tout en stabilisant l'éligibilité. Une
@@ -77,11 +78,13 @@ suppression administrative verrouille d'abord les invitations liées afin de
 conserver l'ordre invitation-compte de l'acceptation avant les cascades SQL.
 Une expiration est logique et ne dépend pas d'un nettoyage asynchrone.
 
-Scénarios testés : double acceptation du même secret, deux invitations pour la
-même paire, révocation immédiate, lecture tierce, relation expirée, invitation
-révoquée/expirée/consommée, auto-invitation, incompatibilité académique,
-suppression en cascade et changement de promotion. PostgreSQL vérifie les vrais
-verrous et contraintes ; SQLite vérifie migration et invariants de schéma.
+Scénarios testés : double acceptation du même secret, invitations obsolète et
+fraîche concurrentes, deux invitations fraîches concurrentes, acceptation et
+révocation simultanées, révocation immédiate, lecture tierce, relation expirée,
+invitation révoquée/expirée/consommée, auto-invitation, incompatibilité
+académique, suppression en cascade et changement de promotion. PostgreSQL
+vérifie les vrais verrous et contraintes ; SQLite vérifie migration et
+invariants de schéma.
 
 ## Données autorisées et minimisation
 

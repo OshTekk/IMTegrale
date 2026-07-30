@@ -3,6 +3,7 @@ from __future__ import annotations
 import secrets
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
+from typing import NoReturn
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, or_, select
@@ -22,6 +23,7 @@ from app.private_comparison_contract import (
     PRIVATE_COMPARISON_CONSENT_VERSION,
     PRIVATE_COMPARISON_DEFAULT_DURATION_DAYS,
     PRIVATE_COMPARISON_INVITATION_PUBLIC_ID_PREFIX,
+    PRIVATE_COMPARISON_INVITATION_SUPERSEDED_REASON,
     PRIVATE_COMPARISON_INVITATION_TTL_DAYS,
     PRIVATE_COMPARISON_PUBLIC_ID_PREFIX,
     PRIVATE_COMPARISON_TOKEN_ENTROPY_BYTES,
@@ -43,6 +45,10 @@ PRIVATE_COMPARISON_CURRENT_AFTER = timedelta(days=7)
 PRIVATE_COMPARISON_STALE_AFTER = timedelta(days=30)
 _TOKEN_DIGEST_DOMAIN = "private-comparison-invitation:v1:"  # noqa: S105
 _ACADEMIC_SEMESTERS = frozenset({"S5", "S6", "S7", "S8", "S9", "S10"})
+
+
+class SupersededPrivateComparisonInvitation(Exception):
+    """The bearer predates the terminal boundary of this account pair."""
 
 
 def private_comparison_scope() -> dict:
@@ -68,7 +74,7 @@ def require_private_comparisons_enabled(settings: Settings) -> None:
         )
 
 
-def _invitation_unavailable() -> None:
+def raise_private_comparison_invitation_unavailable() -> NoReturn:
     raise HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
         detail={
@@ -174,6 +180,34 @@ def _comparison_status(
     if ensure_utc(comparison.expires_at) <= current:
         return PrivateComparisonStatus.EXPIRED
     return PrivateComparisonStatus.ACTIVE
+
+
+def _comparison_terminal_at(
+    comparison: PrivateComparison,
+    *,
+    now: datetime,
+) -> datetime:
+    current = ensure_utc(now)
+    terminal_markers = [
+        marker
+        for marker in (comparison.revoked_at, comparison.expires_at)
+        if marker is not None and ensure_utc(marker) <= current
+    ]
+    if not terminal_markers:
+        raise RuntimeError("Inactive private comparison has no terminal marker")
+    return max(terminal_markers, key=ensure_utc)
+
+
+def _supersede_invitation(
+    db: Session,
+    invitation: PrivateComparisonInvitation,
+    *,
+    now: datetime,
+) -> NoReturn:
+    invitation.revoked_at = now
+    invitation.revoked_reason = PRIVATE_COMPARISON_INVITATION_SUPERSEDED_REASON
+    db.flush()
+    raise SupersededPrivateComparisonInvitation
 
 
 def _account_has_official_data(db: Session, account: Account) -> bool:
@@ -328,7 +362,7 @@ def revoke_invitation(
     public_id: str,
 ) -> bool:
     if not valid_private_comparison_invitation_public_id(public_id):
-        _invitation_unavailable()
+        raise_private_comparison_invitation_unavailable()
     invitation = db.scalar(
         select(PrivateComparisonInvitation)
         .where(
@@ -338,7 +372,7 @@ def revoke_invitation(
         .with_for_update()
     )
     if invitation is None:
-        _invitation_unavailable()
+        raise_private_comparison_invitation_unavailable()
     if invitation_status(invitation) is not PrivateComparisonInvitationStatus.ACTIVE:
         return False
     invitation.revoked_at = utcnow()
@@ -354,7 +388,7 @@ def _invitation_for_token(
     lock: bool,
 ) -> PrivateComparisonInvitation:
     if not valid_private_comparison_token(raw_token):
-        _invitation_unavailable()
+        raise_private_comparison_invitation_unavailable()
     statement = select(PrivateComparisonInvitation).where(
         PrivateComparisonInvitation.token_digest.in_(_private_comparison_token_digests(raw_token, settings))
     )
@@ -367,7 +401,7 @@ def _invitation_for_token(
         or invitation.consent_version != PRIVATE_COMPARISON_CONSENT_VERSION
         or invitation_status(invitation) is not PrivateComparisonInvitationStatus.ACTIVE
     ):
-        _invitation_unavailable()
+        raise_private_comparison_invitation_unavailable()
     return invitation
 
 
@@ -380,15 +414,15 @@ def preview_invitation(
 ) -> dict:
     invitation = _invitation_for_token(db, raw_token, settings, lock=False)
     if invitation.creator_account_id == accepter_account_id:
-        _invitation_unavailable()
+        raise_private_comparison_invitation_unavailable()
     accounts = _locked_accounts(db, (invitation.creator_account_id, accepter_account_id))
     creator = accounts.get(invitation.creator_account_id)
     accepter = accounts.get(accepter_account_id)
     if creator is None or accepter is None or not _eligible_pair(db, creator, accepter):
-        _invitation_unavailable()
+        raise_private_comparison_invitation_unavailable()
     creator_name = official_name(creator)
     if creator_name is None:
-        _invitation_unavailable()
+        raise_private_comparison_invitation_unavailable()
     return {
         "creator": {"official_name": creator_name},
         "expires_at": invitation.expires_at,
@@ -410,7 +444,7 @@ def accept_invitation(
         _eligibility_error()
     invitation = _invitation_for_token(db, raw_token, settings, lock=True)
     if invitation.creator_account_id == accepter_account_id:
-        _invitation_unavailable()
+        raise_private_comparison_invitation_unavailable()
     account_ids = tuple(sorted((invitation.creator_account_id, accepter_account_id)))
     accounts = _locked_accounts(db, account_ids)
     creator = accounts.get(invitation.creator_account_id)
@@ -426,14 +460,21 @@ def accept_invitation(
         .with_for_update()
     )
     now = utcnow()
-    if existing is not None and _comparison_status(existing, now=now) is PrivateComparisonStatus.ACTIVE:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "PRIVATE_COMPARISON_ALREADY_ACTIVE",
-                "message": "Une comparaison privée est déjà active.",
-            },
-        )
+    if existing is not None:
+        existing_status = _comparison_status(existing, now=now)
+        if existing_status is PrivateComparisonStatus.ACTIVE:
+            if ensure_utc(invitation.created_at) <= ensure_utc(existing.activated_at):
+                _supersede_invitation(db, invitation, now=now)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "PRIVATE_COMPARISON_ALREADY_ACTIVE",
+                    "message": "Une comparaison privée est déjà active.",
+                },
+            )
+        terminal_at = _comparison_terminal_at(existing, now=now)
+        if ensure_utc(invitation.created_at) <= ensure_utc(terminal_at):
+            _supersede_invitation(db, invitation, now=now)
     consent_at = {
         invitation.creator_account_id: invitation.created_at,
         accepter_account_id: now,
@@ -475,7 +516,7 @@ def decline_invitation(
 ) -> PrivateComparisonInvitation:
     invitation = _invitation_for_token(db, raw_token, settings, lock=True)
     if invitation.creator_account_id == decliner_account_id:
-        _invitation_unavailable()
+        raise_private_comparison_invitation_unavailable()
     invitation.revoked_at = utcnow()
     invitation.revoked_reason = "declined"
     db.flush()
@@ -691,15 +732,31 @@ def revoke_comparison(
 ) -> bool:
     if not valid_private_comparison_public_id(public_id):
         _comparison_unavailable()
-    comparison = db.scalar(
-        select(PrivateComparison)
-        .where(
+    candidate = db.scalar(
+        select(PrivateComparison).where(
             PrivateComparison.public_id == public_id,
             or_(
                 PrivateComparison.account_a_id == account_id,
                 PrivateComparison.account_b_id == account_id,
             ),
         )
+    )
+    if candidate is None:
+        _comparison_unavailable()
+    account_ids = (candidate.account_a_id, candidate.account_b_id)
+    if len(_locked_accounts(db, account_ids)) != 2:
+        _comparison_unavailable()
+    comparison = db.scalar(
+        select(PrivateComparison)
+        .where(
+            PrivateComparison.id == candidate.id,
+            PrivateComparison.public_id == public_id,
+            or_(
+                PrivateComparison.account_a_id == account_id,
+                PrivateComparison.account_b_id == account_id,
+            ),
+        )
+        .execution_options(populate_existing=True)
         .with_for_update()
     )
     if comparison is None:

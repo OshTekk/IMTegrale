@@ -29,6 +29,7 @@ from app.security import (
 )
 from app.services.events import record_event
 from app.services.private_comparisons import (
+    SupersededPrivateComparisonInvitation,
     accept_invitation,
     comparison_detail,
     create_invitation,
@@ -37,6 +38,7 @@ from app.services.private_comparisons import (
     list_invitations,
     preview_invitation,
     private_comparison_scope,
+    raise_private_comparison_invitation_unavailable,
     require_private_comparisons_enabled,
     revoke_comparison,
     revoke_invitation,
@@ -177,6 +179,9 @@ def accept_private_comparison_invitation(
                 payload={"consent_version": payload.consent_version},
             )
         db.commit()
+    except SupersededPrivateComparisonInvitation:
+        db.commit()
+        raise_private_comparison_invitation_unavailable()
     except IntegrityError:
         db.rollback()
         raise_private_comparison_conflict()
