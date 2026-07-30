@@ -26,9 +26,19 @@ const csrfToken = "csrf-e2e-synthetic";
 const inlineMathFixture = "q = \\alpha + 1";
 const blockMathFixture = "\\sum_{k=1}^{n} k = \\frac{n(n+1)}{2}";
 
+function securityMetadata(marker: string) {
+  return {
+    session_scope: `bss1_${marker.repeat(64)}`,
+    session_expires_at: "2099-01-01T01:00:00.000Z",
+    server_time: "2099-01-01T00:00:00.000Z",
+    private_comparisons: { available: false },
+  };
+}
+
 const sessionByMode: Record<FakeSessionMode, Record<string, unknown>> = {
   eligible: {
     authenticated: true,
+    ...securityMetadata("a"),
     role: "owner",
     auth_method: "imt",
     needs_security_setup: false,
@@ -44,6 +54,7 @@ const sessionByMode: Record<FakeSessionMode, Record<string, unknown>> = {
   },
   token: {
     authenticated: true,
+    ...securityMetadata("b"),
     role: "owner",
     auth_method: "token",
     needs_security_setup: false,
@@ -59,6 +70,7 @@ const sessionByMode: Record<FakeSessionMode, Record<string, unknown>> = {
   },
   noneligible: {
     authenticated: true,
+    ...securityMetadata("c"),
     role: "owner",
     auth_method: "imt",
     needs_security_setup: false,
@@ -74,6 +86,7 @@ const sessionByMode: Record<FakeSessionMode, Record<string, unknown>> = {
   },
   reverify: {
     authenticated: true,
+    ...securityMetadata("d"),
     role: "owner",
     auth_method: "passkey",
     needs_security_setup: false,
@@ -89,6 +102,7 @@ const sessionByMode: Record<FakeSessionMode, Record<string, unknown>> = {
   },
   unavailable: {
     authenticated: true,
+    ...securityMetadata("e"),
     role: "owner",
     auth_method: "imt",
     needs_security_setup: false,
@@ -104,6 +118,7 @@ const sessionByMode: Record<FakeSessionMode, Record<string, unknown>> = {
   },
   error: {
     authenticated: true,
+    ...securityMetadata("f"),
     role: "owner",
     auth_method: "imt",
     needs_security_setup: false,
@@ -121,7 +136,7 @@ const sessionByMode: Record<FakeSessionMode, Record<string, unknown>> = {
 
 const dashboard = {
   generated_at: "2099-01-01T00:00:00Z",
-  latest_event_id: 0,
+  latest_event_cursor: null,
   account: {
     id: "account-e2e-synthetic",
     display_name: "Étudiante fictive",

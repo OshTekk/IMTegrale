@@ -52,6 +52,7 @@ describe("private comparison generated contract", () => {
     const payload: PrivateComparisonInvitationCreatedResponse = {
       public_id: "pci_" + "b".repeat(24),
       token: oneShot,
+      session_scope: `bss1_${"c".repeat(64)}`,
       expires_at: "2099-01-08T00:00:00Z",
       relationship_duration_days: 30,
       consent_version: 2,

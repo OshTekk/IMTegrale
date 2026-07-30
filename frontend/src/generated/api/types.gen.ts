@@ -221,6 +221,37 @@ export type AccountUpdate = {
 };
 
 /**
+ * ActivePrivateComparisonListItem
+ */
+export type ActivePrivateComparisonListItem = {
+    /**
+     * Academic Verified At
+     */
+    academic_verified_at: string | null;
+    /**
+     * Activated At
+     */
+    activated_at: string;
+    /**
+     * Expires At
+     */
+    expires_at: string;
+    /**
+     * Freshness
+     */
+    freshness: 'current' | 'recommended' | 'stale';
+    other_participant: PrivateComparisonOfficialIdentityResponse;
+    /**
+     * Public Id
+     */
+    public_id: string;
+    /**
+     * Status
+     */
+    status: 'active';
+};
+
+/**
  * AdminAccountAction
  */
 export type AdminAccountAction = {
@@ -1365,6 +1396,14 @@ export type AuthenticatedSessionResponse = {
      */
     role: 'owner' | 'editor' | 'viewer';
     /**
+     * Server Time
+     */
+    server_time: string;
+    /**
+     * Session Expires At
+     */
+    session_expires_at: string;
+    /**
      * Session Scope
      */
     session_scope: string;
@@ -1619,9 +1658,9 @@ export type DashboardResponse = {
      */
     grade_scale: Array<GradeScaleResponse>;
     /**
-     * Latest Event Id
+     * Latest Event Cursor
      */
-    latest_event_id: number;
+    latest_event_cursor: string | null;
     /**
      * Notes
      */
@@ -1654,9 +1693,9 @@ export type EventResponse = {
      */
     created_at: string;
     /**
-     * Id
+     * Cursor
      */
-    id: number;
+    cursor: string;
     /**
      * Kind
      */
@@ -4286,6 +4325,10 @@ export type PrivateComparisonInvitationCreatedResponse = {
      */
     relationship_duration_days: number;
     /**
+     * Session Scope
+     */
+    session_scope: string;
+    /**
      * Token
      */
     token: string;
@@ -4364,7 +4407,7 @@ export type PrivateComparisonListResponse = {
     /**
      * Comparisons
      */
-    comparisons: Array<PrivateComparisonRelationResponse>;
+    comparisons: Array<ActivePrivateComparisonListItem | TerminalPrivateComparisonHistoryItem>;
 };
 
 /**
@@ -4383,37 +4426,6 @@ export type PrivateComparisonOfficialIdentityResponse = {
 export type PrivateComparisonParticipantResponse = {
     identity: PrivateComparisonOfficialIdentityResponse;
     summary: PrivateComparisonSummaryResponse;
-};
-
-/**
- * PrivateComparisonRelationResponse
- */
-export type PrivateComparisonRelationResponse = {
-    /**
-     * Academic Verified At
-     */
-    academic_verified_at: string | null;
-    /**
-     * Activated At
-     */
-    activated_at: string;
-    /**
-     * Expires At
-     */
-    expires_at: string;
-    /**
-     * Freshness
-     */
-    freshness: 'current' | 'recommended' | 'stale';
-    other_participant: PrivateComparisonOfficialIdentityResponse;
-    /**
-     * Public Id
-     */
-    public_id: string;
-    /**
-     * Status
-     */
-    status: 'active' | 'expired' | 'revoked';
 };
 
 /**
@@ -5438,6 +5450,24 @@ export type TelegramUpdate = {
      * Enabled
      */
     enabled?: boolean;
+};
+
+/**
+ * TerminalPrivateComparisonHistoryItem
+ */
+export type TerminalPrivateComparisonHistoryItem = {
+    /**
+     * Ended At
+     */
+    ended_at: string;
+    /**
+     * Public Id
+     */
+    public_id: string;
+    /**
+     * Status
+     */
+    status: 'expired' | 'revoked';
 };
 
 /**
@@ -8287,7 +8317,7 @@ export type EventsStreamEventsData = {
         /**
          * After
          */
-        after?: number;
+        after?: string | null;
     };
     url: '/api/v1/events';
 };
@@ -10529,7 +10559,7 @@ export type PrivateComparisonsAcceptPrivateComparisonInvitationResponses = {
     /**
      * Successful Response
      */
-    201: PrivateComparisonRelationResponse;
+    201: ActivePrivateComparisonListItem;
 };
 
 export type PrivateComparisonsAcceptPrivateComparisonInvitationResponse = PrivateComparisonsAcceptPrivateComparisonInvitationResponses[keyof PrivateComparisonsAcceptPrivateComparisonInvitationResponses];

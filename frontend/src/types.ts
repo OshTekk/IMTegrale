@@ -12,6 +12,8 @@ export type SimulationSemester = AcademicSemester;
 export interface Session {
   authenticated: boolean;
   session_scope?: string;
+  session_expires_at?: string;
+  server_time?: string;
   role?: Role;
   auth_method?: "imt" | "token" | "passkey";
   needs_security_setup?: boolean;
@@ -134,7 +136,7 @@ export interface SyncStartResponse {
 
 export interface Dashboard {
   generated_at: string;
-  latest_event_id: number;
+  latest_event_cursor: string | null;
   account: {
     id: string;
     display_name: string;

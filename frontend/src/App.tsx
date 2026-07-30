@@ -11,9 +11,10 @@ import { SimulationLayout } from "./components/SimulationLayout";
 import { LoginPage } from "./pages/LoginPage";
 import { isPrimaryOwnerSession } from "./lib/auth";
 import { primarySessionScope } from "./lib/securityScope";
+import { fetchSecuritySession, SessionSecurityBoundary } from "./lib/sessionSecurity";
 import { learningDocumentTitle } from "./lib/learning";
-import { clearAccountState, queryKeys, replaceSessionState, useSession } from "./lib/queries";
-import { broadcastSessionChange, subscribeToSessionChanges } from "./lib/sessionSync";
+import { queryKeys, replaceSessionState, useSession } from "./lib/queries";
+import { broadcastSessionChange } from "./lib/sessionSync";
 
 const loadOverviewPage = () => import("./pages/OverviewPage");
 const loadResultsPages = () => import("./pages/results");
@@ -208,15 +209,6 @@ function StudentApp() {
     return () => window.removeEventListener("botnote:learning-reverify", handleLearningReverification);
   }, [queryClient]);
 
-  useEffect(
-    () =>
-      subscribeToSessionChanges(() => {
-        clearAccountState(queryClient);
-        queryClient.invalidateQueries({ queryKey: queryKeys.session });
-      }),
-    [queryClient],
-  );
-
   if (session.isPending) {
     return (
       <div className="app-loading">
@@ -234,68 +226,77 @@ function StudentApp() {
   const privateComparisonsAvailable = Boolean(isPrimaryOwner && session.data.private_comparisons?.available === true);
   const privateComparisonSessionScope = primarySessionScope(session.data);
   return (
-    <>
-      <Routes>
-        <Route element={<AppShell session={session.data} preloadRoute={preloadStudentRoute} />}>
-          <Route index element={<OverviewPage />} />
-          <Route path="results" element={<ResultsPage />} />
-          <Route path="results/ue/:ueCode" element={<ResultsUeDetailPage />} />
-          <Route path="notes" element={<LegacyResultsRedirect view="evaluations" />} />
-          <Route path="calendar" element={isPrimaryOwner ? <CalendarPage /> : <Navigate to="/" replace />} />
-          <Route
-            path="ues/releve"
-            element={isPrimaryOwner ? <AcademicReportPage /> : <Navigate to="/results?view=ues" replace />}
-          />
-          <Route path="ues" element={<LegacyResultsRedirect view="ues" />} />
-          <Route path="leaderboard" element={isOwner ? <LeaderboardPage /> : <Navigate to="/" replace />} />
-          <Route
-            path="comparisons"
-            element={
-              privateComparisonsAvailable ? (
-                <PrivateComparisonsPage key={privateComparisonSessionScope} />
-              ) : (
-                <Navigate to="/" replace />
-              )
-            }
-          />
-          <Route
-            path="comparisons/accept"
-            element={
-              <PrivateComparisonAcceptGate session={session.data}>
-                <PrivateComparisonAcceptPage key={privateComparisonSessionScope} />
-              </PrivateComparisonAcceptGate>
-            }
-          />
-          <Route
-            path="comparisons/:publicId"
-            element={
-              privateComparisonsAvailable ? (
-                <PrivateComparisonDetailPage key={privateComparisonSessionScope} />
-              ) : (
-                <Navigate to="/" replace />
-              )
-            }
-          />
-          <Route path="simulations" element={isPrimaryOwner ? <SimulationLayout /> : <Navigate to="/" replace />}>
-            <Route index element={<Navigate to="gpa" replace />} />
-            <Route path="gpa" element={<SimulationsPage />} />
-            <Route path="notes" element={<NoteSimulationsPage />} />
+    <SessionSecurityBoundary
+      session={session.data}
+      sessionPending={session.isPending}
+      refetchSession={fetchSecuritySession}
+    >
+      <>
+        <Routes>
+          <Route element={<AppShell session={session.data} preloadRoute={preloadStudentRoute} />}>
+            <Route index element={<OverviewPage />} />
+            <Route path="results" element={<ResultsPage />} />
+            <Route path="results/ue/:ueCode" element={<ResultsUeDetailPage />} />
+            <Route path="notes" element={<LegacyResultsRedirect view="evaluations" />} />
+            <Route path="calendar" element={isPrimaryOwner ? <CalendarPage /> : <Navigate to="/" replace />} />
+            <Route
+              path="ues/releve"
+              element={isPrimaryOwner ? <AcademicReportPage /> : <Navigate to="/results?view=ues" replace />}
+            />
+            <Route path="ues" element={<LegacyResultsRedirect view="ues" />} />
+            <Route path="leaderboard" element={isOwner ? <LeaderboardPage /> : <Navigate to="/" replace />} />
+            <Route
+              path="comparisons"
+              element={
+                privateComparisonsAvailable ? (
+                  <PrivateComparisonsPage key={privateComparisonSessionScope} />
+                ) : (
+                  <Navigate to="/" replace />
+                )
+              }
+            />
+            <Route
+              path="comparisons/accept"
+              element={
+                <PrivateComparisonAcceptGate session={session.data}>
+                  <PrivateComparisonAcceptPage key={privateComparisonSessionScope} />
+                </PrivateComparisonAcceptGate>
+              }
+            />
+            <Route
+              path="comparisons/:publicId"
+              element={
+                privateComparisonsAvailable ? (
+                  <PrivateComparisonDetailPage key={privateComparisonSessionScope} />
+                ) : (
+                  <Navigate to="/" replace />
+                )
+              }
+            />
+            <Route path="simulations" element={isPrimaryOwner ? <SimulationLayout /> : <Navigate to="/" replace />}>
+              <Route index element={<Navigate to="gpa" replace />} />
+              <Route path="gpa" element={<SimulationsPage />} />
+              <Route path="notes" element={<NoteSimulationsPage />} />
+            </Route>
+            <Route path="sharing" element={isOwner ? <SharingPage /> : <Navigate to="/" replace />} />
+            <Route path="parcours/*" element={<LearningPage session={session.data} />} />
+            <Route
+              path="settings"
+              element={<SettingsPage role={session.data.role} isPrimaryOwner={isPrimaryOwner} />}
+            />
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
-          <Route path="sharing" element={isOwner ? <SharingPage /> : <Navigate to="/" replace />} />
-          <Route path="parcours/*" element={<LearningPage session={session.data} />} />
-          <Route path="settings" element={<SettingsPage role={session.data.role} isPrimaryOwner={isPrimaryOwner} />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Route>
-      </Routes>
-      <SecuritySetupModal
-        open={Boolean(isPrimaryOwner && session.data.needs_security_setup)}
-        isPrimaryOwner={isPrimaryOwner}
-        onComplete={() => queryClient.invalidateQueries({ queryKey: queryKeys.session })}
-      />
-      <SyncSetupModal
-        open={Boolean(isPrimaryOwner && !session.data.needs_security_setup && session.data.needs_sync_setup)}
-        onComplete={() => queryClient.invalidateQueries({ queryKey: queryKeys.session })}
-      />
-    </>
+        </Routes>
+        <SecuritySetupModal
+          open={Boolean(isPrimaryOwner && session.data.needs_security_setup)}
+          isPrimaryOwner={isPrimaryOwner}
+          onComplete={() => queryClient.invalidateQueries({ queryKey: queryKeys.session })}
+        />
+        <SyncSetupModal
+          open={Boolean(isPrimaryOwner && !session.data.needs_security_setup && session.data.needs_sync_setup)}
+          onComplete={() => queryClient.invalidateQueries({ queryKey: queryKeys.session })}
+        />
+      </>
+    </SessionSecurityBoundary>
   );
 }

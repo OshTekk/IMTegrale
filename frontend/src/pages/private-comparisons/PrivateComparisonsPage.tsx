@@ -1,10 +1,11 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { CalendarClock, Link2, Plus, ShieldCheck, UserRoundCheck } from "lucide-react";
-import { useMemo, useState } from "react";
+import { CalendarClock, Link2, Plus, ShieldCheck } from "lucide-react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import type {
+  ActivePrivateComparisonListItem,
   PrivateComparisonInvitationResponse,
-  PrivateComparisonRelationResponse,
+  TerminalPrivateComparisonHistoryItem,
 } from "../../generated/api/types.gen";
 import {
   privateComparisonsDeletePrivateComparison,
@@ -26,13 +27,13 @@ import {
   primarySessionScope,
   useSecurityDocumentTitle,
 } from "../../lib/securityScope";
+import { useVerifiedSessionRequest } from "../../lib/sessionSecurity";
 import { PrivateComparisonConfirmModal } from "./PrivateComparisonConfirmModal";
 import { PrivateComparisonInvitationModal } from "./PrivateComparisonInvitationModal";
 import { PrivateComparisonScope } from "./PrivateComparisonScope";
 import {
-  comparisonStatusLabel,
   freshnessLabel,
-  invitationStatusLabel,
+  privateComparisonStatusLabel,
   privateComparisonErrorMessage,
   usablePrivateComparisonConsentManifest,
 } from "./privateComparisonPresentation";
@@ -53,7 +54,7 @@ function InvitationItem({
         <div className="private-comparison-item-title">
           <h3>Invitation créée le {formatDate(invitation.created_at, false)}</h3>
           <span className={`status-pill ${invitation.status === "active" ? "success" : "neutral"}`}>
-            {invitationStatusLabel(invitation.status)}
+            {privateComparisonStatusLabel(invitation.status)}
           </span>
         </div>
         <p>
@@ -77,30 +78,33 @@ function ComparisonItem({
   comparison,
   onRevoke,
 }: {
-  comparison: PrivateComparisonRelationResponse;
-  onRevoke: (comparison: PrivateComparisonRelationResponse) => void;
+  comparison: ActivePrivateComparisonListItem | TerminalPrivateComparisonHistoryItem;
+  onRevoke?: (comparison: ActivePrivateComparisonListItem) => void;
 }) {
   const active = comparison.status === "active";
   return (
     <article className="private-comparison-list-item">
       <div className="private-comparison-item-icon" aria-hidden="true">
-        <UserRoundCheck size={19} />
+        {active ? <ShieldCheck size={19} /> : <CalendarClock size={19} />}
       </div>
       <div className="private-comparison-item-copy">
         <div className="private-comparison-item-title">
-          <h3>{comparison.other_participant.official_name}</h3>
+          <h3>{active ? comparison.other_participant.official_name : "Comparaison terminée"}</h3>
           <span className={`status-pill ${active ? "success" : "neutral"}`}>
-            {comparisonStatusLabel(comparison.status)}
+            {privateComparisonStatusLabel(comparison.status)}
           </span>
         </div>
-        <p>
-          {active
-            ? `Disponible jusqu’au ${formatDate(comparison.expires_at, false)}`
-            : `Fin le ${formatDate(comparison.expires_at, false)}`}
-          {active ? ` · ${freshnessLabel(comparison.freshness)}` : ""}
-        </p>
+        {active ? (
+          <p>
+            Disponible jusqu’au {formatDate(comparison.expires_at, false)} · {freshnessLabel(comparison.freshness)}
+          </p>
+        ) : (
+          <p>
+            {comparison.status === "revoked" ? "Révoquée" : "Expirée"} le {formatDate(comparison.ended_at, false)}
+          </p>
+        )}
       </div>
-      {active && (
+      {active && onRevoke ? (
         <div className="private-comparison-item-actions">
           <Link className="primary-button" to={`/comparisons/${comparison.public_id}`}>
             Voir la comparaison
@@ -109,7 +113,7 @@ function ComparisonItem({
             Mettre fin
           </button>
         </div>
-      )}
+      ) : null}
     </article>
   );
 }
@@ -121,6 +125,7 @@ export function PrivateComparisonsPage() {
   const { showToast } = useToast();
   const accountId = session.data?.account?.id ?? "anonymous";
   const sessionScope = primarySessionScope(session.data);
+  const runVerifiedRequest = useVerifiedSessionRequest();
   const invitations = usePrivateComparisonInvitations();
   const comparisons = usePrivateComparisons();
   const consentManifest = usePrivateComparisonConsentManifest();
@@ -128,24 +133,27 @@ export function PrivateComparisonsPage() {
     consentManifest.data && usablePrivateComparisonConsentManifest(consentManifest.data) ? consentManifest.data : null;
   const [creationOpen, setCreationOpen] = useState(false);
   const [invitationToRevoke, setInvitationToRevoke] = useState<PrivateComparisonInvitationResponse | null>(null);
-  const [comparisonToRevoke, setComparisonToRevoke] = useState<PrivateComparisonRelationResponse | null>(null);
+  const [comparisonToRevoke, setComparisonToRevoke] = useState<ActivePrivateComparisonListItem | null>(null);
 
-  const activeComparisons = useMemo(
-    () => comparisons.data?.comparisons.filter((value) => value.status === "active") ?? [],
-    [comparisons.data],
-  );
-  const comparisonHistory = useMemo(
-    () => comparisons.data?.comparisons.filter((value) => value.status !== "active") ?? [],
-    [comparisons.data],
-  );
+  const activeComparisons =
+    comparisons.data?.comparisons.filter(
+      (value): value is ActivePrivateComparisonListItem => value.status === "active",
+    ) ?? [];
+  const comparisonHistory =
+    comparisons.data?.comparisons.filter(
+      (value): value is TerminalPrivateComparisonHistoryItem => value.status !== "active",
+    ) ?? [];
 
   const revokeInvitation = useMutation({
     mutationFn: (publicId: string) =>
-      apiData(
-        privateComparisonsDeletePrivateComparisonInvitation({
-          path: { public_id: publicId },
-          throwOnError: throwOnApiError,
-        }),
+      runVerifiedRequest(sessionScope, (signal) =>
+        apiData(
+          privateComparisonsDeletePrivateComparisonInvitation({
+            path: { public_id: publicId },
+            signal,
+            throwOnError: throwOnApiError,
+          }),
+        ),
       ),
     onSuccess: async () => {
       setInvitationToRevoke(null);
@@ -157,11 +165,14 @@ export function PrivateComparisonsPage() {
 
   const revokeComparison = useMutation({
     mutationFn: (publicId: string) =>
-      apiData(
-        privateComparisonsDeletePrivateComparison({
-          path: { public_id: publicId },
-          throwOnError: throwOnApiError,
-        }),
+      runVerifiedRequest(sessionScope, (signal) =>
+        apiData(
+          privateComparisonsDeletePrivateComparison({
+            path: { public_id: publicId },
+            signal,
+            throwOnError: throwOnApiError,
+          }),
+        ),
       ),
     onSuccess: async (_, publicId) => {
       queryClient.removeQueries({ queryKey: queryKeys.privateComparison(accountId, publicId), exact: true });
@@ -265,12 +276,15 @@ export function PrivateComparisonsPage() {
             <CalendarClock size={22} aria-hidden="true" />
             <div>
               <h2 id="comparison-history-title">Historique</h2>
-              <p>Les relations terminées restent visibles sans leurs données académiques.</p>
+              <p>
+                Pour protéger les deux participants, les identités et résultats ne sont plus affichés après la fin d’une
+                comparaison.
+              </p>
             </div>
           </header>
           <div className="private-comparison-list is-history">
             {comparisonHistory.map((comparison) => (
-              <ComparisonItem key={comparison.public_id} comparison={comparison} onRevoke={setComparisonToRevoke} />
+              <ComparisonItem key={comparison.public_id} comparison={comparison} />
             ))}
           </div>
         </section>

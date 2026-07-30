@@ -8,7 +8,12 @@ import { useToast } from "../../components/Toast";
 import { formatDate } from "../../lib/format";
 import { apiData, throwOnApiError } from "../../lib/generatedApi";
 import { queryKeys, usePrivateComparison, useSession } from "../../lib/queries";
-import { PRIVATE_COMPARISON_DOCUMENT_TITLE, useSecurityDocumentTitle } from "../../lib/securityScope";
+import {
+  PRIVATE_COMPARISON_DOCUMENT_TITLE,
+  primarySessionScope,
+  useSecurityDocumentTitle,
+} from "../../lib/securityScope";
+import { useVerifiedSessionRequest } from "../../lib/sessionSecurity";
 import { PrivateComparisonCommonUes } from "./PrivateComparisonCommonUes";
 import { PrivateComparisonConfirmModal } from "./PrivateComparisonConfirmModal";
 import { PrivateComparisonSummary } from "./PrivateComparisonSummary";
@@ -28,6 +33,8 @@ export function PrivateComparisonDetailPage() {
   const navigate = useNavigate();
   const { showToast } = useToast();
   const accountId = session.data?.account?.id ?? "anonymous";
+  const sessionScope = primarySessionScope(session.data);
+  const runVerifiedRequest = useVerifiedSessionRequest();
   const detail = usePrivateComparison(validPublicId, Boolean(validPublicId));
   const [revokeOpen, setRevokeOpen] = useState(false);
   const unavailable = !validPublicId || privateComparisonUnavailable(detail.error);
@@ -47,11 +54,14 @@ export function PrivateComparisonDetailPage() {
 
   const revoke = useMutation({
     mutationFn: () =>
-      apiData(
-        privateComparisonsDeletePrivateComparison({
-          path: { public_id: validPublicId! },
-          throwOnError: throwOnApiError,
-        }),
+      runVerifiedRequest(sessionScope, (signal) =>
+        apiData(
+          privateComparisonsDeletePrivateComparison({
+            path: { public_id: validPublicId! },
+            signal,
+            throwOnError: throwOnApiError,
+          }),
+        ),
       ),
     onSuccess: async () => {
       if (validPublicId) {

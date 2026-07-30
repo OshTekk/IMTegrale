@@ -1,8 +1,9 @@
 import type {
+  ActivePrivateComparisonListItem,
   PrivateComparisonCommonUeResponse,
   PrivateComparisonConsentManifestResponse,
   PrivateComparisonInvitationResponse,
-  PrivateComparisonRelationResponse,
+  TerminalPrivateComparisonHistoryItem,
 } from "../../generated/api/types.gen";
 import { ApiError } from "../../lib/api";
 
@@ -11,6 +12,7 @@ export const PRIVATE_COMPARISON_GRADES = ["A", "B", "C", "D", "E", "FX", "F"] as
 
 const invitationTokenPattern = /^pcinv1_[A-Za-z0-9_-]{43}$/;
 const privateComparisonPublicIdPattern = /^pc_[A-Za-z0-9_-]{24}$/;
+const hasText = (value: string) => Boolean(value.trim());
 
 export function usablePrivateComparisonConsentManifest(manifest: PrivateComparisonConsentManifestResponse): boolean {
   return (
@@ -18,14 +20,14 @@ export function usablePrivateComparisonConsentManifest(manifest: PrivateComparis
     manifest.included_sections.length > 0 &&
     manifest.included_sections.every(
       (section) =>
-        section.title.trim().length > 0 &&
+        hasText(section.title) &&
         section.fields.length > 0 &&
-        section.fields.every((field) => field.response_path.trim().length > 0 && field.label.trim().length > 0),
+        section.fields.every((field) => hasText(field.response_path) && hasText(field.label)),
     ) &&
     manifest.excluded_sections.length > 0 &&
-    manifest.excluded_sections.every((section) => section.label.trim().length > 0) &&
-    Object.values(manifest.duration_and_revocation).every((value) => value.trim().length > 0) &&
-    manifest.copy_risk.trim().length > 0
+    manifest.excluded_sections.every((section) => hasText(section.label)) &&
+    Object.values(manifest.duration_and_revocation).every(hasText) &&
+    hasText(manifest.copy_risk)
   );
 }
 
@@ -57,28 +59,22 @@ export function invitationUrl(token: string, origin = window.location.origin): s
 }
 
 export function freshnessLabel(value: "current" | "recommended" | "stale"): string {
-  return {
-    current: "À jour",
-    recommended: "Actualisation conseillée",
-    stale: "À actualiser",
-  }[value];
+  return value === "current" ? "À jour" : value === "recommended" ? "Actualisation conseillée" : "À actualiser";
 }
 
-export function invitationStatusLabel(status: PrivateComparisonInvitationResponse["status"]): string {
-  return {
-    active: "Active",
-    consumed: "Utilisée",
-    expired: "Expirée",
-    revoked: "Révoquée",
-  }[status];
-}
-
-export function comparisonStatusLabel(status: PrivateComparisonRelationResponse["status"]): string {
-  return {
-    active: "Active",
-    expired: "Expirée",
-    revoked: "Révoquée",
-  }[status];
+export function privateComparisonStatusLabel(
+  status:
+    | PrivateComparisonInvitationResponse["status"]
+    | ActivePrivateComparisonListItem["status"]
+    | TerminalPrivateComparisonHistoryItem["status"],
+): string {
+  return status === "active"
+    ? "Active"
+    : status === "consumed"
+      ? "Utilisée"
+      : status === "expired"
+        ? "Expirée"
+        : "Révoquée";
 }
 
 export function privateComparisonErrorMessage(

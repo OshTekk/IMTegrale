@@ -1,18 +1,18 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import type { Session } from "../types";
+import { useSessionSecurity } from "./sessionSecurity";
 
 export const PRIVATE_COMPARISON_DOCUMENT_TITLE = "Comparaison privée · IMTégrale";
 
 export function primarySessionScope(session: Session | undefined): string {
-  return [
-    session?.authenticated === true ? "authenticated" : "anonymous",
-    session?.session_scope ?? "unscoped",
-    session?.account?.id ?? "no-account",
-    session?.role ?? "no-role",
-    session?.auth_method ?? "no-auth-method",
-    session?.private_comparisons?.available === true ? "private-comparisons" : "no-private-comparisons",
-    session?.account ? "account-present" : "account-missing",
-  ].join("\u001f");
+  if (
+    session?.authenticated !== true ||
+    session.private_comparisons?.available !== true ||
+    !/^bss1_[0-9a-f]{64}$/.test(session.session_scope ?? "")
+  ) {
+    return "unverified";
+  }
+  return session.session_scope!;
 }
 
 export function useSecurityDocumentTitle(title: string) {
@@ -28,6 +28,7 @@ type ScopedValue<T> = { scope: string; value: T };
 export type SessionBoundRequest = { controller: AbortController; scope: string };
 
 export function useSessionBoundOneShot<T>(sessionScope: string, open: boolean, onPurge: () => void) {
+  const { isScopeVerified, registerPurge } = useSessionSecurity();
   const [scopedValue, setScopedValue] = useState<ScopedValue<T> | null>(null);
   const valueRef = useRef<ScopedValue<T> | null>(null);
   const requestRef = useRef<SessionBoundRequest | null>(null);
@@ -58,10 +59,25 @@ export function useSessionBoundOneShot<T>(sessionScope: string, open: boolean, o
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      abort();
-      valueRef.current = null;
+      queueMicrotask(() => {
+        if (mountedRef.current) return;
+        abort();
+        valueRef.current = null;
+      });
     };
   }, []);
+
+  useLayoutEffect(
+    () =>
+      registerPurge(() => {
+        requestRef.current?.controller.abort();
+        requestRef.current = null;
+        valueRef.current = null;
+        setScopedValue(null);
+        onPurgeRef.current();
+      }),
+    [registerPurge],
+  );
 
   useLayoutEffect(() => {
     if (previousScopeRef.current === sessionScope) return;
@@ -73,26 +89,10 @@ export function useSessionBoundOneShot<T>(sessionScope: string, open: boolean, o
     onPurgeRef.current();
   }, [sessionScope]);
 
-  useLayoutEffect(() => {
-    const handlePageCache = (event: PageTransitionEvent) => {
-      if (!event.persisted) return;
-      requestRef.current?.controller.abort();
-      requestRef.current = null;
-      valueRef.current = null;
-      setScopedValue(null);
-      onPurgeRef.current();
-    };
-    window.addEventListener("pagehide", handlePageCache);
-    window.addEventListener("pageshow", handlePageCache);
-    return () => {
-      window.removeEventListener("pagehide", handlePageCache);
-      window.removeEventListener("pageshow", handlePageCache);
-    };
-  }, []);
-
   const begin = (): SessionBoundRequest => {
     abort();
     const request = { controller: new AbortController(), scope: currentScopeRef.current };
+    if (!isScopeVerified(request.scope)) request.controller.abort();
     requestRef.current = request;
     return request;
   };
@@ -100,7 +100,8 @@ export function useSessionBoundOneShot<T>(sessionScope: string, open: boolean, o
     !request.controller.signal.aborted &&
     mountedRef.current &&
     openRef.current &&
-    currentScopeRef.current === request.scope;
+    currentScopeRef.current === request.scope &&
+    isScopeVerified(request.scope);
   const finish = (request: SessionBoundRequest) => {
     if (requestRef.current === request) requestRef.current = null;
     return usable(request);
@@ -114,11 +115,11 @@ export function useSessionBoundOneShot<T>(sessionScope: string, open: boolean, o
   };
   const current = () => {
     const scoped = valueRef.current;
-    return scoped?.scope === currentScopeRef.current ? scoped.value : null;
+    return scoped?.scope === currentScopeRef.current && isScopeVerified(currentScopeRef.current) ? scoped.value : null;
   };
 
   return {
-    value: scopedValue?.scope === sessionScope ? scopedValue.value : null,
+    value: scopedValue?.scope === sessionScope && isScopeVerified(sessionScope) ? scopedValue.value : null,
     begin,
     clear,
     current,

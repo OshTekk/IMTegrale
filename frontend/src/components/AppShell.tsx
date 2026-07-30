@@ -61,8 +61,8 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
   const syncMessage = manualSyncMessage(manualSync, syncRemaining);
   const syncRecheckKey = useRef<string | null>(null);
   const eventAccountId = dashboard.data?.account.id;
-  const latestEventId = dashboard.data?.latest_event_id;
-  const live = useAccountEventStream(eventAccountId, latestEventId);
+  const latestEventCursor = dashboard.data?.latest_event_cursor;
+  const live = useAccountEventStream(eventAccountId, latestEventCursor);
 
   useEffect(() => {
     setProfileOpen(false);

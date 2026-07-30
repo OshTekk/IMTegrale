@@ -70,7 +70,7 @@ describe("AppShell learning entry points", () => {
     client.setQueryData(queryKeys.session, primary);
     client.setQueryData(queryKeys.dashboard(account.id), {
       account: { manual_sync: undefined, last_sync_at: null },
-      latest_event_id: undefined,
+      latest_event_cursor: undefined,
     } as unknown as Dashboard);
 
     const view = render(shell(client, primary));

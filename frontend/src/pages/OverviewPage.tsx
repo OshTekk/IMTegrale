@@ -311,7 +311,7 @@ export function OverviewPage() {
         </header>
         <div className="activity-list">
           {data.events.slice(0, 8).map((event) => (
-            <div className="activity-row" key={event.id}>
+            <div className="activity-row" key={event.cursor}>
               <span className="activity-icon">
                 <Clock3 size={15} />
               </span>

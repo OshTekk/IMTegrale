@@ -49,13 +49,18 @@ const account = {
 function session(mode: AppSessionMode): Record<string, unknown> {
   if (mode === "anonymous") return { authenticated: false };
   const authMethod = mode === "imt" ? "imt" : mode === "passkey" ? "passkey" : "token";
+  const scopeMarker = mode === "imt" ? "a" : mode === "passkey" ? "b" : mode === "token" ? "c" : "d";
   return {
     authenticated: true,
+    session_scope: `bss1_${scopeMarker.repeat(64)}`,
+    session_expires_at: "2099-01-01T01:00:00.000Z",
+    server_time: "2099-01-01T00:00:00.000Z",
     role: mode === "viewer" ? "viewer" : "owner",
     auth_method: authMethod,
     needs_security_setup: false,
     needs_sync_setup: false,
     account,
+    private_comparisons: { available: false },
     learning: {
       available: false,
       audience_label: null,
@@ -206,7 +211,7 @@ export const syntheticTrainingCalendar = {
 
 export const syntheticDashboard = {
   generated_at: "2026-01-01T08:30:00Z",
-  latest_event_id: 1,
+  latest_event_cursor: `evc1_${"a".repeat(32)}`,
   account: {
     ...account,
     last_sync_at: "2026-01-01T08:30:00Z",
@@ -960,7 +965,12 @@ export async function installFakeEventSource(page: Page) {
       configurable: true,
       value: () => {
         for (const source of FakeEventSource.instances) {
-          source.dispatchEvent(new MessageEvent("update", { data: "{}", lastEventId: "2" }));
+          source.dispatchEvent(
+            new MessageEvent("update", {
+              data: "{}",
+              lastEventId: `evc1_${"b".repeat(32)}`,
+            }),
+          );
         }
       },
     });

@@ -16,9 +16,10 @@ describe("isPrimaryOwnerSession", () => {
 });
 
 describe("primarySessionScope", () => {
+  const scope = `bss1_${"a".repeat(64)}`;
   const session: Session = {
     authenticated: true,
-    session_scope: `bss1_${"a".repeat(64)}`,
+    session_scope: scope,
     role: "owner",
     auth_method: "imt",
     account: { id: "account-fictif-a", display_name: "Alice Exemple", imt_username: "alice.exemple" },
@@ -26,23 +27,26 @@ describe("primarySessionScope", () => {
   };
 
   it("reste stable pour la même session sans dépendre du nom visible", () => {
-    expect(primarySessionScope(session)).toBe(
+    expect(primarySessionScope(session)).toBe(scope);
+    expect(
       primarySessionScope({
         ...session,
         account: { ...session.account!, display_name: "Nom affiché modifié" },
       }),
-    );
+    ).toBe(scope);
+  });
+
+  it("change seulement lorsque le serveur émet un nouveau scope opaque", () => {
+    const next = { ...session, session_scope: `bss1_${"b".repeat(64)}` };
+    expect(primarySessionScope(next)).not.toBe(primarySessionScope(session));
   });
 
   it.each([
-    ["session web", { ...session, session_scope: `bss1_${"b".repeat(64)}` }],
-    ["compte", { ...session, account: { ...session.account!, id: "account-fictif-b" } }],
-    ["rôle", { ...session, role: "viewer" as const }],
-    ["authentification", { ...session, auth_method: "token" as const }],
-    ["capacité", { ...session, private_comparisons: { available: false } }],
-    ["compte absent", { ...session, account: undefined }],
-    ["expiration", { authenticated: false }],
-  ])("change lorsque la frontière %s change", (_label, next) => {
-    expect(primarySessionScope(next)).not.toBe(primarySessionScope(session));
+    ["scope absent", { ...session, session_scope: undefined }],
+    ["scope invalide", { ...session, session_scope: "account-fictif-a" }],
+    ["capacité absente", { ...session, private_comparisons: { available: false } }],
+    ["session anonyme", { ...session, authenticated: false }],
+  ])("échoue fermé lorsque le contrat est invalide : %s", (_label, next) => {
+    expect(primarySessionScope(next)).toBe("unverified");
   });
 });

@@ -127,6 +127,14 @@ export function clearAccountState(queryClient: QueryClient): void {
   queryClient.getMutationCache().clear();
 }
 
+export function clearPrivateComparisonState(queryClient: QueryClient): void {
+  const isPrivateComparisonQuery = (query: { queryKey: readonly unknown[] }) =>
+    query.queryKey.includes("private-comparisons");
+  void queryClient.cancelQueries({ predicate: isPrivateComparisonQuery });
+  queryClient.removeQueries({ predicate: isPrivateComparisonQuery });
+  queryClient.getMutationCache().clear();
+}
+
 export function replaceSessionState(queryClient: QueryClient, session: Session): void {
   clearAccountState(queryClient);
   queryClient.setQueryData(queryKeys.session, session);
@@ -500,7 +508,13 @@ export function usePrivateComparisonInvitations(enabled = true) {
   const accountId = currentAccountId(client);
   return useQuery({
     queryKey: queryKeys.privateComparisonInvitations(accountId),
-    queryFn: () => apiData(privateComparisonsGetPrivateComparisonInvitations({ throwOnError: throwOnApiError })),
+    queryFn: ({ signal }) =>
+      apiData(
+        privateComparisonsGetPrivateComparisonInvitations({
+          signal,
+          throwOnError: throwOnApiError,
+        }),
+      ),
     enabled,
     staleTime: 0,
     refetchOnWindowFocus: "always",
@@ -513,7 +527,13 @@ export function usePrivateComparisonConsentManifest(enabled = true) {
   const accountId = currentAccountId(client);
   return useQuery({
     queryKey: queryKeys.privateComparisonConsentManifest(accountId),
-    queryFn: () => apiData(privateComparisonsGetPrivateComparisonConsentManifest({ throwOnError: throwOnApiError })),
+    queryFn: ({ signal }) =>
+      apiData(
+        privateComparisonsGetPrivateComparisonConsentManifest({
+          signal,
+          throwOnError: throwOnApiError,
+        }),
+      ),
     enabled,
     staleTime: 0,
     gcTime: 0,
@@ -527,7 +547,13 @@ export function usePrivateComparisons(enabled = true) {
   const accountId = currentAccountId(client);
   return useQuery({
     queryKey: queryKeys.privateComparisons(accountId),
-    queryFn: () => apiData(privateComparisonsGetPrivateComparisons({ throwOnError: throwOnApiError })),
+    queryFn: ({ signal }) =>
+      apiData(
+        privateComparisonsGetPrivateComparisons({
+          signal,
+          throwOnError: throwOnApiError,
+        }),
+      ),
     enabled,
     staleTime: 0,
     refetchOnWindowFocus: "always",
@@ -540,10 +566,11 @@ export function usePrivateComparison(publicId: string | null, enabled = true) {
   const accountId = currentAccountId(client);
   return useQuery({
     queryKey: queryKeys.privateComparison(accountId, publicId ?? "none"),
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       apiData(
         privateComparisonsGetPrivateComparison({
           path: { public_id: publicId! },
+          signal,
           throwOnError: throwOnApiError,
         }),
       ),
