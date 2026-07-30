@@ -5,8 +5,8 @@
 - backend et interface des comparaisons privées V1, entièrement fermés par
   feature flag : invitations one-shot, consentement bilatéral, révocation,
   expiration et intersection exacte des UE officielles ;
-- migration additive `0029`, sans donnée académique copiée et non déployée dans
-  ce lot ;
+- migration additive `0029`, sans donnée académique copiée, avec backfill de
+  curseurs événementiels aléatoires et toujours non déployée dans ce lot ;
 - espace lazy `/comparisons`, navigation conditionnelle, traitement mémoire du
   fragment d'invitation, listes et détail bilatéral sans intégration au
   leaderboard ;
@@ -20,8 +20,17 @@
 - bearer d'invitation one-shot lié au scope opaque de la session primaire,
   réponses tardives rejetées, purge sur changement de principal ou BFCache et
   titre de document générique.
+- frontière centrale de session vérifiée : deadline monotone, purge synchrone
+  du DOM et des caches, révocation inter-onglets et échec fermé hors ligne.
+- historique terminal réduit au statut et à la date de fin, sans identité ni
+  résultat vivant ; décisions relationnelles et comptes relus fraîchement sous
+  verrou avant toute lecture ou mutation.
 - événements Comparaisons réservés au propriétaire primaire dans le dashboard,
-  son curseur visible et le flux SSE, sans canal latéral pour un token `owner`.
+  avec curseurs aléatoires opaques pour le dashboard et le flux SSE ; aucun ID
+  global ou trou de séquence n'est exposé à un token `owner`.
+- scanner de secrets fail-closed et en streaming, y compris au-delà de cinq
+  Mio et dans les archives de publication, avec comptage explicite des fichiers
+  rejetés ou non scannés.
 
 ## 4.8.0 - 23 juillet 2026
 

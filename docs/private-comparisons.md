@@ -155,10 +155,13 @@ aussi la relation par le compte de la session.
 
 Les événements de cycle de vie `private_comparison:*` suivent la même assurance :
 seuls les propriétaires primaires IMT ou passkey peuvent les lire. Une politique
-commune filtre la requête du dashboard, son `latest_event_id`, le polling et le
-flux SSE avant chargement. Un token délégué `owner` ne reçoit donc ni événement,
-ni payload, ni progression de curseur permettant d'en déduire l'existence. Les
-autres familles d'événements conservent leurs règles de visibilité antérieures.
+commune filtre la requête du dashboard, son `latest_event_cursor`, le polling et
+le flux SSE avant chargement. Les IDs séquentiels restent internes ; les réponses
+et reprises SSE emploient des curseurs aléatoires opaques de 192 bits, résolus
+dans le compte et la visibilité courants. Un token délégué `owner` ne reçoit
+donc ni événement, ni payload, ni trou de séquence permettant d'en déduire
+l'existence. Les autres familles d'événements conservent leurs règles de
+visibilité antérieures.
 
 ## Cycle de vie
 
@@ -178,9 +181,40 @@ aucune moyenne, note, UE, identité copiée ou autre résultat académique : le
 détail est recalculé à la demande avec `calculate_ues` et les fonctions de
 pondération existantes.
 
+La liste distingue strictement le cycle actif de l'historique terminal. Tant
+que le consentement est actif, l'identité et la fraîcheur officielles sont
+relues. Une fois la révocation ou l'expiration commitée, la réponse terminale
+ne contient plus que `public_id`, `status` et `ended_at` : le compte de l'autre
+participant n'est plus lu et aucune identité, fraîcheur, synchronisation ou
+donnée académique n'est chargée. Des cycles successifs restent donc des états
+relationnels minimaux, sans snapshot personnel.
+
+Chaque décision sensible contourne explicitement l'identity map SQLAlchemy.
+Les mutations relisent le compte actif avec `populate_existing` et
+`FOR UPDATE`; le détail relit la relation avec tous ses prédicats
+d'autorisation, `populate_existing` et un verrou partagé, puis stabilise les
+deux comptes dans la même transaction. Une révocation commitée avant cette
+lecture est refusée ; une révocation concurrente attend la fin du snapshot.
+
 Un changement de cursus, de promotion, d'identité vérifiée ou de disponibilité
 des données rend immédiatement le détail indisponible. La consultation ne
 déclenche jamais de synchronisation PASS ou COMPETENCES.
+
+## Frontière navigateur
+
+La réponse de session authentifiée fournit un `session_scope` HMAC opaque,
+`session_expires_at` et `server_time`. Le scope varie avec la session web, le
+compte, le rôle, la méthode d'authentification, la délégation, la génération
+d'accès et la capacité Comparaisons sans exposer aucun de ces identifiants.
+Seul l'état central `verified` rend le sous-arbre sensible.
+
+Le navigateur calcule la durée restante depuis l'horloge serveur puis l'ancre
+sur `performance.now()`. À l'expiration, lors d'un changement inter-onglets ou
+d'un `pagehide`, il masque le DOM de façon synchrone, ferme les modales, annule
+les requêtes, efface les caches TanStack et détruit les bearers en mémoire,
+même hors ligne. Un `pageshow` provenant du BFCache garde cette barrière jusqu'à
+une revalidation `no-store` complète. Le bearer d'acceptation n'est jamais
+reconstruit après retour : l'utilisateur doit rouvrir le lien original.
 
 ## API V1
 
@@ -212,8 +246,9 @@ répond `404` avant le parsing du body et aucune ligne ne peut être créée.
   curseurs dashboard et SSE ;
 - le contrôle opérationnel expose uniquement l'état du flag et des compteurs
   agrégés, et alerte sur les lignes incohérentes ou présentes flag fermé ;
-- la migration `0029` est additive, ne crée aucune donnée et refuse le downgrade
-  lorsqu'une invitation ou relation existe.
+- la migration `0029` est additive, ne copie aucune donnée personnelle ou
+  académique, backfille un curseur aléatoire indépendant pour chaque événement
+  existant et refuse le downgrade lorsqu'une invitation ou relation existe.
 
 Avant une activation future : revoir et fusionner séparément la draft PR,
 migrer une base isolée, vérifier zéro ligne, déployer avec le flag fermé,

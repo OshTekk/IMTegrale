@@ -9,7 +9,7 @@ import json
 import zipfile
 from pathlib import Path
 
-from check_secrets import MAX_SCAN_BYTES, scan_paths, scan_text
+from check_secrets import scan_paths_report
 
 FORBIDDEN_WHEEL_PARTS = frozenset({"tests", "private", "releases", "content"})
 
@@ -41,20 +41,18 @@ def audit(wheel: Path, dist: Path, sbom: Path, output: Path) -> dict[str, object
             parts = {part.casefold() for part in Path(name).parts}
             if parts.intersection(FORBIDDEN_WHEEL_PARTS):
                 raise ValueError("Wheel contains a forbidden private or test path")
-            if entry.file_size > MAX_SCAN_BYTES or name.endswith("/"):
-                continue
-            try:
-                content = archive.read(entry).decode("utf-8")
-            except UnicodeDecodeError:
-                continue
-            if scan_text(Path(name), content):
-                raise ValueError("Wheel secret scan failed")
+    wheel_scan = scan_paths_report([wheel], root=wheel.parent)
+    if not wheel_scan.ok:
+        raise ValueError("Wheel secret scan failed")
 
     frontend_files = sorted(path for path in dist.rglob("*") if path.is_file())
     if any(path.suffix == ".map" for path in frontend_files):
         raise ValueError("Frontend source maps are forbidden in release artifacts")
-    findings = scan_paths([sbom, *frontend_files], root=dist.parent)
-    if findings:
+    frontend_scan = scan_paths_report(
+        [sbom, *frontend_files],
+        root=dist.parent,
+    )
+    if not frontend_scan.ok:
         raise ValueError("Release artifact secret scan failed")
     manifest = {
         "schema_version": 1,

@@ -83,6 +83,13 @@ suppression administrative verrouille d'abord les invitations liées afin de
 conserver l'ordre invitation-compte de l'acceptation avant les cascades SQL.
 Une expiration est logique et ne dépend pas d'un nettoyage asynchrone.
 
+Toutes ces décisions relisent les lignes autoritatives avec
+`populate_existing`. Les mutations verrouillent le compte courant
+`FOR UPDATE`; le détail applique tous les prédicats actifs et un verrou partagé
+avant de construire le snapshot. Une instance `Account` ou
+`PrivateComparison` déjà présente dans l'identity map n'est donc jamais une
+preuve d'autorisation.
+
 Scénarios testés : double acceptation du même secret, invitations obsolète et
 fraîche concurrentes, deux invitations fraîches concurrentes, acceptation et
 révocation simultanées, révocation immédiate, lecture tierce, relation expirée,
@@ -123,12 +130,28 @@ one-shot n'est rendu que sous son scope créateur et toute réponse arrivée apr
 un changement de scope est jetée. Le titre du document reste toujours
 « Comparaison privée · IMTégrale » et ne contient aucune identité.
 
+Cette liaison est appliquée par une frontière centrale à états `verifying`,
+`verified`, `invalidating`, `expired` et `anonymous`. Le serveur expose
+l'expiration et son heure courante ; la durée est ancrée sur l'horloge monotone
+du navigateur. Seul `verified` rend le sous-arbre sensible. Les signaux
+inter-onglets, l'expiration hors ligne, `pagehide` et le BFCache masquent le DOM
+avant tout travail asynchrone, abortent les opérations et purgent les caches et
+bearers. Après un retour BFCache, une revalidation `no-store` précède tout
+nouveau rendu ou fetch.
+
+Une relation terminée n'est jamais rejointe à un compte vivant. Son modèle
+d'historique expose uniquement l'identifiant relationnel opaque, le statut
+terminal et la date de fin ; il ne conserve ni identité, ni fraîcheur, ni
+résultat, ni snapshot personnel.
+
 Les événements de cycle de vie sont soumis à une assurance distincte des
 événements historiquement visibles par un rôle `owner`. Le serveur dérive
 `primary_owner` depuis le contexte d'authentification autoritatif, puis applique
-une seule politique à la sélection SQL, au `latest_event_id`, au dashboard et
-au flux SSE. Un token délégué ne peut donc ni lire ces événements ni observer
-un curseur qui avancerait uniquement à cause d'eux.
+une seule politique à la sélection SQL, au `latest_event_cursor`, au dashboard
+et au flux SSE. Les IDs ordonnés ne quittent pas le serveur ; un curseur
+aléatoire de 192 bits est résolu avec le compte et cette même politique. Un
+token délégué ne peut donc ni lire ces événements ni observer un trou de
+séquence causé par eux.
 
 ## Hypothèses et risques acceptés
 

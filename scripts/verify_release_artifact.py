@@ -10,12 +10,11 @@ import os
 import re
 import stat
 import sys
-import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from check_content_boundary import ScanResult, scan_directory, scan_wheel
-from check_secrets import MAX_SCAN_BYTES, scan_paths, scan_text
+from check_secrets import scan_paths_report
 
 RELEASE_MANIFEST = "release-manifest.json"
 VITE_MANIFEST = "frontend/.vite/manifest.json"
@@ -310,19 +309,9 @@ def _validate_vite_manifest(path: Path, frontend_paths: set[str]) -> None:
 
 
 def _scan_wheel_secrets(wheel: Path) -> None:
-    try:
-        with zipfile.ZipFile(wheel) as archive:
-            for entry in archive.infolist():
-                if entry.is_dir() or entry.file_size > MAX_SCAN_BYTES:
-                    continue
-                try:
-                    content = archive.read(entry).decode("utf-8")
-                except UnicodeDecodeError:
-                    continue
-                if scan_text(Path(entry.filename), content):
-                    _fail("SECRET_SCAN_FAILED")
-    except (OSError, RuntimeError, zipfile.BadZipFile):
-        _fail("WHEEL_INVALID")
+    report = scan_paths_report([wheel], root=wheel.parent)
+    if not report.ok:
+        _fail("SECRET_SCAN_FAILED")
 
 
 def _run_scans(root: Path, files: dict[str, Path], wheel: Path, frontend: Path) -> None:
@@ -331,7 +320,8 @@ def _run_scans(root: Path, files: dict[str, Path], wheel: Path, frontend: Path) 
     boundary.merge(scan_directory(frontend))
     if not boundary.ok:
         _fail("CONTENT_BOUNDARY_FAILED")
-    if scan_paths(list(files.values()), root=root):
+    report = scan_paths_report(list(files.values()), root=root)
+    if not report.ok:
         _fail("SECRET_SCAN_FAILED")
     _scan_wheel_secrets(wheel)
 

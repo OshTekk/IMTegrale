@@ -70,10 +70,28 @@ version diverge ; tout élargissement du détail exige une nouvelle version. Le
 bearer one-shot est lié au scope opaque de la session primaire qui l'a créé :
 un remplacement de compte, une délégation, une perte de capacité, une réponse
 tardive ou une restauration BFCache le purge avant tout rendu ou copie.
+Le navigateur n'affiche les données croisées que dans l'état `verified` d'une
+frontière centrale. Le serveur fournit un scope opaque propre à la session et
+une expiration ; le client ancre la durée restante sur une horloge monotone,
+masque immédiatement le DOM et purge requêtes, mutations et bearers lors d'une
+expiration, d'un signal inter-onglets, d'un `pagehide` ou d'une restauration
+BFCache, y compris hors ligne. Après la fin d'une relation, l'historique ne
+contient que son identifiant opaque, son statut et sa date de fin. Les décisions
+d'autorisation relisent la relation et les comptes depuis PostgreSQL avec
+`populate_existing` et les verrous adaptés afin de ne jamais faire confiance à
+une instance ORM périmée.
 Les événements `private_comparison:*` sont eux aussi réservés au propriétaire
 primaire. Cette assurance est appliquée avant lecture au dashboard, à son
-`latest_event_id` et au flux SSE afin qu'un token `owner` ne puisse pas déduire
-une activité privée par progression de curseur.
+`latest_event_cursor` et au flux SSE. Les identifiants séquentiels internes ne
+sont jamais sérialisés : chaque reprise utilise un curseur aléatoire opaque de
+192 bits, résolu dans le compte et la visibilité courants, afin qu'un token
+`owner` ne puisse pas déduire une activité privée par un trou de séquence.
+
+Le scanner de secrets de publication traite les fichiers en streaming sans
+seuil silencieux de cinq Mio. Il inspecte les membres ZIP/wheel avec limites
+anti-décompression, refuse les chemins, liens et binaires inattendus qu'il ne
+peut pas analyser, et n'autorise un succès que lorsque `files_unscanned` vaut
+zéro. Les diagnostics identifient la règle sans reproduire le secret.
 
 ## Niveaux d'assurance propriétaire
 
