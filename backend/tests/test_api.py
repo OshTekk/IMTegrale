@@ -449,7 +449,10 @@ def test_owner_token_dashboard_cannot_observe_private_comparison_events(
     after = delegated.get("/api/v1/dashboard")
     assert after.status_code == 200
     after_body = after.json()
-    assert after_body["latest_event_id"] == before_body["latest_event_id"]
+    assert (
+        after_body["latest_event_cursor"]
+        == before_body["latest_event_cursor"]
+    )
     assert all(not item["kind"].startswith("private_comparison:") for item in after_body["events"])
     assert "synthetic-private-consent-marker" not in after.text
 

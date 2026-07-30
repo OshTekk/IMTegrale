@@ -2,6 +2,7 @@ import asyncio
 import json
 from types import SimpleNamespace
 
+import pytest
 from app.config import get_settings
 from app.database import SessionLocal
 from app.models import Account
@@ -9,6 +10,7 @@ from app.routers import events
 from app.routers.events import StreamAuth, get_stream_auth, stream_event_payload, stream_events
 from app.services.event_visibility import EventVisibilityContext, event_is_visible
 from app.services.events import record_event
+from fastapi import HTTPException
 
 
 def test_stream_auth_closes_its_database_context_before_return(monkeypatch) -> None:
@@ -48,9 +50,42 @@ def test_stream_auth_closes_its_database_context_before_return(monkeypatch) -> N
 
 
 def test_sse_update_payload_contains_no_event_metadata() -> None:
-    event = SimpleNamespace(id=42, kind="token:created", payload={"prefix": "secret"})
+    event = SimpleNamespace(
+        id=42,
+        public_cursor=f"evc1_{'a' * 32}",
+        kind="token:created",
+        payload={"prefix": "secret"},
+    )
 
-    assert stream_event_payload(event) == {"id": 42}
+    assert stream_event_payload(event) == {"cursor": f"evc1_{'a' * 32}"}
+
+
+def test_sse_response_uses_private_no_store_security_headers() -> None:
+    class Request:
+        headers: dict[str, str] = {}
+
+        async def is_disconnected(self) -> bool:
+            return True
+
+    response = asyncio.run(
+        stream_events(
+            Request(),
+            auth=StreamAuth(
+                account_id="synthetic-account",
+                session_id="synthetic-session",
+                visibility=EventVisibilityContext(
+                    role="owner",
+                    primary_owner=False,
+                    include_simulations=False,
+                ),
+            ),
+        )
+    )
+
+    assert response.headers["cache-control"] == "private, no-store, no-transform"
+    assert response.headers["pragma"] == "no-cache"
+    assert response.headers["vary"] == "Cookie"
+    assert response.headers["x-content-type-options"] == "nosniff"
 
 
 def test_event_visibility_keeps_existing_role_policy_and_adds_primary_assurance() -> None:
@@ -70,7 +105,7 @@ def test_event_visibility_keeps_existing_role_policy_and_adds_primary_assurance(
     assert event_is_visible("sync:completed", delegated_editor) is True
 
 
-def test_sse_query_skips_private_comparison_ids_for_delegated_owner(monkeypatch) -> None:  # noqa: ANN001
+def test_sse_resume_uses_opaque_visible_cursor_across_hidden_event_gaps(monkeypatch) -> None:  # noqa: ANN001
     with SessionLocal() as db:
         account = Account(
             imt_username="sse-event-visibility@example.test",
@@ -78,31 +113,43 @@ def test_sse_query_skips_private_comparison_ids_for_delegated_owner(monkeypatch)
         )
         db.add(account)
         db.flush()
-        private_event = record_event(
-            db,
-            account_id=account.id,
-            kind="private_comparison:activated",
-            payload={"consent_version": "synthetic-private-marker"},
-        )
-        visible_event = record_event(
+        first_visible_event = record_event(
             db,
             account_id=account.id,
             kind="note:new",
-            payload={"ue_code": "SYN101"},
+            payload={"ue_code": "SYN100"},
+        )
+        hidden_events = [
+            record_event(
+                db,
+                account_id=account.id,
+                kind="private_comparison:activated",
+                payload={"consent_version": f"synthetic-private-marker-{index}"},
+            )
+            for index in range(25)
+        ]
+        visible_event = record_event(
+            db,
+            account_id=account.id,
+            kind="sync:completed",
+            payload={"total": 1, "inserted": 1, "updated": 0},
         )
         db.commit()
         account_id = account.id
-        private_event_id = private_event.id
-        visible_event_id = visible_event.id
+        first_visible_cursor = first_visible_event.public_cursor
+        hidden_cursors = {event.public_cursor for event in hidden_events}
+        visible_event_cursor = visible_event.public_cursor
 
     class ConnectedRequest:
+        headers: dict[str, str] = {}
+
         async def is_disconnected(self) -> bool:
             return False
 
     async def first_update() -> str:
         response = await stream_events(
             ConnectedRequest(),
-            after=0,
+            after=first_visible_cursor,
             auth=StreamAuth(
                 account_id=account_id,
                 session_id="unused-by-active-session-mock",
@@ -125,5 +172,70 @@ def test_sse_query_skips_private_comparison_ids_for_delegated_owner(monkeypatch)
 
     payload_line = next(line for line in update.splitlines() if line.startswith("data: "))
     payload = json.loads(payload_line.removeprefix("data: "))
-    assert payload == {"id": visible_event_id}
-    assert payload["id"] != private_event_id
+    assert payload == {"cursor": visible_event_cursor}
+    assert update.startswith(f"id: {visible_event_cursor}\n")
+    assert not hidden_cursors.intersection(update.split())
+
+
+def test_sse_unknown_cross_account_and_hidden_cursors_share_one_generic_404() -> None:
+    with SessionLocal() as db:
+        account = Account(
+            imt_username="sse-cursor-owner@example.test",
+            display_name="SSE Cursor Owner Fixture",
+        )
+        other = Account(
+            imt_username="sse-cursor-other@example.test",
+            display_name="SSE Cursor Other Fixture",
+        )
+        db.add_all([account, other])
+        db.flush()
+        hidden = record_event(
+            db,
+            account_id=account.id,
+            kind="private_comparison:activated",
+        )
+        cross_account = record_event(
+            db,
+            account_id=other.id,
+            kind="note:new",
+        )
+        db.commit()
+        account_id = account.id
+        cursors = [
+            hidden.public_cursor,
+            cross_account.public_cursor,
+            f"evc1_{'z' * 32}",
+            "17",
+            "",
+        ]
+
+    class Request:
+        headers: dict[str, str] = {}
+
+        async def is_disconnected(self) -> bool:
+            return False
+
+    auth = StreamAuth(
+        account_id=account_id,
+        session_id="unused-for-cursor-preflight",
+        visibility=EventVisibilityContext(
+            role="owner",
+            primary_owner=False,
+            include_simulations=False,
+        ),
+    )
+    observed: list[tuple[int, object]] = []
+    for cursor in cursors:
+        with pytest.raises(HTTPException) as captured:
+            asyncio.run(stream_events(Request(), after=cursor, auth=auth))
+        observed.append((captured.value.status_code, captured.value.detail))
+
+    assert observed == [
+        (
+            404,
+            {
+                "code": "EVENT_CURSOR_UNAVAILABLE",
+                "message": "Curseur d’événement indisponible.",
+            },
+        )
+    ] * len(cursors)

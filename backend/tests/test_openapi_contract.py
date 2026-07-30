@@ -97,14 +97,16 @@ def test_private_comparison_token_is_limited_to_one_shot_and_post_bodies() -> No
     schemas = document["components"]["schemas"]
     created = schemas["PrivateComparisonInvitationCreatedResponse"]
     invitation_list = schemas["PrivateComparisonInvitationResponse"]
-    comparison_list = schemas["PrivateComparisonRelationResponse"]
+    active_comparison = schemas["ActivePrivateComparisonListItem"]
+    terminal_comparison = schemas["TerminalPrivateComparisonHistoryItem"]
     detail = schemas["PrivateComparisonDetailResponse"]
 
     assert "token" in created["required"]
     assert created["properties"]["token"]["pattern"] == r"^pcinv1_[A-Za-z0-9_-]{43}$"
     assert "writeOnly" not in created["properties"]["token"]
     assert "token" not in invitation_list["properties"]
-    assert "token" not in comparison_list["properties"]
+    assert "token" not in active_comparison["properties"]
+    assert "token" not in terminal_comparison["properties"]
     assert "token" not in detail["properties"]
     assert "token_digest" not in json.dumps(document)
 
@@ -117,3 +119,70 @@ def test_private_comparison_token_is_limited_to_one_shot_and_post_bodies() -> No
         assert token["pattern"] == r"^pcinv1_[A-Za-z0-9_-]{43}$"
 
     assert "token" not in schemas["PrivateComparisonInvitationCreate"]["properties"]
+
+
+def test_terminal_private_comparison_schema_is_structurally_minimal() -> None:
+    document = app.openapi()
+    schemas = document["components"]["schemas"]
+    terminal = schemas["TerminalPrivateComparisonHistoryItem"]
+
+    assert set(terminal["properties"]) == {"public_id", "status", "ended_at"}
+    assert set(terminal["required"]) == {"public_id", "status", "ended_at"}
+    assert set(terminal["properties"]["status"]["enum"]) == {"expired", "revoked"}
+
+    forbidden_fragments = {
+        "identity",
+        "display_name",
+        "freshness",
+        "summary",
+        "common_ues",
+        "average",
+        "gpa",
+        "ects",
+        "grade",
+        "participant",
+        "sync",
+    }
+    serialized = json.dumps(terminal).casefold()
+    assert all(fragment not in serialized for fragment in forbidden_fragments)
+
+    list_items = schemas["PrivateComparisonListResponse"]["properties"]["comparisons"]["items"]
+    assert list_items["discriminator"]["propertyName"] == "status"
+    assert {
+        branch["$ref"].rsplit("/", 1)[-1]
+        for branch in list_items["oneOf"]
+    } == {
+        "ActivePrivateComparisonListItem",
+        "TerminalPrivateComparisonHistoryItem",
+    }
+
+
+def test_private_comparison_session_and_one_shot_contract_are_scope_bound() -> None:
+    schemas = app.openapi()["components"]["schemas"]
+    authenticated = schemas["AuthenticatedSessionResponse"]
+    created = schemas["PrivateComparisonInvitationCreatedResponse"]
+
+    assert {"session_scope", "session_expires_at", "server_time"} <= set(
+        authenticated["required"]
+    )
+    assert authenticated["properties"]["session_scope"]["pattern"] == r"^bss1_[0-9a-f]{64}$"
+    assert {"session_scope", "token"} <= set(created["required"])
+    assert created["properties"]["session_scope"]["pattern"] == r"^bss1_[0-9a-f]{64}$"
+
+
+def test_event_contract_exposes_only_opaque_non_ordered_cursors() -> None:
+    document = app.openapi()
+    schemas = document["components"]["schemas"]
+    event = schemas["EventResponse"]
+    dashboard = schemas["DashboardResponse"]
+
+    assert "id" not in event["properties"]
+    assert event["properties"]["cursor"]["pattern"] == r"^evc1_[A-Za-z0-9_-]{32}$"
+    assert (
+        dashboard["properties"]["latest_event_cursor"]["anyOf"][0]["pattern"]
+        == r"^evc1_[A-Za-z0-9_-]{32}$"
+    )
+    event_stream_parameters = document["paths"]["/api/v1/events"]["get"]["parameters"]
+    after = next(parameter for parameter in event_stream_parameters if parameter["name"] == "after")
+    assert after["schema"]["anyOf"][0]["type"] == "string"
+    assert all(branch.get("type") != "integer" for branch in after["schema"]["anyOf"])

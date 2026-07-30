@@ -1,8 +1,10 @@
-"""Add private comparison invitations and bilateral relations.
+"""Add private comparisons and opaque public event cursors.
 
 Revision ID: 0029
 Revises: 0028
 """
+
+import secrets
 
 import sqlalchemy as sa
 from alembic import op
@@ -12,8 +14,56 @@ down_revision = "0028"
 branch_labels = None
 depends_on = None
 
+EVENT_CURSOR_BACKFILL_MAX_ATTEMPTS = 16
+
+
+def _new_public_event_cursor(used: set[str]) -> str:
+    for _attempt in range(EVENT_CURSOR_BACKFILL_MAX_ATTEMPTS):
+        cursor = "evc1_" + secrets.token_urlsafe(24)
+        if len(cursor) == 37 and cursor not in used:
+            return cursor
+    raise RuntimeError("0029 could not allocate a unique public event cursor")
+
+
+def _add_public_event_cursors() -> None:
+    op.add_column(
+        "events",
+        sa.Column("public_cursor", sa.String(length=37), nullable=True),
+    )
+    bind = op.get_bind()
+    used: set[str] = set()
+    event_ids = bind.execute(sa.text("SELECT id FROM events ORDER BY id")).scalars()
+    for event_id in event_ids:
+        cursor = _new_public_event_cursor(used)
+        used.add(cursor)
+        bind.execute(
+            sa.text(
+                "UPDATE events SET public_cursor = :public_cursor "
+                "WHERE id = :event_id"
+            ),
+            {"public_cursor": cursor, "event_id": event_id},
+        )
+    with op.batch_alter_table("events") as batch:
+        batch.alter_column(
+            "public_cursor",
+            existing_type=sa.String(length=37),
+            nullable=False,
+        )
+        batch.create_check_constraint(
+            "ck_events_public_cursor",
+            "length(public_cursor) = 37 "
+            "AND substr(public_cursor, 1, 5) = 'evc1_'",
+        )
+    op.create_index(
+        "ix_events_public_cursor",
+        "events",
+        ["public_cursor"],
+        unique=True,
+    )
+
 
 def upgrade() -> None:
+    _add_public_event_cursors()
     op.create_table(
         "private_comparison_invitations",
         sa.Column("id", sa.String(length=36), nullable=False),
@@ -247,3 +297,7 @@ def downgrade() -> None:
         table_name="private_comparison_invitations",
     )
     op.drop_table("private_comparison_invitations")
+    op.drop_index("ix_events_public_cursor", table_name="events")
+    with op.batch_alter_table("events") as batch:
+        batch.drop_constraint("ck_events_public_cursor", type_="check")
+        batch.drop_column("public_cursor")

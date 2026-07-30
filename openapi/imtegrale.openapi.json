@@ -427,6 +427,65 @@
         "title": "AccountUpdate",
         "type": "object"
       },
+      "ActivePrivateComparisonListItem": {
+        "additionalProperties": false,
+        "properties": {
+          "academic_verified_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Academic Verified At"
+          },
+          "activated_at": {
+            "format": "date-time",
+            "title": "Activated At",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "freshness": {
+            "enum": [
+              "current",
+              "recommended",
+              "stale"
+            ],
+            "title": "Freshness",
+            "type": "string"
+          },
+          "other_participant": {
+            "$ref": "#/components/schemas/PrivateComparisonOfficialIdentityResponse"
+          },
+          "public_id": {
+            "title": "Public Id",
+            "type": "string"
+          },
+          "status": {
+            "const": "active",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "public_id",
+          "other_participant",
+          "status",
+          "activated_at",
+          "expires_at",
+          "academic_verified_at",
+          "freshness"
+        ],
+        "title": "ActivePrivateComparisonListItem",
+        "type": "object"
+      },
       "AdminAccountAction": {
         "properties": {
           "action": {
@@ -2492,6 +2551,16 @@
             "title": "Role",
             "type": "string"
           },
+          "server_time": {
+            "format": "date-time",
+            "title": "Server Time",
+            "type": "string"
+          },
+          "session_expires_at": {
+            "format": "date-time",
+            "title": "Session Expires At",
+            "type": "string"
+          },
           "session_scope": {
             "pattern": "^bss1_[0-9a-f]{64}$",
             "title": "Session Scope",
@@ -2501,6 +2570,8 @@
         "required": [
           "authenticated",
           "session_scope",
+          "session_expires_at",
+          "server_time",
           "role",
           "auth_method",
           "needs_security_setup",
@@ -3021,9 +3092,17 @@
             "title": "Grade Scale",
             "type": "array"
           },
-          "latest_event_id": {
-            "title": "Latest Event Id",
-            "type": "integer"
+          "latest_event_cursor": {
+            "anyOf": [
+              {
+                "pattern": "^evc1_[A-Za-z0-9_-]{32}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Event Cursor"
           },
           "notes": {
             "items": {
@@ -3059,7 +3138,7 @@
         },
         "required": [
           "generated_at",
-          "latest_event_id",
+          "latest_event_cursor",
           "account",
           "summary",
           "years",
@@ -3085,9 +3164,10 @@
             "title": "Created At",
             "type": "string"
           },
-          "id": {
-            "title": "Id",
-            "type": "integer"
+          "cursor": {
+            "pattern": "^evc1_[A-Za-z0-9_-]{32}$",
+            "title": "Cursor",
+            "type": "string"
           },
           "kind": {
             "title": "Kind",
@@ -3100,7 +3180,7 @@
           }
         },
         "required": [
-          "id",
+          "cursor",
           "kind",
           "payload",
           "actor",
@@ -8393,6 +8473,11 @@
             "title": "Relationship Duration Days",
             "type": "integer"
           },
+          "session_scope": {
+            "pattern": "^bss1_[0-9a-f]{64}$",
+            "title": "Session Scope",
+            "type": "string"
+          },
           "token": {
             "maxLength": 50,
             "minLength": 50,
@@ -8403,6 +8488,7 @@
         },
         "required": [
           "public_id",
+          "session_scope",
           "token",
           "expires_at",
           "relationship_duration_days",
@@ -8528,7 +8614,22 @@
         "properties": {
           "comparisons": {
             "items": {
-              "$ref": "#/components/schemas/PrivateComparisonRelationResponse"
+              "discriminator": {
+                "mapping": {
+                  "active": "#/components/schemas/ActivePrivateComparisonListItem",
+                  "expired": "#/components/schemas/TerminalPrivateComparisonHistoryItem",
+                  "revoked": "#/components/schemas/TerminalPrivateComparisonHistoryItem"
+                },
+                "propertyName": "status"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/ActivePrivateComparisonListItem"
+                },
+                {
+                  "$ref": "#/components/schemas/TerminalPrivateComparisonHistoryItem"
+                }
+              ]
             },
             "title": "Comparisons",
             "type": "array"
@@ -8569,69 +8670,6 @@
           "summary"
         ],
         "title": "PrivateComparisonParticipantResponse",
-        "type": "object"
-      },
-      "PrivateComparisonRelationResponse": {
-        "additionalProperties": false,
-        "properties": {
-          "academic_verified_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Academic Verified At"
-          },
-          "activated_at": {
-            "format": "date-time",
-            "title": "Activated At",
-            "type": "string"
-          },
-          "expires_at": {
-            "format": "date-time",
-            "title": "Expires At",
-            "type": "string"
-          },
-          "freshness": {
-            "enum": [
-              "current",
-              "recommended",
-              "stale"
-            ],
-            "title": "Freshness",
-            "type": "string"
-          },
-          "other_participant": {
-            "$ref": "#/components/schemas/PrivateComparisonOfficialIdentityResponse"
-          },
-          "public_id": {
-            "title": "Public Id",
-            "type": "string"
-          },
-          "status": {
-            "enum": [
-              "active",
-              "expired",
-              "revoked"
-            ],
-            "title": "Status",
-            "type": "string"
-          }
-        },
-        "required": [
-          "public_id",
-          "other_participant",
-          "status",
-          "activated_at",
-          "expires_at",
-          "academic_verified_at",
-          "freshness"
-        ],
-        "title": "PrivateComparisonRelationResponse",
         "type": "object"
       },
       "PrivateComparisonSummaryResponse": {
@@ -10817,6 +10855,35 @@
           "chat_id"
         ],
         "title": "TelegramUpdate",
+        "type": "object"
+      },
+      "TerminalPrivateComparisonHistoryItem": {
+        "additionalProperties": false,
+        "properties": {
+          "ended_at": {
+            "format": "date-time",
+            "title": "Ended At",
+            "type": "string"
+          },
+          "public_id": {
+            "title": "Public Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "expired",
+              "revoked"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "public_id",
+          "status",
+          "ended_at"
+        ],
+        "title": "TerminalPrivateComparisonHistoryItem",
         "type": "object"
       },
       "TokenLoginRequest": {
@@ -16501,9 +16568,15 @@
             "name": "after",
             "required": false,
             "schema": {
-              "default": 0,
-              "title": "After",
-              "type": "integer"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After"
             }
           }
         ],
@@ -20913,7 +20986,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PrivateComparisonRelationResponse"
+                  "$ref": "#/components/schemas/ActivePrivateComparisonListItem"
                 }
               }
             },

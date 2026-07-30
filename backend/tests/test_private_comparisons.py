@@ -618,14 +618,16 @@ def test_dashboard_event_visibility_matches_primary_owner_assurance(
             ),
         ]
         db.commit()
-        ids_by_kind = {event.kind: event.id for event in recorded}
+        cursors_by_kind = {
+            event.kind: event.public_cursor for event in recorded
+        }
 
     response = client.get("/api/v1/dashboard")
     assert response.status_code == 200
     body = response.json()
     kinds = {event["kind"] for event in body["events"]}
     assert ("private_comparison:activated" in kinds) is expected_private
-    assert body["latest_event_id"] == ids_by_kind[expected_latest_kind]
+    assert body["latest_event_cursor"] == cursors_by_kind[expected_latest_kind]
     assert "note:new" in kinds
     assert "sync:completed" in kinds
     assert ("token:created" in kinds) is (role == "owner")

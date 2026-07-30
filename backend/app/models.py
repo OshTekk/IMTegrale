@@ -22,6 +22,7 @@ from sqlalchemy.ext.mutable import MutableList
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from app.database import Base, utcnow
+from app.event_cursor import EVENT_CURSOR_LENGTH, generate_event_cursor
 from app.imt_sync_credential_contract import (
     IMT_SYNC_CREDENTIAL_ENVELOPE_BYTES,
     IMT_SYNC_CREDENTIAL_REVOCATION_REASONS,
@@ -592,9 +593,20 @@ class CalendarFetchAttempt(Base):
 
 class Event(Base):
     __tablename__ = "events"
-    __table_args__ = (Index("ix_events_account_id_id", "account_id", "id"),)
+    __table_args__ = (
+        Index("ix_events_account_id_id", "account_id", "id"),
+        Index("ix_events_public_cursor", "public_cursor", unique=True),
+        CheckConstraint(
+            "length(public_cursor) = 37 AND substr(public_cursor, 1, 5) = 'evc1_'",
+            name="ck_events_public_cursor",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    public_cursor: Mapped[str] = mapped_column(
+        String(EVENT_CURSOR_LENGTH),
+        default=generate_event_cursor,
+    )
     account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), index=True)
     kind: Mapped[str] = mapped_column(String(64))
     payload: Mapped[dict] = mapped_column(JSON, default=dict)

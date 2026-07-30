@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import importlib.util
 from pathlib import Path
 
@@ -40,6 +41,24 @@ def _accounts_schema(connection) -> None:  # noqa: ANN001
             ")"
         )
     )
+    connection.execute(
+        text(
+            "CREATE TABLE events ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "account_id VARCHAR(36) NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, "
+            "kind VARCHAR(64) NOT NULL, "
+            "payload JSON NOT NULL, "
+            "actor VARCHAR(64) NOT NULL, "
+            "created_at DATETIME NOT NULL"
+            ")"
+        )
+    )
+    connection.execute(
+        text("CREATE INDEX ix_events_account_id ON events (account_id)")
+    )
+    connection.execute(
+        text("CREATE INDEX ix_events_account_id_id ON events (account_id, id)")
+    )
 
 
 def test_0029_is_additive_empty_reversible_and_replayable_on_sqlite() -> None:
@@ -59,6 +78,14 @@ def test_0029_is_additive_empty_reversible_and_replayable_on_sqlite() -> None:
         } <= tables
         assert connection.scalar(text("SELECT count(*) FROM private_comparison_invitations")) == 0
         assert connection.scalar(text("SELECT count(*) FROM private_comparisons")) == 0
+        event_columns = {
+            column["name"] for column in inspect(connection).get_columns("events")
+        }
+        assert "public_cursor" in event_columns
+        event_indexes = {
+            index["name"]: index for index in inspect(connection).get_indexes("events")
+        }
+        assert bool(event_indexes["ix_events_public_cursor"]["unique"]) is True
         invitation_columns = {
             column["name"] for column in inspect(connection).get_columns("private_comparison_invitations")
         }
@@ -73,7 +100,72 @@ def test_0029_is_additive_empty_reversible_and_replayable_on_sqlite() -> None:
         _invoke(connection, migration, "downgrade")
         assert "private_comparisons" not in inspect(connection).get_table_names()
         assert "private_comparison_invitations" not in inspect(connection).get_table_names()
+        assert "public_cursor" not in {
+            column["name"] for column in inspect(connection).get_columns("events")
+        }
         _invoke(connection, migration, "upgrade")
+
+
+def test_0029_backfills_existing_events_with_unique_192_bit_opaque_cursors() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    with engine.begin() as connection:
+        _accounts_schema(connection)
+        connection.execute(
+            text(
+                "INSERT INTO accounts (id, imt_username, display_name) VALUES "
+                "('11111111-1111-4111-8111-111111111111', "
+                "'event-migration@example.test', 'Compte événement fictif')"
+            )
+        )
+        for index in range(3):
+            connection.execute(
+                text(
+                    "INSERT INTO events "
+                    "(account_id, kind, payload, actor, created_at) VALUES "
+                    "(:account_id, :kind, '{}', 'system', "
+                    "'2099-01-01 00:00:00')"
+                ),
+                {
+                    "account_id": "11111111-1111-4111-8111-111111111111",
+                    "kind": f"synthetic:{index}",
+                },
+            )
+
+        migration = _load_migration()
+        _invoke(connection, migration, "upgrade")
+        cursors = list(
+            connection.execute(
+                text("SELECT public_cursor FROM events ORDER BY id")
+            ).scalars()
+        )
+
+        assert len(cursors) == 3
+        assert len(set(cursors)) == 3
+        for cursor in cursors:
+            assert cursor.startswith("evc1_")
+            assert len(cursor) == 37
+            assert len(base64.urlsafe_b64decode(cursor.removeprefix("evc1_"))) == 24
+
+
+def test_0029_event_cursor_collision_retries_are_bounded(monkeypatch) -> None:  # noqa: ANN001
+    migration = _load_migration()
+    duplicate = "evc1_" + "a" * 32
+    values = iter(["a" * 32, "b" * 32])
+    monkeypatch.setattr(migration.secrets, "token_urlsafe", lambda _size: next(values))
+
+    assert migration._new_public_event_cursor({duplicate}) == "evc1_" + "b" * 32
+
+    attempts = 0
+
+    def collide_forever(_size: int) -> str:
+        nonlocal attempts
+        attempts += 1
+        return "a" * 32
+
+    monkeypatch.setattr(migration.secrets, "token_urlsafe", collide_forever)
+    with pytest.raises(RuntimeError, match="unique public event cursor"):
+        migration._new_public_event_cursor({duplicate})
+    assert attempts == migration.EVENT_CURSOR_BACKFILL_MAX_ATTEMPTS
 
 
 def test_0029_refuses_downgrade_while_private_data_exists() -> None:

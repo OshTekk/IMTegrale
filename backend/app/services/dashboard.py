@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.calculations import GRADE_SCALE, grade_for_average, grade_from_code, ue_year, weighted_average
@@ -66,7 +66,7 @@ def event_view(event: Event, visibility: EventVisibilityContext) -> dict | None:
             }
         actor = "shared" if event.actor.startswith("token:") else event.actor
     return {
-        "id": event.id,
+        "cursor": event.public_cursor,
         "kind": event.kind,
         "payload": payload,
         "actor": actor,
@@ -228,8 +228,13 @@ def dashboard_snapshot(
 
     grade_counts = Counter(item["grade"] for item in ues if item["grade"])
     visibility_filters = event_visibility_filters(event_visibility)
-    latest_event_query = select(func.max(Event.id)).where(Event.account_id == account.id, *visibility_filters)
-    latest_event_id = db.scalar(latest_event_query) or 0
+    latest_event_query = (
+        select(Event.public_cursor)
+        .where(Event.account_id == account.id, *visibility_filters)
+        .order_by(Event.id.desc())
+        .limit(1)
+    )
+    latest_event_cursor = db.scalar(latest_event_query)
     event_rows = list(
         db.scalars(
             select(Event)
@@ -255,7 +260,7 @@ def dashboard_snapshot(
 
     return {
         "generated_at": utcnow(),
-        "latest_event_id": latest_event_id,
+        "latest_event_cursor": latest_event_cursor,
         "account": {
             "id": account.id,
             "display_name": account.display_name,

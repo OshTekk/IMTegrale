@@ -29,6 +29,10 @@ Grade = Literal["A", "B", "C", "D", "E", "FX", "F"]
 Campus = Literal["rennes", "brest", "nantes", "other", "unknown"]
 Cohort = Literal["1a", "2a", "3a", "higher", "atypical", "unknown"]
 Freshness = Literal["current", "recommended", "stale"]
+EventCursor: TypeAlias = Annotated[
+    str,
+    Field(pattern=r"^evc1_[A-Za-z0-9_-]{32}$"),
+]
 LearningContentKind = Literal["concept", "lesson", "exercise", "pc_td", "past_exam"]
 LearningSelfAssessment = Literal[1, 2, 3, 4, 5]
 
@@ -351,7 +355,7 @@ class UeResponse(ApiModel):
 
 
 class EventResponse(ApiModel):
-    id: int
+    cursor: EventCursor
     kind: str
     payload: dict[str, Any]
     actor: str
@@ -412,7 +416,7 @@ class GradeScaleResponse(ApiModel):
 
 class DashboardResponse(ApiModel):
     generated_at: datetime
-    latest_event_id: int
+    latest_event_cursor: EventCursor | None
     account: DashboardAccountResponse
     summary: AcademicSummaryResponse
     years: list[AcademicYearResponse]
