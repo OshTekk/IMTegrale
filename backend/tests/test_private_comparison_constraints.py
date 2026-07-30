@@ -6,6 +6,7 @@ import pytest
 from app.config import Settings
 from app.database import SessionLocal, engine, utcnow
 from app.models import Account, PrivateComparison, PrivateComparisonInvitation
+from app.private_comparison_contract import PRIVATE_COMPARISON_CONSENT_VERSION
 from app.services.operations import operational_alert_codes, operations_metrics
 from sqlalchemy import func, inspect, select, text
 from sqlalchemy.exc import IntegrityError
@@ -27,7 +28,7 @@ def _invitation(account_id: str, *, suffix: str = "a") -> PrivateComparisonInvit
         creator_account_id=account_id,
         token_digest=suffix * 64,
         token_version=1,
-        consent_version=1,
+        consent_version=PRIVATE_COMPARISON_CONSENT_VERSION,
         validity_days=7,
         relationship_duration_days=30,
         created_at=now,
@@ -41,7 +42,7 @@ def _comparison(first_id: str, second_id: str, *, suffix: str = "a") -> PrivateC
         public_id=f"pc_{suffix * 24}",
         account_a_id=first_id,
         account_b_id=second_id,
-        consent_version=1,
+        consent_version=PRIVATE_COMPARISON_CONSENT_VERSION,
         account_a_consented_at=now,
         account_b_consented_at=now,
         activated_at=now,
@@ -56,7 +57,7 @@ def _comparison(first_id: str, second_id: str, *, suffix: str = "a") -> PrivateC
     "mutate",
     [
         lambda row: setattr(row, "token_version", 2),
-        lambda row: setattr(row, "consent_version", 2),
+        lambda row: setattr(row, "consent_version", 1),
         lambda row: setattr(row, "validity_days", 8),
         lambda row: setattr(row, "relationship_duration_days", 91),
         lambda row: setattr(row, "token_digest", "short"),
@@ -78,7 +79,7 @@ def test_invitation_constraints_reject_incoherent_states(mutate) -> None:  # noq
     "mutate",
     [
         lambda row: setattr(row, "account_b_id", row.account_a_id),
-        lambda row: setattr(row, "consent_version", 2),
+        lambda row: setattr(row, "consent_version", 1),
         lambda row: setattr(row, "duration_days", 0),
         lambda row: setattr(row, "expires_at", row.activated_at),
         lambda row: setattr(

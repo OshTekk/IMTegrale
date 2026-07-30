@@ -7,15 +7,16 @@ autorisations du leaderboard.
 
 ## Actifs et propriétés
 
-| Actif                   | Propriété attendue                                                 |
-| ----------------------- | ------------------------------------------------------------------ |
-| Secret d'invitation     | 256 bits, retourné une fois, jamais stocké ou journalisé           |
-| Digest d'invitation     | HMAC avec séparation de domaine, jamais exposé par l'API           |
-| Consentements           | Bilatéraux, versionnés, explicites et liés à une durée             |
-| Relation                | Limitée à deux comptes distincts, révocable et expirante           |
-| Résultats académiques   | Calculés à la demande, jamais copiés dans les nouvelles tables     |
-| Identité officielle     | Visible uniquement aux deux participants actifs                    |
-| Événements et métriques | Métadonnées minimales, aucun résultat, token ou paire identifiable |
+| Actif                     | Propriété attendue                                                 |
+| ------------------------- | ------------------------------------------------------------------ |
+| Secret d'invitation       | 256 bits, retourné une fois, jamais stocké ou journalisé           |
+| Digest d'invitation       | HMAC avec séparation de domaine, jamais exposé par l'API           |
+| Consentements             | Bilatéraux, versionnés, explicites et liés à une durée             |
+| Manifeste de consentement | Canonique, exhaustif et identique pour les deux participants       |
+| Relation                  | Limitée à deux comptes distincts, révocable et expirante           |
+| Résultats académiques     | Calculés à la demande, jamais copiés dans les nouvelles tables     |
+| Identité officielle       | Visible uniquement aux deux participants actifs                    |
+| Événements et métriques   | Métadonnées minimales, aucun résultat, token ou paire identifiable |
 
 ## Frontières
 
@@ -56,12 +57,14 @@ participation.
 | Expiration pendant une lecture                       | Données après échéance                                  | Vérification sous verrou au début ; expiration à chaque nouvelle lecture                                                                             | Une réponse commencée juste avant l'échéance peut finir                           |
 | Compte désactivé ou supprimé                         | Accès persistant                                        | Auth refuse le compte désactivé ; paire revalidée ; FK cascade à la suppression                                                                      | Les copies réalisées avant suppression subsistent chez l'autre participant        |
 | Changement de cursus/promotion                       | Ancienne relation devenue incompatible                  | Éligibilité revalidée à chaque détail et statut non actif dans la liste                                                                              | Fenêtre jusqu'à la mise à jour locale des attributs officiels                     |
-| Ancien lien après révocation                         | Réactivation involontaire                               | Consentement créateur strictement postérieur à la borne terminale sous verrou ; invitation obsolète terminalisée ; nouveau `public_id`                | Restauration d'une sauvegarde exige une procédure de révocation                   |
-| Relation existante et nouvelle invitation            | Relations parallèles                                    | Une paire canonique unique ; invitation obsolète terminalisée ; seule une invitation postérieure au cycle peut réactiver                             | Une invitation transférée reste une capacité jusqu'à son usage ou sa terminaison |
+| Ancien lien après révocation                         | Réactivation involontaire                               | Consentement créateur strictement postérieur à la borne terminale sous verrou ; invitation obsolète terminalisée ; nouveau `public_id`               | Restauration d'une sauvegarde exige une procédure de révocation                   |
+| Relation existante et nouvelle invitation            | Relations parallèles                                    | Une paire canonique unique ; invitation obsolète terminalisée ; seule une invitation postérieure au cycle peut réactiver                             | Une invitation transférée reste une capacité jusqu'à son usage ou sa terminaison  |
 | Fuite dans événements/métriques                      | Données académiques secondaires                         | Événements sans score, UE, token, digest ou autre compte ; métriques agrégées                                                                        | Un volume très faible peut révéler une utilisation générale à l'opérateur         |
 | Fuite dans traces SQL                                | Secret ou résultat                                      | Paramètres liés ; aucun token brut en base ; logs SQL désactivés en production                                                                       | Un opérateur activant un tracing de bodies pourrait violer la politique           |
 | Cache navigateur/proxy                               | Réponse servie après révocation                         | `private, no-store`, `Pragma: no-cache`, `Vary: Cookie`, aucun service worker                                                                        | Le navigateur peut garder une page déjà affichée en mémoire                       |
 | Cache React après révocation ou changement de compte | Affichage croisé devenu non autorisé                    | Clés bornées par compte, `gcTime=0`, retrait au démontage, `404`, révocation, déconnexion et changement de capacité                                  | Une donnée déjà lue reste mémorisable par le participant                          |
+| Copy de consentement incomplète                      | Divulgation non comprise par un participant             | Manifeste V2 backend unique, champs inclus et catégories exclues explicites, création et acceptation bloquées si le manifeste manque ou diverge      | Un participant peut ne pas lire intégralement un texte pourtant accessible        |
+| Nouveau champ sans nouveau consentement              | Extension silencieuse du périmètre                      | Test structurel entre le modèle de détail et les chemins du manifeste ; changement de périmètre soumis à une nouvelle version de consentement        | Une revue humaine reste nécessaire pour vérifier la qualité de la formulation     |
 | Token dans trace, vidéo ou capture                   | Secret durable dans un artefact de test                 | Fixtures synthétiques aléatoires, trace/vidéo/capture désactivées pour les flux E2E one-shot                                                         | Une capture manuelle explicite du lien reste hors contrôle du produit             |
 | Capture volontaire                                   | Diffusion hors produit                                  | Copy de consentement explicite et périmètre minimal                                                                                                  | Impossible à empêcher : un participant autorisé peut recopier ou capturer l'écran |
 
@@ -99,6 +102,13 @@ Les valeurs manuelles, simulations, détails d'évaluation, contenus Parcours et
 données du leaderboard sont absents du contrat V1. Une ambiguïté de code
 officiel du même côté retire l'UE de l'intersection au lieu d'effectuer un
 rapprochement flou.
+
+Le manifeste de consentement V2 décrit chaque champ sérialisable du détail et
+les catégories explicitement exclues. Il est construit une seule fois dans le
+contrat backend, exposé par une route `no-store`, repris à l'identique dans la
+création et la preview, puis rendu dynamiquement dans les deux parcours. La
+version V1 est refusée par Pydantic, le service et les contraintes de la
+migration `0029`.
 
 Le client n'utilise la capacité de session que pour la visibilité et le
 routage. Une route masquée n'est jamais considérée comme autorisée : chaque

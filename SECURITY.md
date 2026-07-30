@@ -62,6 +62,11 @@ Le backend et l'interface restent non publiés et la migration n'est pas
 déployée. Ils n'ajoutent ni annuaire, ni publication, ni détail d'évaluation.
 Un secret d'invitation est une capacité temporaire : il ne doit jamais apparaître
 dans une URL serveur, un cache persistant, un log, un événement ou une métrique.
+Le consentement des deux participants utilise le manifeste backend V2 unique :
+il énumère les champs du résumé et des UE communes, les métadonnées de relation,
+les catégories exclues, la révocation et le risque de copie. La création et
+l'acceptation sont bloquées si ce manifeste n'est pas disponible ou si sa
+version diverge ; tout élargissement du détail exige une nouvelle version.
 
 ## Niveaux d'assurance propriétaire
 

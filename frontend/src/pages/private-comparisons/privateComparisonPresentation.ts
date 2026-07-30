@@ -1,5 +1,6 @@
 import type {
   PrivateComparisonCommonUeResponse,
+  PrivateComparisonConsentManifestResponse,
   PrivateComparisonInvitationResponse,
   PrivateComparisonRelationResponse,
 } from "../../generated/api/types.gen";
@@ -10,6 +11,23 @@ export const PRIVATE_COMPARISON_GRADES = ["A", "B", "C", "D", "E", "FX", "F"] as
 
 const invitationTokenPattern = /^pcinv1_[A-Za-z0-9_-]{43}$/;
 const privateComparisonPublicIdPattern = /^pc_[A-Za-z0-9_-]{24}$/;
+
+export function usablePrivateComparisonConsentManifest(manifest: PrivateComparisonConsentManifestResponse): boolean {
+  return (
+    manifest.consent_version === 2 &&
+    manifest.included_sections.length > 0 &&
+    manifest.included_sections.every(
+      (section) =>
+        section.title.trim().length > 0 &&
+        section.fields.length > 0 &&
+        section.fields.every((field) => field.response_path.trim().length > 0 && field.label.trim().length > 0),
+    ) &&
+    manifest.excluded_sections.length > 0 &&
+    manifest.excluded_sections.every((section) => section.label.trim().length > 0) &&
+    Object.values(manifest.duration_and_revocation).every((value) => value.trim().length > 0) &&
+    manifest.copy_risk.trim().length > 0
+  );
+}
 
 export type InvitationFragmentResult =
   { state: "valid"; token: string } | { state: "missing" | "invalid"; token: null };

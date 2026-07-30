@@ -12,7 +12,15 @@ export const emptyPrivateComparisonConsent: PrivateComparisonConsentState = {
   copyRisk: false,
 };
 
-export function privateComparisonConsentComplete(value: PrivateComparisonConsentState): boolean {
+export interface CompletePrivateComparisonConsentState extends PrivateComparisonConsentState {
+  identity: true;
+  academic: true;
+  copyRisk: true;
+}
+
+export function privateComparisonConsentComplete(
+  value: PrivateComparisonConsentState,
+): value is CompletePrivateComparisonConsentState {
   return value.identity && value.academic && value.copyRisk;
 }
 

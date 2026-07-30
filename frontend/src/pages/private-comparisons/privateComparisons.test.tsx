@@ -8,6 +8,7 @@ import { StrictMode, useState, type ReactNode } from "react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  PrivateComparisonConsentManifestResponse,
   PrivateComparisonDetailResponse,
   PrivateComparisonInvitationCreatedResponse,
   PrivateComparisonInvitationListResponse,
@@ -36,6 +37,91 @@ const RELATION_ID = `pc_${"b".repeat(24)}`;
 const INVITATION_ID = `pci_${"c".repeat(24)}`;
 const OTHER_RELATION_ID = `pc_${"d".repeat(24)}`;
 
+const consentManifest: PrivateComparisonConsentManifestResponse = {
+  consent_version: 2,
+  included_sections: [
+    {
+      key: "official_identity",
+      title: "Identité",
+      fields: [
+        {
+          response_path: "participant.identity.official_name",
+          label: "Identité officielle de chaque participant",
+        },
+      ],
+    },
+    {
+      key: "general_summary",
+      title: "Résumé général",
+      fields: [
+        { response_path: "participant.summary.average", label: "Moyenne générale" },
+        { response_path: "participant.summary.gpa", label: "GPA général" },
+        { response_path: "participant.summary.validated_ects", label: "ECTS validés" },
+        { response_path: "participant.summary.grade_distribution", label: "Répartition des grades" },
+        {
+          response_path: "participant.summary.academic_verified_at",
+          label: "Date de dernière vérification académique",
+        },
+        { response_path: "participant.summary.freshness", label: "État de fraîcheur des données" },
+        { response_path: "participant.summary.ue_count", label: "Nombre d’UE prises en compte" },
+      ],
+    },
+    {
+      key: "common_ues",
+      title: "UE communes",
+      fields: [
+        { response_path: "common_ues.official_code", label: "Code officiel" },
+        { response_path: "common_ues.participant.title", label: "Intitulé" },
+        { response_path: "common_ues.participant.year", label: "Année" },
+        { response_path: "common_ues.participant.semester", label: "Semestre" },
+        { response_path: "common_ues.participant.average", label: "Moyenne" },
+        { response_path: "common_ues.participant.grade", label: "Grade" },
+        { response_path: "common_ues.participant.gpa", label: "GPA" },
+        { response_path: "common_ues.participant.earned_ects", label: "ECTS obtenus" },
+        { response_path: "common_ues.participant.allocated_ects", label: "ECTS alloués" },
+        { response_path: "common_ues.participant.validated", label: "État de validation" },
+        { response_path: "common_ues.participant.freshness", label: "État de fraîcheur" },
+        { response_path: "common_ues.participant.verified_at", label: "Date de dernière vérification" },
+      ],
+    },
+    {
+      key: "relation_metadata",
+      title: "Relation privée",
+      fields: [
+        { response_path: "relation.public_id", label: "Identifiant opaque de la comparaison" },
+        { response_path: "relation.status", label: "Statut" },
+        { response_path: "relation.activated_at", label: "Date d’activation" },
+        { response_path: "relation.expires_at", label: "Date d’expiration" },
+        { response_path: "relation.consent_version", label: "Version du consentement" },
+        { response_path: "relation.calculated_at", label: "Date de calcul de la vue" },
+      ],
+    },
+  ],
+  excluded_sections: [
+    { key: "detailed_assessments", label: "Détail des évaluations" },
+    { key: "assessment_labels", label: "Libellés des évaluations" },
+    { key: "assessment_coefficients", label: "Coefficients des évaluations" },
+    { key: "non_common_results", label: "Notes qui ne sont pas communes" },
+    { key: "non_common_ues", label: "UE qui ne sont pas communes" },
+    { key: "simulations", label: "Simulations" },
+    { key: "agenda", label: "Agenda" },
+    { key: "learning", label: "Parcours" },
+    { key: "leaderboard_rank", label: "Rang dans le classement" },
+    { key: "competition_score", label: "Score de compétition" },
+    { key: "personal_comments", label: "Commentaires personnels" },
+    { key: "third_party_data", label: "Données d’un troisième étudiant" },
+    { key: "public_sharing", label: "Publication ou partage public" },
+  ],
+  duration_and_revocation: {
+    duration: "La durée choisie commence après l’acceptation et ne dépasse jamais 90 jours.",
+    expiration: "La consultation cesse automatiquement à l’expiration.",
+    immediate_revocation: "Chaque participant peut révoquer immédiatement la comparaison.",
+    minimal_history: "L’historique conserve seulement le statut et les dates, sans résultat académique.",
+    private_only: "La comparaison reste privée aux deux participants.",
+  },
+  copy_risk: "L’autre participant peut recopier ou capturer les informations visibles avant une révocation.",
+};
+
 const ownerSession: Session = {
   authenticated: true,
   role: "owner",
@@ -53,26 +139,18 @@ const ownerSession: Session = {
 const invitationCreated: PrivateComparisonInvitationCreatedResponse = {
   public_id: INVITATION_ID,
   token: TOKEN,
-  consent_version: 1,
+  consent_version: 2,
   expires_at: "2099-08-05T12:00:00Z",
   relationship_duration_days: 30,
-  scope: {
-    official_identity: true,
-    general_summary: true,
-    common_ues: true,
-    detailed_assessments: false,
-    simulations: false,
-    leaderboard: false,
-    published: false,
-  },
+  consent_manifest: consentManifest,
 };
 
 const invitationPreview: PrivateComparisonInvitationPreviewResponse = {
   creator: { official_name: "Camille Exemple" },
   expires_at: "2099-08-05T12:00:00Z",
   relationship_duration_days: 30,
-  consent_version: 1,
-  scope: invitationCreated.scope,
+  consent_version: 2,
+  consent_manifest: consentManifest,
 };
 
 const relations: PrivateComparisonListResponse = {
@@ -134,7 +212,7 @@ const invitations: PrivateComparisonInvitationListResponse = {
 const detail: PrivateComparisonDetailResponse = {
   public_id: RELATION_ID,
   status: "active",
-  consent_version: 1,
+  consent_version: 2,
   activated_at: "2099-07-29T12:00:00Z",
   expires_at: "2099-08-28T12:00:00Z",
   calculated_at: "2099-07-29T12:30:00Z",
@@ -298,7 +376,13 @@ describe("invitation one-shot", () => {
           <button type="button" onClick={() => setOpen(true)}>
             Rouvrir
           </button>
-          <PrivateComparisonInvitationModal open={open} onClose={() => setOpen(false)} onCreated={() => undefined} />
+          <PrivateComparisonInvitationModal
+            open={open}
+            onClose={() => setOpen(false)}
+            onCreated={() => undefined}
+            manifest={consentManifest}
+            manifestPending={false}
+          />
         </>
       );
     }
@@ -309,6 +393,22 @@ describe("invitation one-shot", () => {
     );
     const user = userEvent.setup();
     const clipboardWrite = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
+    const dialog = screen.getByRole("dialog", { name: "Créer une invitation" });
+    for (const label of [
+      "Répartition des grades",
+      "ECTS obtenus",
+      "ECTS alloués",
+      "État de validation",
+      "État de fraîcheur",
+      "Détail des évaluations",
+      "Coefficients des évaluations",
+      "UE qui ne sont pas communes",
+      "Publication ou partage public",
+      "Chaque participant peut révoquer immédiatement la comparaison.",
+      "L’autre participant peut recopier ou capturer les informations visibles avant une révocation.",
+    ]) {
+      expect(within(dialog).getByText(label)).toBeTruthy();
+    }
     expect((screen.getByLabelText("Durée de la comparaison après acceptation") as HTMLSelectElement).value).toBe("30");
     const create = screen.getByRole("button", { name: "Créer le lien" });
     expect((create as HTMLButtonElement).disabled).toBe(true);
@@ -317,7 +417,7 @@ describe("invitation one-shot", () => {
     const link = await screen.findByLabelText("Lien d’invitation");
     expect((link as HTMLInputElement).value).toBe(`${window.location.origin}/comparisons/accept#invite=${TOKEN}`);
     expect(requestBody).toEqual({
-      consent_version: 1,
+      consent_version: 2,
       acknowledge_identity_visibility: true,
       acknowledge_academic_scope: true,
       acknowledge_copy_risk: true,
@@ -353,7 +453,13 @@ describe("invitation one-shot", () => {
     );
     render(
       <Providers client={testClient()}>
-        <PrivateComparisonInvitationModal open onClose={() => undefined} onCreated={() => undefined} />
+        <PrivateComparisonInvitationModal
+          open
+          onClose={() => undefined}
+          onCreated={() => undefined}
+          manifest={consentManifest}
+          manifestPending={false}
+        />
       </Providers>,
     );
     const user = userEvent.setup();
@@ -362,6 +468,77 @@ describe("invitation one-shot", () => {
     expect(await screen.findByText("Impossible de créer l’invitation pour le moment.")).toBeTruthy();
     expect(screen.queryByLabelText("Lien d’invitation")).toBeNull();
     expect(document.body.textContent).not.toContain("secret-invalide");
+  });
+
+  it("interdit la création lorsque le manifeste est indisponible", () => {
+    render(
+      <Providers client={testClient()}>
+        <PrivateComparisonInvitationModal
+          open
+          onClose={() => undefined}
+          onCreated={() => undefined}
+          manifest={null}
+          manifestPending={false}
+        />
+      </Providers>,
+    );
+
+    expect(
+      screen.getByText("Le périmètre de consentement est indisponible. Aucune invitation ne peut être créée."),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Créer le lien" })).toBeNull();
+    expect(screen.queryByRole("checkbox")).toBeNull();
+  });
+
+  it("interdit la création lorsque le manifeste chargé est incomplet", () => {
+    render(
+      <Providers client={testClient()}>
+        <PrivateComparisonInvitationModal
+          open
+          onClose={() => undefined}
+          onCreated={() => undefined}
+          manifest={{ ...consentManifest, included_sections: [] }}
+          manifestPending={false}
+        />
+      </Providers>,
+    );
+
+    expect(
+      screen.getByText("Le périmètre de consentement est indisponible. Aucune invitation ne peut être créée."),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Créer le lien" })).toBeNull();
+    expect(screen.queryByRole("checkbox")).toBeNull();
+  });
+
+  it("refuse une réponse one-shot dont la version du manifeste diffère de celle présentée", async () => {
+    apiMockServer.use(
+      http.post("*/api/v1/private-comparisons/invitations", () =>
+        HttpResponse.json({
+          ...invitationCreated,
+          consent_manifest: {
+            ...consentManifest,
+            consent_version: 3,
+          },
+        }),
+      ),
+    );
+    render(
+      <Providers client={testClient()}>
+        <PrivateComparisonInvitationModal
+          open
+          onClose={() => undefined}
+          onCreated={() => undefined}
+          manifest={consentManifest}
+          manifestPending={false}
+        />
+      </Providers>,
+    );
+    const user = userEvent.setup();
+    for (const checkbox of screen.getAllByRole("checkbox")) await user.click(checkbox);
+    await user.click(screen.getByRole("button", { name: "Créer le lien" }));
+
+    expect(await screen.findByText("Impossible de créer l’invitation pour le moment.")).toBeTruthy();
+    expect(screen.queryByLabelText("Lien d’invitation")).toBeNull();
   });
 });
 
@@ -391,6 +568,17 @@ describe("acceptation depuis le fragment", () => {
     expect(new URL(previewUrl).hash).toBe("");
     expect(window.location.hash).toBe("");
     expect(screen.queryByText("15,2 / 20")).toBeNull();
+    for (const label of [
+      "Répartition des grades",
+      "ECTS obtenus",
+      "ECTS alloués",
+      "État de validation",
+      "Détail des évaluations",
+      "UE qui ne sont pas communes",
+      "Publication ou partage public",
+    ]) {
+      expect(screen.getByText(label)).toBeTruthy();
+    }
     const user = userEvent.setup();
     const accept = screen.getByRole("button", { name: "Accepter la comparaison" });
     expect((accept as HTMLButtonElement).disabled).toBe(true);
@@ -399,13 +587,30 @@ describe("acceptation depuis le fragment", () => {
     expect(await screen.findByTestId("comparison-detail-destination")).toBeTruthy();
     expect(acceptBody).toEqual({
       token: TOKEN,
-      consent_version: 1,
+      consent_version: 2,
       acknowledge_identity_visibility: true,
       acknowledge_academic_scope: true,
       acknowledge_copy_risk: true,
     });
     expect(client.getMutationCache().getAll()).toHaveLength(0);
     expect(JSON.stringify(window.history.state)).not.toContain(TOKEN);
+  });
+
+  it("interdit l’acceptation lorsque la preview ne fournit pas le manifeste canonique", async () => {
+    apiMockServer.use(
+      http.post("*/api/v1/private-comparisons/invitations/preview", () => {
+        const { consent_manifest: omittedManifest, ...response } = invitationPreview;
+        expect(omittedManifest).toBe(consentManifest);
+        return HttpResponse.json(response);
+      }),
+    );
+    window.history.replaceState(null, "", `/comparisons/accept#invite=${TOKEN}`);
+
+    renderRoute(<PrivateComparisonAcceptPage />, "/comparisons/accept");
+
+    expect(await screen.findByText("Cette invitation n’est plus disponible")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Accepter la comparaison" })).toBeNull();
+    expect(document.body.textContent).not.toContain(TOKEN);
   });
 
   it("refuse sans révéler l’identité du destinataire", async () => {
@@ -506,6 +711,7 @@ describe("listes et révocation", () => {
   it("sépare les relations actives, l’historique et tous les statuts d’invitation", async () => {
     let deletedInvitation = 0;
     apiMockServer.use(
+      http.get("*/api/v1/private-comparisons/consent-manifest", () => HttpResponse.json(consentManifest)),
       http.get("*/api/v1/private-comparisons", () => HttpResponse.json(relations)),
       http.get("*/api/v1/private-comparisons/invitations", () => HttpResponse.json(invitations)),
       http.delete(`*/api/v1/private-comparisons/invitations/${INVITATION_ID}`, () => {

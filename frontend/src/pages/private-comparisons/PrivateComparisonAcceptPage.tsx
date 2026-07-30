@@ -21,7 +21,11 @@ import {
   type PrivateComparisonConsentState,
 } from "./PrivateComparisonConsent";
 import { PrivateComparisonScope } from "./PrivateComparisonScope";
-import { invitationFromFragment, privateComparisonErrorMessage } from "./privateComparisonPresentation";
+import {
+  invitationFromFragment,
+  privateComparisonErrorMessage,
+  usablePrivateComparisonConsentManifest,
+} from "./privateComparisonPresentation";
 
 type AcceptPageState = "checking" | "preview" | "missing" | "unavailable";
 
@@ -74,6 +78,12 @@ export function PrivateComparisonAcceptPage() {
         )
           .then((value) => {
             if (!mountedRef.current) return;
+            if (
+              value.consent_version !== value.consent_manifest.consent_version ||
+              !usablePrivateComparisonConsentManifest(value.consent_manifest)
+            ) {
+              throw new Error("Private comparison consent manifest mismatch");
+            }
             setPreview(value);
             setState("preview");
           })
@@ -109,17 +119,17 @@ export function PrivateComparisonAcceptPage() {
 
   const accept = async () => {
     const token = tokenRef.current;
-    if (!token || !privateComparisonConsentComplete(consent) || pendingAction) return;
+    if (!token || !preview || !privateComparisonConsentComplete(consent) || pendingAction) return;
     setPendingAction("accept");
     try {
       const relation = await apiData(
         privateComparisonsAcceptPrivateComparisonInvitation({
           body: {
             token,
-            consent_version: 1,
-            acknowledge_identity_visibility: true,
-            acknowledge_academic_scope: true,
-            acknowledge_copy_risk: true,
+            consent_version: preview.consent_manifest.consent_version,
+            acknowledge_identity_visibility: consent.identity,
+            acknowledge_academic_scope: consent.academic,
+            acknowledge_copy_risk: consent.copyRisk,
           },
           throwOnError: throwOnApiError,
         }),
@@ -228,7 +238,7 @@ export function PrivateComparisonAcceptPage() {
         </p>
       </div>
 
-      <PrivateComparisonScope compact />
+      <PrivateComparisonScope manifest={preview.consent_manifest} compact />
       <PrivateComparisonConsent value={consent} onChange={setConsent} legend="Confirme ton accord pour accepter" />
       <div className="private-comparison-accept-actions">
         <button

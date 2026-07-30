@@ -43,7 +43,7 @@ def upgrade() -> None:
             name="ck_private_comparison_invitations_token_version",
         ),
         sa.CheckConstraint(
-            "consent_version = 1",
+            "consent_version = 2",
             name="ck_private_comparison_invitations_consent_version",
         ),
         sa.CheckConstraint(
@@ -148,7 +148,7 @@ def upgrade() -> None:
             name="ck_private_comparisons_canonical_pair",
         ),
         sa.CheckConstraint(
-            "consent_version = 1",
+            "consent_version = 2",
             name="ck_private_comparisons_consent_version",
         ),
         sa.CheckConstraint(

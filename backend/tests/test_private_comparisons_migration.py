@@ -97,7 +97,7 @@ def test_0029_refuses_downgrade_while_private_data_exists() -> None:
                 "created_at, expires_at) VALUES "
                 "('22222222-2222-4222-8222-222222222222', "
                 "'pci_abcdefghijklmnopqrstuvwx', "
-                "'11111111-1111-4111-8111-111111111111', :digest, 1, 1, 7, 30, "
+                "'11111111-1111-4111-8111-111111111111', :digest, 1, 2, 7, 30, "
                 "'2099-01-01 00:00:00', '2099-01-08 00:00:00')"
             ),
             {"digest": "a" * 64},

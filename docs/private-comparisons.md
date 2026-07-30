@@ -83,11 +83,35 @@ les actions principales conservent une cible tactile de 44 px et les règles
 reste strictement symétrique, sans écart, rang, gagnant ou code couleur
 compétitif.
 
-## Consentement version 1
+## Consentement version 2
 
-`PRIVATE_COMPARISON_CONSENT_VERSION = 1`. Le créateur consent lors de la
-création et le destinataire lors de l'acceptation. Les trois confirmations sont
-obligatoires et jamais implicites :
+`PRIVATE_COMPARISON_CONSENT_VERSION = 2`. La migration `0029`, jamais
+déployée, refuse désormais toute version différente. Le créateur consent lors
+de la création et le destinataire lors de l'acceptation. Les trois
+confirmations sont obligatoires, jamais implicites et toujours précédées du
+même manifeste canonique servi par le backend.
+
+`GET /api/v1/private-comparisons/consent-manifest` fournit ce manifeste au
+propriétaire principal lorsque le feature flag est ouvert. La création et la
+preview renvoient exactement la même structure et le frontend n'entretient
+aucune seconde liste de consentement. La création ou l'acceptation reste
+impossible si le manifeste est indisponible ou si sa version diverge.
+
+Le manifeste détaille explicitement :
+
+- l'identité officielle des deux participants ;
+- chaque champ du résumé général : moyenne, GPA, ECTS validés, nombre d'UE,
+  répartition des grades, fraîcheur et dernière vérification ;
+- chaque champ des UE communes : code, intitulé, année, semestre, moyenne,
+  grade, GPA, ECTS obtenus et alloués, validation et fraîcheur ;
+- les dates, le statut, la durée, l'expiration, la révocation immédiate et
+  l'historique relationnel minimal ;
+- l'absence d'évaluations détaillées, de libellés et coefficients
+  d'évaluation, d'UE ou notes non communes, de simulations, agenda, Parcours,
+  classement, score, commentaire, donnée tierce et partage public ;
+- le risque résiduel de copie ou de capture par l'autre participant.
+
+Les trois confirmations restent :
 
 - « Mon identité officielle sera visible par l'autre participant. »
 - « Nous verrons nos résumés académiques et nos UE communes, avec moyenne,
@@ -95,6 +119,11 @@ obligatoires et jamais implicites :
   n'est inclus dans cette version. »
 - « Chacun peut révoquer immédiatement la comparaison, mais l'autre participant
   peut recopier ou capturer ce qu'il voit avant la révocation. »
+
+Un test structurel compare les champs sérialisables de
+`PrivateComparisonDetailResponse` aux chemins déclarés par le manifeste. Tout
+nouveau champ exige donc une mise à jour explicite du périmètre, de sa copy et
+une nouvelle version de consentement avant publication.
 
 Le refus consomme le lien sans révéler au créateur l'identité de la personne qui
 l'a refusé. Une invitation transférée peut être utilisée par tout compte
@@ -140,6 +169,7 @@ déclenche jamais de synchronisation PASS ou COMPETENCES.
 
 | Méthode  | Route                                                 | Effet                                                         |
 | -------- | ----------------------------------------------------- | ------------------------------------------------------------- |
+| `GET`    | `/api/v1/private-comparisons/consent-manifest`        | Retourne le manifeste canonique V2 sans donnée académique     |
 | `POST`   | `/api/v1/private-comparisons/invitations`             | Crée une invitation et retourne le secret une fois            |
 | `GET`    | `/api/v1/private-comparisons/invitations`             | Liste les invitations du créateur sans secret ni destinataire |
 | `POST`   | `/api/v1/private-comparisons/invitations/preview`     | Prévisualise le créateur et le périmètre avec le secret       |

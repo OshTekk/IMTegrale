@@ -4,6 +4,12 @@ from datetime import timedelta
 from decimal import Decimal
 
 import pytest
+from app.api_models import (
+    PrivateComparisonDetailResponse,
+    PrivateComparisonOfficialIdentityResponse,
+    PrivateComparisonSummaryResponse,
+    PrivateComparisonUeSideResponse,
+)
 from app.config import Settings, get_settings
 from app.database import SessionLocal, utcnow
 from app.main import app, settings_config
@@ -15,6 +21,10 @@ from app.models import (
     PrivateComparisonInvitation,
     ShareToken,
     UeSetting,
+)
+from app.private_comparison_contract import (
+    PRIVATE_COMPARISON_CONSENT_VERSION,
+    private_comparison_consent_manifest,
 )
 from app.routers import private_comparisons as private_comparisons_router
 from app.security import (
@@ -31,7 +41,7 @@ from sqlalchemy import func, select
 from .conftest import csrf_headers
 
 CONSENT = {
-    "consent_version": 1,
+    "consent_version": PRIVATE_COMPARISON_CONSENT_VERSION,
     "acknowledge_identity_visibility": True,
     "acknowledge_academic_scope": True,
     "acknowledge_copy_risk": True,
@@ -265,18 +275,10 @@ def test_session_capability_is_minimal_and_primary_owner_scoped(
         auth_method="token",
     )
 
-    assert imt_owner.get("/api/v1/auth/session").json()["private_comparisons"] == {
-        "available": True
-    }
-    assert passkey_owner.get("/api/v1/auth/session").json()["private_comparisons"] == {
-        "available": True
-    }
-    assert token_owner.get("/api/v1/auth/session").json()["private_comparisons"] == {
-        "available": False
-    }
-    assert viewer.get("/api/v1/auth/session").json()["private_comparisons"] == {
-        "available": False
-    }
+    assert imt_owner.get("/api/v1/auth/session").json()["private_comparisons"] == {"available": True}
+    assert passkey_owner.get("/api/v1/auth/session").json()["private_comparisons"] == {"available": True}
+    assert token_owner.get("/api/v1/auth/session").json()["private_comparisons"] == {"available": False}
+    assert viewer.get("/api/v1/auth/session").json()["private_comparisons"] == {"available": False}
 
     with SessionLocal() as db:
         account = db.get(Account, imt_account_id)
@@ -293,9 +295,7 @@ def test_session_capability_is_minimal_and_primary_owner_scoped(
 def test_session_capability_is_false_for_flag_off_and_anonymous() -> None:
     owner, _account_id = _seed_owner("capability-off@example.test", "Inactive")
 
-    assert owner.get("/api/v1/auth/session").json()["private_comparisons"] == {
-        "available": False
-    }
+    assert owner.get("/api/v1/auth/session").json()["private_comparisons"] == {"available": False}
     assert TestClient(app, base_url="https://testserver").get("/api/v1/auth/session").json() == {
         "authenticated": False,
         "private_comparisons": {"available": False},
@@ -304,20 +304,125 @@ def test_session_capability_is_false_for_flag_off_and_anonymous() -> None:
 
 def test_feature_flag_hides_surface_before_body_parsing() -> None:
     assert settings_config.private_comparisons_enabled is False
-    response = TestClient(app, base_url="https://testserver").post(
+    client = TestClient(app, base_url="https://testserver")
+    response = client.post(
         "/api/v1/private-comparisons/invitations",
         content=b"not-json-private-marker",
         headers={"Content-Type": "application/json"},
     )
+    manifest = client.get("/api/v1/private-comparisons/consent-manifest")
 
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "ROUTE_NOT_FOUND"
+    assert manifest.status_code == 404
+    assert manifest.json()["detail"]["code"] == "ROUTE_NOT_FOUND"
     assert response.headers["Cache-Control"] == "private, no-store"
     assert response.headers["Pragma"] == "no-cache"
     assert response.headers["Vary"] == "Cookie"
     with SessionLocal() as db:
         assert db.scalar(select(func.count(PrivateComparisonInvitation.id))) == 0
         assert db.scalar(select(func.count(PrivateComparison.id))) == 0
+
+
+def test_consent_manifest_v2_is_complete_private_and_read_only(
+    comparisons_enabled,
+) -> None:  # noqa: ANN001
+    owner, _owner_id = _seed_owner("manifest-owner@example.test", "Ariane")
+
+    response = owner.get("/api/v1/private-comparisons/consent-manifest")
+
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "private, no-store"
+    assert response.headers["Vary"] == "Cookie"
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
+    manifest = response.json()
+    assert manifest["consent_version"] == 2
+    included_paths = {
+        field["response_path"] for section in manifest["included_sections"] for field in section["fields"]
+    }
+    assert {
+        "participant.identity.official_name",
+        "participant.summary.average",
+        "participant.summary.gpa",
+        "participant.summary.validated_ects",
+        "participant.summary.grade_distribution",
+        "participant.summary.academic_verified_at",
+        "participant.summary.freshness",
+        "participant.summary.ue_count",
+        "common_ues.official_code",
+        "common_ues.participant.title",
+        "common_ues.participant.year",
+        "common_ues.participant.semester",
+        "common_ues.participant.average",
+        "common_ues.participant.grade",
+        "common_ues.participant.gpa",
+        "common_ues.participant.earned_ects",
+        "common_ues.participant.allocated_ects",
+        "common_ues.participant.validated",
+        "common_ues.participant.freshness",
+        "common_ues.participant.verified_at",
+    } <= included_paths
+    excluded = {section["key"] for section in manifest["excluded_sections"]}
+    assert {
+        "detailed_assessments",
+        "assessment_labels",
+        "assessment_coefficients",
+        "non_common_results",
+        "simulations",
+        "agenda",
+        "learning",
+        "leaderboard_rank",
+        "competition_score",
+        "personal_comments",
+        "third_party_data",
+    } <= excluded
+    assert manifest["duration_and_revocation"]["immediate_revocation"]
+    assert manifest["duration_and_revocation"]["minimal_history"]
+    assert manifest["copy_risk"]
+    with SessionLocal() as db:
+        assert db.scalar(select(func.count(PrivateComparisonInvitation.id))) == 0
+        assert db.scalar(select(func.count(PrivateComparison.id))) == 0
+
+
+def test_only_consent_v2_can_create_an_invitation(comparisons_enabled) -> None:  # noqa: ANN001
+    owner, _owner_id = _seed_owner("manifest-version@example.test", "Basile")
+
+    for unsupported_version in (1, 3):
+        rejected = owner.post(
+            "/api/v1/private-comparisons/invitations",
+            json={**CONSENT, "consent_version": unsupported_version, "duration_days": 30},
+            headers=csrf_headers(owner),
+        )
+        assert rejected.status_code == 422
+    accepted = owner.post(
+        "/api/v1/private-comparisons/invitations",
+        json={**CONSENT, "consent_version": 2, "duration_days": 30},
+        headers=csrf_headers(owner),
+    )
+    assert accepted.status_code == 201
+    assert accepted.json()["consent_version"] == 2
+
+
+def test_consent_manifest_covers_every_private_detail_response_field() -> None:
+    declared_paths = {
+        field["response_path"]
+        for section in private_comparison_consent_manifest()["included_sections"]
+        for field in section["fields"]
+    }
+    response_paths = {
+        *(f"participant.identity.{name}" for name in PrivateComparisonOfficialIdentityResponse.model_fields),
+        *(f"participant.summary.{name}" for name in PrivateComparisonSummaryResponse.model_fields),
+        *(f"common_ues.participant.{name}" for name in PrivateComparisonUeSideResponse.model_fields),
+        "common_ues.official_code",
+        *(
+            f"relation.{name}"
+            for name in PrivateComparisonDetailResponse.model_fields
+            if name not in {"current", "other", "common_ues"}
+        ),
+    }
+
+    assert declared_paths == response_paths
+    assert declared_paths != response_paths | {"participant.summary.synthetic_future_field"}
 
 
 def test_owner_flow_is_one_shot_private_and_limited_to_common_ues(
@@ -337,15 +442,7 @@ def test_owner_flow_is_one_shot_private_and_limited_to_common_ues(
     created = _create_invitation(creator, duration_days=45)
     token = created["token"]
     assert token.startswith("pcinv1_")
-    assert created["scope"] == {
-        "official_identity": True,
-        "general_summary": True,
-        "common_ues": True,
-        "detailed_assessments": False,
-        "simulations": False,
-        "leaderboard": False,
-        "published": False,
-    }
+    assert created["consent_manifest"] == private_comparison_consent_manifest()
     with SessionLocal() as db:
         stored = db.scalar(
             select(PrivateComparisonInvitation).where(
@@ -368,6 +465,7 @@ def test_owner_flow_is_one_shot_private_and_limited_to_common_ues(
     )
     assert preview.status_code == 200
     assert preview.json()["creator"] == {"official_name": "Alice FIXTURE"}
+    assert preview.json()["consent_manifest"] == created["consent_manifest"]
     relation = _accept(recipient, token)
     assert relation["other_participant"] == {"official_name": "Alice FIXTURE"}
 
@@ -474,6 +572,7 @@ def test_delegated_sessions_cannot_use_any_private_comparison_surface(
     action_headers = csrf_headers(delegated)
 
     responses = [
+        delegated.get("/api/v1/private-comparisons/consent-manifest"),
         delegated.get("/api/v1/private-comparisons/invitations"),
         delegated.post(
             "/api/v1/private-comparisons/invitations/preview",
@@ -504,9 +603,9 @@ def test_delegated_sessions_cannot_use_any_private_comparison_surface(
 
     assert {response.status_code for response in responses} == {403}
     assert recipient.get(f"/api/v1/private-comparisons/{relation['public_id']}").status_code == 200
-    assert creator.get("/api/v1/private-comparisons/invitations").json()["invitations"][0][
-        "status"
-    ] == "active"
+    assert (
+        creator.get("/api/v1/private-comparisons/invitations").json()["invitations"][0]["status"] == "active"
+    )
 
 
 def test_anonymous_and_disabled_accounts_are_refused(comparisons_enabled) -> None:  # noqa: ANN001
@@ -1083,7 +1182,7 @@ def test_operations_alert_when_private_data_exists_while_flag_is_disabled() -> N
                 creator_account_id=first_id,
                 token_digest="o" * 64,
                 token_version=1,
-                consent_version=1,
+                consent_version=PRIVATE_COMPARISON_CONSENT_VERSION,
                 validity_days=7,
                 relationship_duration_days=30,
                 created_at=now,

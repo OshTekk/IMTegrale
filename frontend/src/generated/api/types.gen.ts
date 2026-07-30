@@ -4082,6 +4082,101 @@ export type PrivateComparisonCommonUeResponse = {
 };
 
 /**
+ * PrivateComparisonConsentExclusionResponse
+ */
+export type PrivateComparisonConsentExclusionResponse = {
+    /**
+     * Key
+     */
+    key: 'detailed_assessments' | 'assessment_labels' | 'assessment_coefficients' | 'non_common_results' | 'non_common_ues' | 'simulations' | 'agenda' | 'learning' | 'leaderboard_rank' | 'competition_score' | 'personal_comments' | 'third_party_data' | 'public_sharing';
+    /**
+     * Label
+     */
+    label: string;
+};
+
+/**
+ * PrivateComparisonConsentFieldResponse
+ */
+export type PrivateComparisonConsentFieldResponse = {
+    /**
+     * Label
+     */
+    label: string;
+    /**
+     * Response Path
+     */
+    response_path: string;
+};
+
+/**
+ * PrivateComparisonConsentLifecycleResponse
+ */
+export type PrivateComparisonConsentLifecycleResponse = {
+    /**
+     * Duration
+     */
+    duration: string;
+    /**
+     * Expiration
+     */
+    expiration: string;
+    /**
+     * Immediate Revocation
+     */
+    immediate_revocation: string;
+    /**
+     * Minimal History
+     */
+    minimal_history: string;
+    /**
+     * Private Only
+     */
+    private_only: string;
+};
+
+/**
+ * PrivateComparisonConsentManifestResponse
+ */
+export type PrivateComparisonConsentManifestResponse = {
+    /**
+     * Consent Version
+     */
+    consent_version: 2;
+    /**
+     * Copy Risk
+     */
+    copy_risk: string;
+    duration_and_revocation: PrivateComparisonConsentLifecycleResponse;
+    /**
+     * Excluded Sections
+     */
+    excluded_sections: Array<PrivateComparisonConsentExclusionResponse>;
+    /**
+     * Included Sections
+     */
+    included_sections: Array<PrivateComparisonConsentSectionResponse>;
+};
+
+/**
+ * PrivateComparisonConsentSectionResponse
+ */
+export type PrivateComparisonConsentSectionResponse = {
+    /**
+     * Fields
+     */
+    fields: Array<PrivateComparisonConsentFieldResponse>;
+    /**
+     * Key
+     */
+    key: 'official_identity' | 'general_summary' | 'common_ues' | 'relation_metadata';
+    /**
+     * Title
+     */
+    title: string;
+};
+
+/**
  * PrivateComparisonDetailResponse
  */
 export type PrivateComparisonDetailResponse = {
@@ -4169,6 +4264,7 @@ export type PrivateComparisonInvitationCreate = {
  * PrivateComparisonInvitationCreatedResponse
  */
 export type PrivateComparisonInvitationCreatedResponse = {
+    consent_manifest: PrivateComparisonConsentManifestResponse;
     /**
      * Consent Version
      */
@@ -4185,7 +4281,6 @@ export type PrivateComparisonInvitationCreatedResponse = {
      * Relationship Duration Days
      */
     relationship_duration_days: number;
-    scope: PrivateComparisonScopeResponse;
     /**
      * Token
      */
@@ -4206,6 +4301,7 @@ export type PrivateComparisonInvitationListResponse = {
  * PrivateComparisonInvitationPreviewResponse
  */
 export type PrivateComparisonInvitationPreviewResponse = {
+    consent_manifest: PrivateComparisonConsentManifestResponse;
     /**
      * Consent Version
      */
@@ -4219,7 +4315,6 @@ export type PrivateComparisonInvitationPreviewResponse = {
      * Relationship Duration Days
      */
     relationship_duration_days: number;
-    scope: PrivateComparisonScopeResponse;
 };
 
 /**
@@ -4315,40 +4410,6 @@ export type PrivateComparisonRelationResponse = {
      * Status
      */
     status: 'active' | 'expired' | 'revoked';
-};
-
-/**
- * PrivateComparisonScopeResponse
- */
-export type PrivateComparisonScopeResponse = {
-    /**
-     * Common Ues
-     */
-    common_ues: true;
-    /**
-     * Detailed Assessments
-     */
-    detailed_assessments: false;
-    /**
-     * General Summary
-     */
-    general_summary: true;
-    /**
-     * Leaderboard
-     */
-    leaderboard: false;
-    /**
-     * Official Identity
-     */
-    official_identity: true;
-    /**
-     * Published
-     */
-    published: false;
-    /**
-     * Simulations
-     */
-    simulations: false;
 };
 
 /**
@@ -10240,6 +10301,63 @@ export type PrivateComparisonsGetPrivateComparisonsResponses = {
 };
 
 export type PrivateComparisonsGetPrivateComparisonsResponse = PrivateComparisonsGetPrivateComparisonsResponses[keyof PrivateComparisonsGetPrivateComparisonsResponses];
+
+export type PrivateComparisonsGetPrivateComparisonConsentManifestData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/private-comparisons/consent-manifest';
+};
+
+export type PrivateComparisonsGetPrivateComparisonConsentManifestErrors = {
+    /**
+     * Requête refusée
+     */
+    400: ApiErrorEnvelope;
+    /**
+     * Authentification requise
+     */
+    401: ApiErrorEnvelope;
+    /**
+     * Action interdite
+     */
+    403: ApiErrorEnvelope;
+    /**
+     * Ressource introuvable
+     */
+    404: ApiErrorEnvelope;
+    /**
+     * Conflit d'état
+     */
+    409: ApiErrorEnvelope;
+    /**
+     * Requête trop volumineuse
+     */
+    413: ApiErrorEnvelope;
+    /**
+     * Validation impossible
+     */
+    422: ApiErrorEnvelope;
+    /**
+     * Limite temporaire atteinte
+     */
+    429: ApiErrorEnvelope;
+    /**
+     * Service temporairement indisponible
+     */
+    503: ApiErrorEnvelope;
+};
+
+export type PrivateComparisonsGetPrivateComparisonConsentManifestError = PrivateComparisonsGetPrivateComparisonConsentManifestErrors[keyof PrivateComparisonsGetPrivateComparisonConsentManifestErrors];
+
+export type PrivateComparisonsGetPrivateComparisonConsentManifestResponses = {
+    /**
+     * Successful Response
+     */
+    200: PrivateComparisonConsentManifestResponse;
+};
+
+export type PrivateComparisonsGetPrivateComparisonConsentManifestResponse = PrivateComparisonsGetPrivateComparisonConsentManifestResponses[keyof PrivateComparisonsGetPrivateComparisonConsentManifestResponses];
 
 export type PrivateComparisonsGetPrivateComparisonInvitationsData = {
     body?: never;

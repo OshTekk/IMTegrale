@@ -107,6 +107,88 @@ const actors: Record<ComparisonActor, SyntheticActor> = {
   },
 };
 
+const consentManifest = {
+  consent_version: 2,
+  included_sections: [
+    {
+      key: "official_identity",
+      title: "Identité",
+      fields: [
+        {
+          response_path: "participant.identity.official_name",
+          label: "Identité officielle de chaque participant",
+        },
+      ],
+    },
+    {
+      key: "general_summary",
+      title: "Résumé général",
+      fields: [
+        { response_path: "participant.summary.average", label: "Moyenne générale" },
+        { response_path: "participant.summary.gpa", label: "GPA général" },
+        { response_path: "participant.summary.validated_ects", label: "ECTS validés" },
+        { response_path: "participant.summary.grade_distribution", label: "Répartition des grades" },
+        { response_path: "participant.summary.academic_verified_at", label: "Dernière vérification" },
+        { response_path: "participant.summary.freshness", label: "Fraîcheur" },
+        { response_path: "participant.summary.ue_count", label: "Nombre d’UE" },
+      ],
+    },
+    {
+      key: "common_ues",
+      title: "UE communes",
+      fields: [
+        { response_path: "common_ues.official_code", label: "Code officiel" },
+        { response_path: "common_ues.participant.title", label: "Intitulé" },
+        { response_path: "common_ues.participant.year", label: "Année" },
+        { response_path: "common_ues.participant.semester", label: "Semestre" },
+        { response_path: "common_ues.participant.average", label: "Moyenne" },
+        { response_path: "common_ues.participant.grade", label: "Grade" },
+        { response_path: "common_ues.participant.gpa", label: "GPA" },
+        { response_path: "common_ues.participant.earned_ects", label: "ECTS obtenus" },
+        { response_path: "common_ues.participant.allocated_ects", label: "ECTS alloués" },
+        { response_path: "common_ues.participant.validated", label: "État de validation" },
+        { response_path: "common_ues.participant.freshness", label: "Fraîcheur" },
+        { response_path: "common_ues.participant.verified_at", label: "Dernière vérification" },
+      ],
+    },
+    {
+      key: "relation_metadata",
+      title: "Relation privée",
+      fields: [
+        { response_path: "relation.public_id", label: "Identifiant opaque" },
+        { response_path: "relation.status", label: "Statut" },
+        { response_path: "relation.activated_at", label: "Activation" },
+        { response_path: "relation.expires_at", label: "Expiration" },
+        { response_path: "relation.consent_version", label: "Version du consentement" },
+        { response_path: "relation.calculated_at", label: "Date de calcul" },
+      ],
+    },
+  ],
+  excluded_sections: [
+    { key: "detailed_assessments", label: "Détail des évaluations" },
+    { key: "assessment_labels", label: "Libellés des évaluations" },
+    { key: "assessment_coefficients", label: "Coefficients des évaluations" },
+    { key: "non_common_results", label: "Notes qui ne sont pas communes" },
+    { key: "non_common_ues", label: "UE qui ne sont pas communes" },
+    { key: "simulations", label: "Simulations" },
+    { key: "agenda", label: "Agenda" },
+    { key: "learning", label: "Parcours" },
+    { key: "leaderboard_rank", label: "Rang dans le classement" },
+    { key: "competition_score", label: "Score de compétition" },
+    { key: "personal_comments", label: "Commentaires personnels" },
+    { key: "third_party_data", label: "Données d’un troisième étudiant" },
+    { key: "public_sharing", label: "Publication ou partage public" },
+  ],
+  duration_and_revocation: {
+    duration: "La durée choisie commence après l’acceptation et ne dépasse jamais 90 jours.",
+    expiration: "La consultation cesse automatiquement à l’expiration.",
+    immediate_revocation: "Chaque participant peut révoquer immédiatement la comparaison.",
+    minimal_history: "L’historique conserve seulement le statut et les dates.",
+    private_only: "La comparaison reste privée aux deux participants.",
+  },
+  copy_risk: "L’autre participant peut recopier ou capturer les informations visibles avant une révocation.",
+};
+
 function opaque(prefix: "pc_" | "pci_", bytes = 18) {
   return `${prefix}${randomBytes(bytes).toString("base64url")}`;
 }
@@ -260,7 +342,7 @@ function relationDetail(relation: SyntheticRelation, actor: ComparisonActor) {
   return {
     public_id: relation.publicId,
     status: "active",
-    consent_version: 1,
+    consent_version: 2,
     activated_at: relation.activatedAt,
     expires_at: relation.expiresAt,
     calculated_at: "2099-07-29T12:00:00Z",
@@ -319,6 +401,10 @@ export async function installFakePrivateComparisonApi(
     const body = request.postDataJSON() as Record<string, unknown> | null;
     if (body && typeof body.token === "string") state.tokenBodyPosts += 1;
 
+    if (url.pathname === "/api/v1/private-comparisons/consent-manifest" && request.method() === "GET") {
+      await json(route, consentManifest);
+      return;
+    }
     if (url.pathname === "/api/v1/private-comparisons/invitations" && request.method() === "POST") {
       state.createCalls += 1;
       const token = invitationToken();
@@ -337,18 +423,10 @@ export async function installFakePrivateComparisonApi(
         {
           public_id: invitation.publicId,
           token,
-          consent_version: 1,
+          consent_version: 2,
           expires_at: invitation.expiresAt,
           relationship_duration_days: invitation.durationDays,
-          scope: {
-            official_identity: true,
-            general_summary: true,
-            common_ues: true,
-            detailed_assessments: false,
-            simulations: false,
-            leaderboard: false,
-            published: false,
-          },
+          consent_manifest: consentManifest,
         },
         201,
       );
@@ -397,16 +475,8 @@ export async function installFakePrivateComparisonApi(
           creator: { official_name: creator.name },
           expires_at: invitation.expiresAt,
           relationship_duration_days: invitation.durationDays,
-          consent_version: 1,
-          scope: {
-            official_identity: true,
-            general_summary: true,
-            common_ues: true,
-            detailed_assessments: false,
-            simulations: false,
-            leaderboard: false,
-            published: false,
-          },
+          consent_version: 2,
+          consent_manifest: consentManifest,
         });
         return;
       }

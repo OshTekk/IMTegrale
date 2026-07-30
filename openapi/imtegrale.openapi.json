@@ -8064,6 +8064,166 @@
         "title": "PrivateComparisonCommonUeResponse",
         "type": "object"
       },
+      "PrivateComparisonConsentExclusionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "enum": [
+              "detailed_assessments",
+              "assessment_labels",
+              "assessment_coefficients",
+              "non_common_results",
+              "non_common_ues",
+              "simulations",
+              "agenda",
+              "learning",
+              "leaderboard_rank",
+              "competition_score",
+              "personal_comments",
+              "third_party_data",
+              "public_sharing"
+            ],
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "label"
+        ],
+        "title": "PrivateComparisonConsentExclusionResponse",
+        "type": "object"
+      },
+      "PrivateComparisonConsentFieldResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "response_path": {
+            "title": "Response Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "response_path",
+          "label"
+        ],
+        "title": "PrivateComparisonConsentFieldResponse",
+        "type": "object"
+      },
+      "PrivateComparisonConsentLifecycleResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "duration": {
+            "title": "Duration",
+            "type": "string"
+          },
+          "expiration": {
+            "title": "Expiration",
+            "type": "string"
+          },
+          "immediate_revocation": {
+            "title": "Immediate Revocation",
+            "type": "string"
+          },
+          "minimal_history": {
+            "title": "Minimal History",
+            "type": "string"
+          },
+          "private_only": {
+            "title": "Private Only",
+            "type": "string"
+          }
+        },
+        "required": [
+          "duration",
+          "expiration",
+          "immediate_revocation",
+          "minimal_history",
+          "private_only"
+        ],
+        "title": "PrivateComparisonConsentLifecycleResponse",
+        "type": "object"
+      },
+      "PrivateComparisonConsentManifestResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "consent_version": {
+            "const": 2,
+            "title": "Consent Version",
+            "type": "integer"
+          },
+          "copy_risk": {
+            "title": "Copy Risk",
+            "type": "string"
+          },
+          "duration_and_revocation": {
+            "$ref": "#/components/schemas/PrivateComparisonConsentLifecycleResponse"
+          },
+          "excluded_sections": {
+            "items": {
+              "$ref": "#/components/schemas/PrivateComparisonConsentExclusionResponse"
+            },
+            "title": "Excluded Sections",
+            "type": "array"
+          },
+          "included_sections": {
+            "items": {
+              "$ref": "#/components/schemas/PrivateComparisonConsentSectionResponse"
+            },
+            "title": "Included Sections",
+            "type": "array"
+          }
+        },
+        "required": [
+          "consent_version",
+          "included_sections",
+          "excluded_sections",
+          "duration_and_revocation",
+          "copy_risk"
+        ],
+        "title": "PrivateComparisonConsentManifestResponse",
+        "type": "object"
+      },
+      "PrivateComparisonConsentSectionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/PrivateComparisonConsentFieldResponse"
+            },
+            "title": "Fields",
+            "type": "array"
+          },
+          "key": {
+            "enum": [
+              "official_identity",
+              "general_summary",
+              "common_ues",
+              "relation_metadata"
+            ],
+            "title": "Key",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "title",
+          "fields"
+        ],
+        "title": "PrivateComparisonConsentSectionResponse",
+        "type": "object"
+      },
       "PrivateComparisonDetailResponse": {
         "additionalProperties": false,
         "properties": {
@@ -8207,6 +8367,9 @@
       "PrivateComparisonInvitationCreatedResponse": {
         "additionalProperties": false,
         "properties": {
+          "consent_manifest": {
+            "$ref": "#/components/schemas/PrivateComparisonConsentManifestResponse"
+          },
           "consent_version": {
             "title": "Consent Version",
             "type": "integer"
@@ -8224,9 +8387,6 @@
             "title": "Relationship Duration Days",
             "type": "integer"
           },
-          "scope": {
-            "$ref": "#/components/schemas/PrivateComparisonScopeResponse"
-          },
           "token": {
             "maxLength": 50,
             "minLength": 50,
@@ -8241,7 +8401,7 @@
           "expires_at",
           "relationship_duration_days",
           "consent_version",
-          "scope"
+          "consent_manifest"
         ],
         "title": "PrivateComparisonInvitationCreatedResponse",
         "type": "object"
@@ -8266,6 +8426,9 @@
       "PrivateComparisonInvitationPreviewResponse": {
         "additionalProperties": false,
         "properties": {
+          "consent_manifest": {
+            "$ref": "#/components/schemas/PrivateComparisonConsentManifestResponse"
+          },
           "consent_version": {
             "title": "Consent Version",
             "type": "integer"
@@ -8281,9 +8444,6 @@
           "relationship_duration_days": {
             "title": "Relationship Duration Days",
             "type": "integer"
-          },
-          "scope": {
-            "$ref": "#/components/schemas/PrivateComparisonScopeResponse"
           }
         },
         "required": [
@@ -8291,7 +8451,7 @@
           "expires_at",
           "relationship_duration_days",
           "consent_version",
-          "scope"
+          "consent_manifest"
         ],
         "title": "PrivateComparisonInvitationPreviewResponse",
         "type": "object"
@@ -8466,57 +8626,6 @@
           "freshness"
         ],
         "title": "PrivateComparisonRelationResponse",
-        "type": "object"
-      },
-      "PrivateComparisonScopeResponse": {
-        "additionalProperties": false,
-        "properties": {
-          "common_ues": {
-            "const": true,
-            "title": "Common Ues",
-            "type": "boolean"
-          },
-          "detailed_assessments": {
-            "const": false,
-            "title": "Detailed Assessments",
-            "type": "boolean"
-          },
-          "general_summary": {
-            "const": true,
-            "title": "General Summary",
-            "type": "boolean"
-          },
-          "leaderboard": {
-            "const": false,
-            "title": "Leaderboard",
-            "type": "boolean"
-          },
-          "official_identity": {
-            "const": true,
-            "title": "Official Identity",
-            "type": "boolean"
-          },
-          "published": {
-            "const": false,
-            "title": "Published",
-            "type": "boolean"
-          },
-          "simulations": {
-            "const": false,
-            "title": "Simulations",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "official_identity",
-          "general_summary",
-          "common_ues",
-          "detailed_assessments",
-          "simulations",
-          "leaderboard",
-          "published"
-        ],
-        "title": "PrivateComparisonScopeResponse",
         "type": "object"
       },
       "PrivateComparisonSummaryResponse": {
@@ -20434,6 +20543,117 @@
           }
         },
         "summary": "Get Private Comparisons",
+        "tags": [
+          "private-comparisons"
+        ]
+      }
+    },
+    "/api/v1/private-comparisons/consent-manifest": {
+      "get": {
+        "operationId": "private_comparisons_get_private_comparison_consent_manifest",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateComparisonConsentManifestResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requête refusée"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authentification requise"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Action interdite"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Ressource introuvable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflit d'état"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requête trop volumineuse"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Validation impossible"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Limite temporaire atteinte"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Service temporairement indisponible"
+          }
+        },
+        "summary": "Get Private Comparison Consent Manifest",
         "tags": [
           "private-comparisons"
         ]

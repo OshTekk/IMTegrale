@@ -249,11 +249,14 @@ class AutonomousSyncSettingsResponse(ApiModel):
     available: bool
     enrollment_available: bool
     runtime_ready: bool
-    unavailable_reason: Literal[
-        "unavailable",
-        "maintenance",
-        "reenrollment_required",
-    ] | None
+    unavailable_reason: (
+        Literal[
+            "unavailable",
+            "maintenance",
+            "reenrollment_required",
+        ]
+        | None
+    )
     configured: bool
     state: Literal["active", "invalid", "revoked"] | None
     activation_pending: bool
@@ -587,14 +590,50 @@ class LeaderboardResponse(ApiModel):
     board: LeaderboardBoardResponse | None
 
 
-class PrivateComparisonScopeResponse(ApiModel):
-    official_identity: Literal[True]
-    general_summary: Literal[True]
-    common_ues: Literal[True]
-    detailed_assessments: Literal[False]
-    simulations: Literal[False]
-    leaderboard: Literal[False]
-    published: Literal[False]
+class PrivateComparisonConsentFieldResponse(ApiModel):
+    response_path: str
+    label: str
+
+
+class PrivateComparisonConsentSectionResponse(ApiModel):
+    key: Literal["official_identity", "general_summary", "common_ues", "relation_metadata"]
+    title: str
+    fields: list[PrivateComparisonConsentFieldResponse]
+
+
+class PrivateComparisonConsentExclusionResponse(ApiModel):
+    key: Literal[
+        "detailed_assessments",
+        "assessment_labels",
+        "assessment_coefficients",
+        "non_common_results",
+        "non_common_ues",
+        "simulations",
+        "agenda",
+        "learning",
+        "leaderboard_rank",
+        "competition_score",
+        "personal_comments",
+        "third_party_data",
+        "public_sharing",
+    ]
+    label: str
+
+
+class PrivateComparisonConsentLifecycleResponse(ApiModel):
+    duration: str
+    expiration: str
+    immediate_revocation: str
+    minimal_history: str
+    private_only: str
+
+
+class PrivateComparisonConsentManifestResponse(ApiModel):
+    consent_version: Literal[2]
+    included_sections: list[PrivateComparisonConsentSectionResponse]
+    excluded_sections: list[PrivateComparisonConsentExclusionResponse]
+    duration_and_revocation: PrivateComparisonConsentLifecycleResponse
+    copy_risk: str
 
 
 class PrivateComparisonInvitationCreatedResponse(ApiModel):
@@ -607,7 +646,7 @@ class PrivateComparisonInvitationCreatedResponse(ApiModel):
     expires_at: datetime
     relationship_duration_days: int
     consent_version: int
-    scope: PrivateComparisonScopeResponse
+    consent_manifest: PrivateComparisonConsentManifestResponse
 
 
 class PrivateComparisonInvitationResponse(ApiModel):
@@ -631,7 +670,7 @@ class PrivateComparisonInvitationPreviewResponse(ApiModel):
     expires_at: datetime
     relationship_duration_days: int
     consent_version: int
-    scope: PrivateComparisonScopeResponse
+    consent_manifest: PrivateComparisonConsentManifestResponse
 
 
 class PrivateComparisonRelationResponse(ApiModel):

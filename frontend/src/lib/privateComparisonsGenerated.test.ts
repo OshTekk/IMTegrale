@@ -4,17 +4,43 @@ import {
   privateComparisonsCreatePrivateComparisonInvitation,
 } from "../generated/api/sdk.gen";
 import type {
+  PrivateComparisonConsentManifestResponse,
   PrivateComparisonInvitationCreatedResponse,
   PrivateComparisonInvitationListResponse,
 } from "../generated/api/types.gen";
 import { apiData, throwOnApiError } from "./generatedApi";
 
 const consent = {
-  consent_version: 1,
+  consent_version: 2,
   acknowledge_identity_visibility: true,
   acknowledge_academic_scope: true,
   acknowledge_copy_risk: true,
 } as const;
+
+const consentManifest: PrivateComparisonConsentManifestResponse = {
+  consent_version: 2,
+  included_sections: [
+    {
+      key: "official_identity",
+      title: "Identité",
+      fields: [
+        {
+          response_path: "participant.identity.official_name",
+          label: "Identité officielle de chaque participant",
+        },
+      ],
+    },
+  ],
+  excluded_sections: [{ key: "detailed_assessments", label: "Détail des évaluations" }],
+  duration_and_revocation: {
+    duration: "Durée bornée.",
+    expiration: "Expiration automatique.",
+    immediate_revocation: "Révocation immédiate.",
+    minimal_history: "Historique minimal.",
+    private_only: "Consultation privée.",
+  },
+  copy_risk: "L’autre participant peut recopier les informations visibles.",
+};
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -28,16 +54,8 @@ describe("private comparison generated contract", () => {
       token: oneShot,
       expires_at: "2099-01-08T00:00:00Z",
       relationship_duration_days: 30,
-      consent_version: 1,
-      scope: {
-        official_identity: true,
-        general_summary: true,
-        common_ues: true,
-        detailed_assessments: false,
-        simulations: false,
-        leaderboard: false,
-        published: false,
-      },
+      consent_version: 2,
+      consent_manifest: consentManifest,
     };
     vi.stubGlobal(
       "fetch",

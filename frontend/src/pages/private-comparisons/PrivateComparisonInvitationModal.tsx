@@ -1,6 +1,9 @@
 import { Copy, Link2, LockKeyhole } from "lucide-react";
 import { useRef, useState } from "react";
-import type { PrivateComparisonInvitationCreatedResponse } from "../../generated/api/types.gen";
+import type {
+  PrivateComparisonConsentManifestResponse,
+  PrivateComparisonInvitationCreatedResponse,
+} from "../../generated/api/types.gen";
 import { privateComparisonsCreatePrivateComparisonInvitation } from "../../generated/api/sdk.gen";
 import { apiData, throwOnApiError } from "../../lib/generatedApi";
 import { Modal } from "../../components/Modal";
@@ -14,17 +17,23 @@ import {
   invitationUrl,
   PRIVATE_COMPARISON_DURATIONS,
   privateComparisonErrorMessage,
+  usablePrivateComparisonConsentManifest,
   validInvitationToken,
 } from "./privateComparisonPresentation";
+import { PrivateComparisonScope } from "./PrivateComparisonScope";
 
 export function PrivateComparisonInvitationModal({
   open,
   onClose,
   onCreated,
+  manifest,
+  manifestPending,
 }: {
   open: boolean;
   onClose: () => void;
   onCreated: () => void;
+  manifest: PrivateComparisonConsentManifestResponse | null;
+  manifestPending: boolean;
 }) {
   const [duration, setDuration] = useState<(typeof PRIVATE_COMPARISON_DURATIONS)[number]>(30);
   const [consent, setConsent] = useState<PrivateComparisonConsentState>(emptyPrivateComparisonConsent);
@@ -33,6 +42,7 @@ export function PrivateComparisonInvitationModal({
   const [error, setError] = useState<string | null>(null);
   const [copyStatus, setCopyStatus] = useState("");
   const durationRef = useRef<HTMLSelectElement>(null);
+  const usableManifest = manifest && usablePrivateComparisonConsentManifest(manifest) ? manifest : null;
 
   const clearSensitiveState = () => {
     setCreated(null);
@@ -49,17 +59,17 @@ export function PrivateComparisonInvitationModal({
   };
 
   const create = async () => {
-    if (!privateComparisonConsentComplete(consent)) return;
+    if (!usableManifest || !privateComparisonConsentComplete(consent)) return;
     setPending(true);
     setError(null);
     try {
       const response = await apiData(
         privateComparisonsCreatePrivateComparisonInvitation({
           body: {
-            consent_version: 1,
-            acknowledge_identity_visibility: true,
-            acknowledge_academic_scope: true,
-            acknowledge_copy_risk: true,
+            consent_version: usableManifest.consent_version,
+            acknowledge_identity_visibility: consent.identity,
+            acknowledge_academic_scope: consent.academic,
+            acknowledge_copy_risk: consent.copyRisk,
             duration_days: duration,
           },
           throwOnError: throwOnApiError,
@@ -67,6 +77,13 @@ export function PrivateComparisonInvitationModal({
       );
       if (!validInvitationToken(response.token)) {
         throw new Error("Invalid private comparison invitation token");
+      }
+      if (
+        response.consent_version !== usableManifest.consent_version ||
+        !usablePrivateComparisonConsentManifest(response.consent_manifest) ||
+        response.consent_manifest.consent_version !== usableManifest.consent_version
+      ) {
+        throw new Error("Private comparison consent manifest changed");
       }
       setCreated(response);
       onCreated();
@@ -135,6 +152,19 @@ export function PrivateComparisonInvitationModal({
             </button>
           </footer>
         </div>
+      ) : !usableManifest ? (
+        <div className="private-comparison-manifest-unavailable">
+          <p role={manifestPending ? "status" : "alert"}>
+            {manifestPending
+              ? "Chargement du périmètre de consentement…"
+              : "Le périmètre de consentement est indisponible. Aucune invitation ne peut être créée."}
+          </p>
+          <footer className="modal-actions">
+            <button className="secondary-button" type="button" onClick={close}>
+              Fermer
+            </button>
+          </footer>
+        </div>
       ) : (
         <form
           className="private-comparison-invitation-form"
@@ -163,6 +193,7 @@ export function PrivateComparisonInvitationModal({
             <p>Le destinataire doit appartenir au même cursus et à la même promotion.</p>
             <p>La durée choisie commence uniquement après son acceptation.</p>
           </div>
+          <PrivateComparisonScope manifest={usableManifest} compact />
           <PrivateComparisonConsent value={consent} onChange={setConsent} />
           {error && (
             <p className="form-error" role="alert">

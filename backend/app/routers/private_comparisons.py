@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.api_models import (
     OkResponse,
+    PrivateComparisonConsentManifestResponse,
     PrivateComparisonDetailResponse,
     PrivateComparisonInvitationCreatedResponse,
     PrivateComparisonInvitationListResponse,
@@ -15,6 +16,7 @@ from app.api_models import (
 )
 from app.config import Settings, get_settings
 from app.database import get_db
+from app.private_comparison_contract import private_comparison_consent_manifest
 from app.schemas import (
     PrivateComparisonInvitationAccept,
     PrivateComparisonInvitationCreate,
@@ -37,7 +39,6 @@ from app.services.private_comparisons import (
     list_comparisons,
     list_invitations,
     preview_invitation,
-    private_comparison_scope,
     raise_private_comparison_invitation_unavailable,
     require_private_comparisons_enabled,
     revoke_comparison,
@@ -76,6 +77,17 @@ def _relation_view(db: Session, account_id: str, public_id: str) -> dict:
             },
         )
     return relation
+
+
+@router.get(
+    "/consent-manifest",
+    response_model=PrivateComparisonConsentManifestResponse,
+)
+def get_private_comparison_consent_manifest(
+    _auth: AuthContext = Depends(require_primary_owner),
+    _settings: Settings = Depends(_feature_settings),
+) -> dict:
+    return private_comparison_consent_manifest()
 
 
 @router.post(
@@ -117,7 +129,7 @@ def create_private_comparison_invitation(
         "expires_at": invitation.expires_at,
         "relationship_duration_days": invitation.relationship_duration_days,
         "consent_version": invitation.consent_version,
-        "scope": private_comparison_scope(),
+        "consent_manifest": private_comparison_consent_manifest(),
     }
 
 

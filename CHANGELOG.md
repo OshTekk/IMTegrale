@@ -14,6 +14,9 @@
   et Axe, sans activation ni déploiement.
 - correction C2 des invitations antérieures à un cycle terminé : borne
   terminale stricte, bearer obsolète invalidé et courses PostgreSQL sérialisées.
+- consentement Comparaisons privées V2 issu d'un manifeste backend canonique :
+  champs inclus et catégories exclues exhaustifs, création et acceptation
+  fermées en cas d'indisponibilité ou de divergence.
 
 ## 4.8.0 - 23 juillet 2026
 

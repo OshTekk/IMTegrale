@@ -31,6 +31,7 @@ from app.private_comparison_contract import (
     PRIVATE_COMPARISON_TOKEN_VERSION,
     PrivateComparisonInvitationStatus,
     PrivateComparisonStatus,
+    private_comparison_consent_manifest,
     valid_private_comparison_invitation_public_id,
     valid_private_comparison_public_id,
     valid_private_comparison_token,
@@ -49,18 +50,6 @@ _ACADEMIC_SEMESTERS = frozenset({"S5", "S6", "S7", "S8", "S9", "S10"})
 
 class SupersededPrivateComparisonInvitation(Exception):
     """The bearer predates the terminal boundary of this account pair."""
-
-
-def private_comparison_scope() -> dict:
-    return {
-        "official_identity": True,
-        "general_summary": True,
-        "common_ues": True,
-        "detailed_assessments": False,
-        "simulations": False,
-        "leaderboard": False,
-        "published": False,
-    }
 
 
 def require_private_comparisons_enabled(settings: Settings) -> None:
@@ -428,7 +417,7 @@ def preview_invitation(
         "expires_at": invitation.expires_at,
         "relationship_duration_days": invitation.relationship_duration_days,
         "consent_version": invitation.consent_version,
-        "scope": private_comparison_scope(),
+        "consent_manifest": private_comparison_consent_manifest(),
     }
 
 

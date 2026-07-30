@@ -11,6 +11,7 @@ from alembic.runtime.migration import MigrationContext
 from app.config import get_settings
 from app.database import SessionLocal, engine, utcnow
 from app.models import Account, Note, PrivateComparison, PrivateComparisonInvitation, UeSetting
+from app.private_comparison_contract import PRIVATE_COMPARISON_CONSENT_VERSION
 from app.services.private_comparisons import (
     SupersededPrivateComparisonInvitation,
     accept_invitation,
@@ -93,7 +94,7 @@ def _invitation(creator_id: str) -> tuple[str, str]:
         invitation, token = create_invitation(
             db,
             creator_account_id=creator_id,
-            consent_version=1,
+            consent_version=PRIVATE_COMPARISON_CONSENT_VERSION,
             duration_days=30,
             settings=get_settings(),
         )
@@ -108,7 +109,7 @@ def _accepted_relation(creator_id: str, recipient_id: str) -> str:
             db,
             accepter_account_id=recipient_id,
             raw_token=token,
-            consent_version=1,
+            consent_version=PRIVATE_COMPARISON_CONSENT_VERSION,
             settings=get_settings(),
         )
         db.commit()
@@ -130,7 +131,7 @@ def test_postgres_concurrent_acceptance_consumes_invitation_once() -> None:
                     db,
                     accepter_account_id=recipient_id,
                     raw_token=token,
-                    consent_version=1,
+                    consent_version=PRIVATE_COMPARISON_CONSENT_VERSION,
                     settings=get_settings(),
                 )
                 db.commit()
@@ -168,7 +169,7 @@ def test_postgres_two_invitations_cannot_create_two_relations_for_one_pair() -> 
                     db,
                     accepter_account_id=recipient_id,
                     raw_token=token,
-                    consent_version=1,
+                    consent_version=PRIVATE_COMPARISON_CONSENT_VERSION,
                     settings=get_settings(),
                 )
                 db.commit()
@@ -228,7 +229,7 @@ def test_postgres_stale_and_fresh_reactivation_only_uses_fresh_consent() -> None
                     db,
                     accepter_account_id=recipient_id,
                     raw_token=token,
-                    consent_version=1,
+                    consent_version=PRIVATE_COMPARISON_CONSENT_VERSION,
                     settings=get_settings(),
                 )
                 db.commit()
@@ -278,7 +279,7 @@ def test_postgres_stale_acceptance_serializes_with_relation_revocation() -> None
                     db,
                     accepter_account_id=recipient_id,
                     raw_token=stale_token,
-                    consent_version=1,
+                    consent_version=PRIVATE_COMPARISON_CONSENT_VERSION,
                     settings=get_settings(),
                 )
                 db.commit()
@@ -330,7 +331,7 @@ def test_postgres_two_fresh_invitations_create_one_new_cycle() -> None:
                     db,
                     accepter_account_id=recipient_id,
                     raw_token=token,
-                    consent_version=1,
+                    consent_version=PRIVATE_COMPARISON_CONSENT_VERSION,
                     settings=get_settings(),
                 )
                 db.commit()
@@ -382,7 +383,7 @@ def test_postgres_concurrent_creation_cannot_exceed_active_invitation_limit() ->
                 invitation, _token = create_invitation(
                     db,
                     creator_account_id=creator_id,
-                    consent_version=1,
+                    consent_version=PRIVATE_COMPARISON_CONSENT_VERSION,
                     duration_days=30,
                     settings=get_settings(),
                 )
@@ -417,7 +418,7 @@ def test_postgres_acceptance_and_revocation_have_one_terminal_outcome() -> None:
                     db,
                     accepter_account_id=recipient_id,
                     raw_token=token,
-                    consent_version=1,
+                    consent_version=PRIVATE_COMPARISON_CONSENT_VERSION,
                     settings=get_settings(),
                 )
                 db.commit()
@@ -471,7 +472,7 @@ def test_postgres_acceptance_and_creator_deletion_leave_no_orphan() -> None:
                     db,
                     accepter_account_id=recipient_id,
                     raw_token=token,
-                    consent_version=1,
+                    consent_version=PRIVATE_COMPARISON_CONSENT_VERSION,
                     settings=get_settings(),
                 )
                 db.commit()

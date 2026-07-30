@@ -14,7 +14,13 @@ import { EmptyState } from "../../components/EmptyState";
 import { useToast } from "../../components/Toast";
 import { formatDate } from "../../lib/format";
 import { apiData, throwOnApiError } from "../../lib/generatedApi";
-import { queryKeys, usePrivateComparisonInvitations, usePrivateComparisons, useSession } from "../../lib/queries";
+import {
+  queryKeys,
+  usePrivateComparisonConsentManifest,
+  usePrivateComparisonInvitations,
+  usePrivateComparisons,
+  useSession,
+} from "../../lib/queries";
 import { PrivateComparisonConfirmModal } from "./PrivateComparisonConfirmModal";
 import { PrivateComparisonInvitationModal } from "./PrivateComparisonInvitationModal";
 import { PrivateComparisonScope } from "./PrivateComparisonScope";
@@ -23,6 +29,7 @@ import {
   freshnessLabel,
   invitationStatusLabel,
   privateComparisonErrorMessage,
+  usablePrivateComparisonConsentManifest,
 } from "./privateComparisonPresentation";
 
 function InvitationItem({
@@ -109,6 +116,9 @@ export function PrivateComparisonsPage() {
   const accountId = session.data?.account?.id ?? "anonymous";
   const invitations = usePrivateComparisonInvitations();
   const comparisons = usePrivateComparisons();
+  const consentManifest = usePrivateComparisonConsentManifest();
+  const usableConsentManifest =
+    consentManifest.data && usablePrivateComparisonConsentManifest(consentManifest.data) ? consentManifest.data : null;
   const [creationOpen, setCreationOpen] = useState(false);
   const [invitationToRevoke, setInvitationToRevoke] = useState<PrivateComparisonInvitationResponse | null>(null);
   const [comparisonToRevoke, setComparisonToRevoke] = useState<PrivateComparisonRelationResponse | null>(null);
@@ -172,7 +182,15 @@ export function PrivateComparisonsPage() {
         </button>
       </header>
 
-      <PrivateComparisonScope />
+      {usableConsentManifest ? (
+        <PrivateComparisonScope manifest={usableConsentManifest} />
+      ) : (
+        <div className="private-comparison-alert" role={consentManifest.isPending ? "status" : "alert"}>
+          {consentManifest.isPending
+            ? "Chargement du périmètre de consentement…"
+            : "Le périmètre de consentement est indisponible. La création reste désactivée."}
+        </div>
+      )}
 
       {loadError && (
         <div className="private-comparison-alert" role="alert">
@@ -255,6 +273,8 @@ export function PrivateComparisonsPage() {
         open={creationOpen}
         onClose={() => setCreationOpen(false)}
         onCreated={() => queryClient.invalidateQueries({ queryKey: queryKeys.privateComparisonInvitations(accountId) })}
+        manifest={usableConsentManifest}
+        manifestPending={consentManifest.isPending}
       />
       <PrivateComparisonConfirmModal
         open={Boolean(invitationToRevoke)}

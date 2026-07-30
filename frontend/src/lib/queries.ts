@@ -23,6 +23,7 @@ import {
   noteSimulationsScenarioGet,
   noteSimulationsScenarioList,
   privateComparisonsGetPrivateComparison,
+  privateComparisonsGetPrivateComparisonConsentManifest,
   privateComparisonsGetPrivateComparisonInvitations,
   privateComparisonsGetPrivateComparisons,
   settingsGetSettings,
@@ -72,6 +73,8 @@ export const queryKeys = {
   leaderboard: (accountId: string, metric: string, campus: string, cohort: string) =>
     ["account", accountId, "leaderboard", metric, campus, cohort] as const,
   privateComparisonsRoot: (accountId: string) => ["account", accountId, "private-comparisons"] as const,
+  privateComparisonConsentManifest: (accountId: string) =>
+    ["account", accountId, "private-comparisons", "consent-manifest"] as const,
   privateComparisonInvitations: (accountId: string) =>
     ["account", accountId, "private-comparisons", "invitations"] as const,
   privateComparisons: (accountId: string) => ["account", accountId, "private-comparisons", "relations"] as const,
@@ -500,6 +503,20 @@ export function usePrivateComparisonInvitations(enabled = true) {
     queryFn: () => apiData(privateComparisonsGetPrivateComparisonInvitations({ throwOnError: throwOnApiError })),
     enabled,
     staleTime: 0,
+    refetchOnWindowFocus: "always",
+    retry: false,
+  });
+}
+
+export function usePrivateComparisonConsentManifest(enabled = true) {
+  const client = useQueryClient();
+  const accountId = currentAccountId(client);
+  return useQuery({
+    queryKey: queryKeys.privateComparisonConsentManifest(accountId),
+    queryFn: () => apiData(privateComparisonsGetPrivateComparisonConsentManifest({ throwOnError: throwOnApiError })),
+    enabled,
+    staleTime: 0,
+    gcTime: 0,
     refetchOnWindowFocus: "always",
     retry: false,
   });
