@@ -60,6 +60,22 @@ def test_sse_update_payload_contains_no_event_metadata() -> None:
     assert stream_event_payload(event) == {"cursor": f"evc1_{'a' * 32}"}
 
 
+def test_sse_terminal_private_comparison_payload_is_minimal() -> None:
+    public_id = f"pc_{'b' * 24}"
+    event = SimpleNamespace(
+        id=43,
+        public_cursor=f"evc1_{'c' * 32}",
+        kind="private_comparison:revoked",
+        payload={"public_id": public_id, "ignored": "must-not-leak"},
+    )
+
+    assert stream_event_payload(event) == {
+        "cursor": f"evc1_{'c' * 32}",
+        "kind": "private_comparison:revoked",
+        "public_id": public_id,
+    }
+
+
 def test_sse_response_uses_private_no_store_security_headers() -> None:
     class Request:
         headers: dict[str, str] = {}

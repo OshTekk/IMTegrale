@@ -340,6 +340,19 @@ def session_is_active(db: Session, session_id: str, account_id: str) -> bool:
     return share.expires_at is None or ensure_utc(share.expires_at) > utcnow()
 
 
+def lock_web_sessions_for_account_transition(db: Session, account_id: str) -> None:
+    """Lock sessions before the account for generation/disable/delete transitions."""
+
+    list(
+        db.scalars(
+            select(WebSession.id)
+            .where(WebSession.account_id == account_id)
+            .order_by(WebSession.id)
+            .with_for_update()
+        )
+    )
+
+
 def require_action(
     request: Request,
     auth: AuthContext = Depends(get_auth_context),

@@ -51,7 +51,6 @@ import {
   reviewStatusLabel,
 } from "../lib/learningPresentation";
 import {
-  queryKeys,
   clearAccountState,
   useCreateLearningAttempt,
   useDeleteLearningProgress,
@@ -65,6 +64,7 @@ import {
   useLearningSource,
   useUpdateLearningProgress,
 } from "../lib/queries";
+import { useSessionAuthority } from "../lib/sessionAuthority";
 import type {
   LearningBlockNode,
   LearningCatalogItem,
@@ -204,7 +204,7 @@ function sourceReferences(
 }
 
 function ReverificationScreen({ session }: { session: Session }) {
-  const queryClient = useQueryClient();
+  const sessionAuthority = useSessionAuthority();
   const [open, setOpen] = useState(false);
   return (
     <div className="learning-gate">
@@ -231,7 +231,7 @@ function ReverificationScreen({ session }: { session: Session }) {
         purpose="learning"
         onClose={() => setOpen(false)}
         onRenewed={() => {
-          void queryClient.invalidateQueries({ queryKey: queryKeys.session });
+          void sessionAuthority.refreshAuthoritativeSession();
         }}
       />
     </div>
@@ -305,6 +305,7 @@ export function LearningPage({ session }: { session: Session }) {
 
 function LearningAccessBoundary({ session }: { session: Session }) {
   const queryClient = useQueryClient();
+  const sessionAuthority = useSessionAuthority();
   const access = useLearningAccess(true);
   const nextCatalogVersion = access.data?.catalog_version;
   const needsScopeSwitch =
@@ -315,26 +316,8 @@ function LearningAccessBoundary({ session }: { session: Session }) {
   useEffect(() => {
     if (!needsScopeSwitch || !access.data) return;
     clearAccountState(queryClient);
-    queryClient.setQueryData<Session>(queryKeys.session, (current) => {
-      const samePrimaryAccount =
-        current?.authenticated === true &&
-        current.account?.id === session.account?.id &&
-        current.role === "owner" &&
-        (current.auth_method === "imt" || current.auth_method === "passkey");
-      return samePrimaryAccount
-        ? {
-            ...current,
-            learning: {
-              available: true,
-              audience_label: access.data.audience_label,
-              level_label: access.data.level_label,
-              reverify_required: false,
-              catalog_version: nextCatalogVersion,
-            },
-          }
-        : current;
-    });
-  }, [access.data, needsScopeSwitch, nextCatalogVersion, queryClient, session.account?.id]);
+    void sessionAuthority.refreshAuthoritativeSession();
+  }, [access.data, needsScopeSwitch, nextCatalogVersion, queryClient, sessionAuthority]);
   if (access.isPending) return <LearningLoading label="Vérification de l'accès au parcours" />;
   if (access.isError) {
     if (learningErrorState(access.error) === "reverify") return <ReverificationScreen session={session} />;

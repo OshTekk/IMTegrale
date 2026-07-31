@@ -1,4 +1,3 @@
-import { useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, Ellipsis, LibraryBig, LogIn, LogOut, RefreshCw, ShieldCheck } from "lucide-react";
 import { Suspense, useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
@@ -8,7 +7,7 @@ import { isPrimaryOwnerSession } from "../lib/auth";
 import { learningEntryVisible } from "../lib/learning";
 import { apiData, throwOnApiError } from "../lib/generatedApi";
 import { useDashboard, useRefreshDashboard } from "../lib/queries";
-import { broadcastSessionChange } from "../lib/sessionSync";
+import { useSessionAuthority } from "../lib/sessionAuthority";
 import { formatSyncDuration, manualSyncMessage, useServerCountdown } from "../lib/sync";
 import { useAccountEventStream } from "../lib/useAccountEventStream";
 import type { Session } from "../types";
@@ -41,7 +40,7 @@ function PageRouteLoading() {
 export function AppShell({ session, preloadRoute }: { session: Session; preloadRoute: (path: string) => void }) {
   const location = useLocation();
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
+  const sessionAuthority = useSessionAuthority();
   const dashboard = useDashboard();
   const sync = useRefreshDashboard();
   const { showToast } = useToast();
@@ -130,10 +129,8 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
 
   const logout = async () => {
     await apiData(authLogout({ throwOnError: throwOnApiError })).catch(() => undefined);
-    queryClient.clear();
-    broadcastSessionChange();
+    sessionAuthority.signalLocalTransition("logout");
     navigate("/");
-    window.location.reload();
   };
 
   return (

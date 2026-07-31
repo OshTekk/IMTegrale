@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import type { Session } from "../types";
+import { registerPrivateComparisonPurge } from "./privateComparisonLease";
 import { useSessionSecurity } from "./sessionSecurity";
 
 export const PRIVATE_COMPARISON_DOCUMENT_TITLE = "Comparaison privée · IMTégrale";
@@ -77,6 +78,18 @@ export function useSessionBoundOneShot<T>(sessionScope: string, open: boolean, o
         onPurgeRef.current();
       }),
     [registerPurge],
+  );
+
+  useLayoutEffect(
+    () =>
+      registerPrivateComparisonPurge(() => {
+        requestRef.current?.controller.abort();
+        requestRef.current = null;
+        valueRef.current = null;
+        setScopedValue(null);
+        onPurgeRef.current();
+      }),
+    [],
   );
 
   useLayoutEffect(() => {

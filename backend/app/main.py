@@ -214,6 +214,22 @@ async def validation_error_without_learning_input(
     request: Request,
     exc: RequestValidationError,
 ):  # noqa: ANN201
+    missing_comparison_binding = _is_private_comparison_surface(
+        request.url.path
+    ) and any(
+        len(location := tuple(error.get("loc", ()))) > 1
+        and location[0] == "header"
+        and str(location[1]).casefold() == "x-imtegrale-session-binding"
+        for error in exc.errors()
+    )
+    if missing_comparison_binding:
+        return api_error_response(
+            status.HTTP_409_CONFLICT,
+            {
+                "code": "PRIVATE_COMPARISON_SESSION_MISMATCH",
+                "message": "La session de comparaison privée a changé. Réessaie depuis son état actuel.",
+            },
+        )
     if not _is_learning_api_surface(request.url.path):
         if _is_api_surface(request.url.path):
             return validation_error_response(exc.errors())

@@ -37,7 +37,7 @@ async function actorBrowser(
   const mode = actor === "viewer" ? "viewer" : actor === "token" ? "token" : actor === "camille" ? "passkey" : "imt";
   const app = await installFakeAppApi(page, mode);
   configurePrivateComparisonSession(app, shared, actor);
-  await installFakePrivateComparisonApi(page, shared, actor);
+  await installFakePrivateComparisonApi(page, shared, actor, app);
   await installFakeEventSource(page);
   return { app, context, page };
 }
@@ -121,13 +121,26 @@ test("le parcours bilatéral one-shot accepte, compare puis révoque sans fuite 
   await alice.page.getByRole("button", { name: "Mettre fin à la comparaison" }).click();
   await alice.page.getByRole("button", { name: "Mettre fin", exact: true }).click();
   await expect(alice.page).toHaveURL(/\/comparisons$/);
-  await camille.page.reload();
+  await camille.page.evaluate((publicId) => {
+    const emit = (
+      window as unknown as {
+        __emitSyntheticUpdate: (payload: Record<string, unknown>) => void;
+      }
+    ).__emitSyntheticUpdate;
+    emit({
+      cursor: `evc1_${"b".repeat(32)}`,
+      kind: "private_comparison:revoked",
+      public_id: publicId,
+    });
+  }, relationPath.split("/").at(-1)!);
   await expect(camille.page.getByText("Cette comparaison n’est plus disponible")).toBeVisible();
+  await expect(camille.page.locator("body")).not.toContainText("UE-COMMUNE-FICTIVE");
 
   expect(shared.createCalls).toBe(1);
   expect(shared.previewCalls).toBe(1);
   expect(shared.acceptCalls).toBe(1);
   expect(shared.revokeRelationCalls).toBe(1);
+  expect(shared.bindingFailures).toBe(0);
   expect(shared.secretInRequestUrl).toBe(false);
   expect(shared.tokenBodyPosts).toBe(2);
   expect(networkUrls.some((url) => url.includes(token!))).toBe(false);
@@ -158,7 +171,11 @@ test("un remplacement direct de session purge le bearer one-shot avant le rendu 
     window.dispatchEvent(
       new StorageEvent("storage", {
         key: "botnote:session-change",
-        newValue: "synthetic-direct-account-replacement",
+        newValue: JSON.stringify({
+          version: 1,
+          type: "session-change",
+          nonce: "00000000-0000-4000-8000-000000000005",
+        }),
       }),
     );
   });
@@ -169,6 +186,77 @@ test("un remplacement direct de session purge le bearer one-shot avant le rendu 
   await expect(alice.page).toHaveTitle("Comparaison privée · IMTégrale");
   expect(JSON.stringify(await alice.page.evaluate(() => window.history.state))).not.toContain(token!);
   expect(shared.createCalls).toBe(1);
+  await alice.context.close();
+});
+
+test("une mutation initiée sous A ne publie ni bearer ni résultat après le passage à B", async ({ browser }) => {
+  const shared = createPrivateComparisonE2eState();
+  const alice = await actorBrowser(browser, shared, "alice");
+  let releaseMutation!: () => void;
+  let markMutationStarted!: () => void;
+  const mutationGate = new Promise<void>((resolve) => {
+    releaseMutation = resolve;
+  });
+  const mutationStarted = new Promise<void>((resolve) => {
+    markMutationStarted = resolve;
+  });
+  await alice.page.route("**/api/v1/private-comparisons/invitations", async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.fallback();
+      return;
+    }
+    const suppliedBinding = route.request().headers()["x-imtegrale-session-binding"];
+    markMutationStarted();
+    await mutationGate;
+    const expectedBinding = alice.app.session.session_scope;
+    if (suppliedBinding !== expectedBinding) {
+      shared.bindingFailures += 1;
+      await route
+        .fulfill({
+          status: 409,
+          contentType: "application/json",
+          body: JSON.stringify({
+            detail: {
+              code: "PRIVATE_COMPARISON_SESSION_MISMATCH",
+              message: "La session de comparaison privée a changé. Réessaie depuis son état actuel.",
+            },
+          }),
+        })
+        .catch(() => undefined);
+      return;
+    }
+    await route.fallback();
+  });
+
+  await alice.page.goto("/comparisons");
+  await alice.page.getByRole("button", { name: "Créer une invitation" }).first().click();
+  const creation = alice.page.getByRole("dialog", {
+    name: "Créer une invitation",
+  });
+  await acceptConsent(creation);
+  await creation.getByRole("button", { name: "Créer le lien" }).click();
+  await mutationStarted;
+
+  configurePrivateComparisonSession(alice.app, shared, "camille");
+  await alice.page.evaluate(() => {
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: "botnote:session-change",
+        newValue: JSON.stringify({
+          version: 1,
+          type: "session-change",
+          nonce: "00000000-0000-4000-8000-000000000006",
+        }),
+      }),
+    );
+  });
+  releaseMutation();
+
+  await expect.poll(() => shared.bindingFailures).toBe(1);
+  await expect(alice.page.getByLabel("Lien d’invitation")).toHaveCount(0);
+  await expect(alice.page.getByRole("button", { name: "Copier le lien" })).toHaveCount(0);
+  expect(shared.createCalls).toBe(0);
+  expect(shared.invitations).toHaveLength(0);
   await alice.context.close();
 });
 

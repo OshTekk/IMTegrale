@@ -35,6 +35,7 @@ from app.security import (
     ensure_utc,
     get_auth_context,
     is_primary_owner,
+    lock_web_sessions_for_account_transition,
     login_global_rate_limiter,
     login_rate_limiter,
     matches_token_digest,
@@ -571,6 +572,7 @@ def delete_passkey(
     )
     if passkey is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Passkey introuvable")
+    lock_web_sessions_for_account_transition(db, auth.account.id)
     account = db.scalar(
         select(Account)
         .where(Account.id == auth.account.id)

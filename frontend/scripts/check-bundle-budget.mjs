@@ -10,9 +10,9 @@ const budgets = {
   largestNonPdfJavaScriptGzip: 110 * 1024,
   largestStylesheetGzip: 36 * 1024,
   learningRoute: { gzip: 115 * 1024, brotli: 98 * 1024 },
-  privateComparisonsRoute: { gzip: 12 * 1024, brotli: 10 * 1024 },
+  privateComparisonsRoute: { gzip: 12 * 1024, brotli: 11 * 1024 },
   sourceViewerGzip: 16 * 1024,
-  nonPdfApplication: { gzip: 532 * 1024, brotli: 465 * 1024 },
+  nonPdfApplication: { gzip: 536 * 1024, brotli: 465 * 1024 },
   pdfRuntimeGzip: 135 * 1024,
   pdfWorker: { raw: 1_300 * 1024, gzip: 390 * 1024 },
 };

@@ -1,7 +1,9 @@
 import { useQueryClient } from "@tanstack/react-query";
+import { flushSync } from "react-dom";
 import { useEffect, useRef, useState } from "react";
 import { eventReconnectDelay } from "./events";
 import { queryKeys } from "./queries";
+import { purgeTerminalPrivateComparison } from "./privateComparisonLease";
 
 export type AccountEventStreamState = "connected" | "connecting";
 
@@ -52,9 +54,25 @@ export function useAccountEventStream(accountId: string | undefined, latestEvent
         retryAttempt += 1;
       };
       source.addEventListener("update", (event) => {
-        const eventCursor = (event as MessageEvent).lastEventId;
+        const message = event as MessageEvent;
+        const eventCursor = message.lastEventId;
         if (EVENT_CURSOR_PATTERN.test(eventCursor)) {
           cursor.current.value = eventCursor;
+        }
+        try {
+          const payload = JSON.parse(String(message.data)) as {
+            kind?: unknown;
+            public_id?: unknown;
+          };
+          if (
+            (payload.kind === "private_comparison:revoked" || payload.kind === "private_comparison:expired") &&
+            typeof payload.public_id === "string"
+          ) {
+            const publicId = payload.public_id;
+            flushSync(() => purgeTerminalPrivateComparison(queryClient, publicId));
+          }
+        } catch {
+          // Invalid event payloads never publish data and still trigger a safe refetch.
         }
         void queryClient.invalidateQueries({ queryKey: queryKeys.account });
       });

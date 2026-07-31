@@ -1,7 +1,6 @@
 import { type QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef } from "react";
 import {
-  authSessionStatus,
   calendarCalendarConnect,
   calendarCalendarDisconnect,
   calendarCalendarEvents,
@@ -34,6 +33,7 @@ import {
 } from "../generated/api/sdk.gen";
 import { ApiError } from "./api";
 import { apiData, throwOnApiError } from "./generatedApi";
+import { fetchSecuritySession, useOptionalSessionAuthority } from "./sessionAuthority";
 import type { LeaderboardMetric, LearningAttemptCreate, LearningProgressUpdate, Session } from "../types";
 
 export const queryKeys = {
@@ -141,16 +141,17 @@ export function replaceSessionState(queryClient: QueryClient, session: Session):
 }
 
 export function useSession() {
+  const authority = useOptionalSessionAuthority();
   return useQuery({
     queryKey: queryKeys.session,
-    queryFn: async ({ client }): Promise<Session> => {
-      const previous = client.getQueryData<Session>(queryKeys.session);
-      const next = await apiData(authSessionStatus({ throwOnError: throwOnApiError }));
-      clearAccountStateOnCapabilityChange(client, previous, next);
-      return next;
+    queryFn: async (): Promise<Session> => {
+      const next = authority ? await authority.refreshAuthoritativeSession() : await fetchSecuritySession();
+      return next ?? { authenticated: false };
     },
-    staleTime: 30_000,
-    refetchOnWindowFocus: "always",
+    initialData: authority?.getSnapshot().session,
+    enabled: false,
+    staleTime: Number.POSITIVE_INFINITY,
+    refetchOnWindowFocus: false,
     retry: false,
   });
 }
@@ -517,8 +518,10 @@ export function usePrivateComparisonInvitations(enabled = true) {
       ),
     enabled,
     staleTime: 0,
+    gcTime: 0,
     refetchOnWindowFocus: "always",
     retry: false,
+    meta: { privateComparisonSecurity: true },
   });
 }
 
@@ -539,6 +542,7 @@ export function usePrivateComparisonConsentManifest(enabled = true) {
     gcTime: 0,
     refetchOnWindowFocus: "always",
     retry: false,
+    meta: { privateComparisonSecurity: true },
   });
 }
 
@@ -556,8 +560,10 @@ export function usePrivateComparisons(enabled = true) {
       ),
     enabled,
     staleTime: 0,
+    gcTime: 0,
     refetchOnWindowFocus: "always",
     retry: false,
+    meta: { privateComparisonSecurity: true },
   });
 }
 
@@ -579,6 +585,7 @@ export function usePrivateComparison(publicId: string | null, enabled = true) {
     gcTime: 0,
     refetchOnWindowFocus: "always",
     retry: false,
+    meta: { privateComparisonSecurity: true },
   });
 }
 

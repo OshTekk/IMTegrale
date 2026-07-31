@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 from threading import Barrier
+from threading import Event as ThreadEvent
 
 import pytest
 from alembic import command
@@ -10,14 +11,29 @@ from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from app.config import get_settings
 from app.database import SessionLocal, engine, utcnow
-from app.models import Account, Note, PrivateComparison, PrivateComparisonInvitation, UeSetting
+from app.models import (
+    Account,
+    Note,
+    PrivateComparison,
+    PrivateComparisonInvitation,
+    UeSetting,
+    WebSession,
+)
 from app.private_comparison_contract import PRIVATE_COMPARISON_CONSENT_VERSION
+from app.private_comparison_security import (
+    final_rebind_callback,
+    initial_private_comparison_session_preflight,
+    rebind_primary_web_session_for_mutation,
+)
+from app.security import AuthContext, browser_session_scope, create_web_session
 from app.services import private_comparisons as private_comparisons_service
 from app.services.private_comparisons import (
     SupersededPrivateComparisonInvitation,
     accept_invitation,
     comparison_detail,
     create_invitation,
+    invitation_participant_account_ids,
+    list_comparisons,
     lock_private_comparison_invitations_for_account_deletion,
     revoke_comparison,
     revoke_invitation,
@@ -115,6 +131,136 @@ def _accepted_relation(creator_id: str, recipient_id: str) -> str:
         )
         db.commit()
         return relation.public_id
+
+
+def _primary_auth(account_id: str) -> tuple[AuthContext, str]:
+    with SessionLocal() as db:
+        account = db.get(Account, account_id)
+        assert account is not None
+        web_session, _raw_session, _raw_csrf = create_web_session(
+            db,
+            account=account,
+            role="owner",
+            auth_method="imt",
+            user_agent="postgres-c6a",
+            settings=get_settings(),
+        )
+        db.commit()
+        binding = browser_session_scope(
+            web_session,
+            get_settings(),
+            private_comparisons_available=True,
+        )
+        db.expunge(account)
+        db.expunge(web_session)
+    return AuthContext(account=account, session=web_session), binding
+
+
+def test_postgres_committed_session_revocation_wins_before_acceptance_final_rebind() -> None:
+    creator_id = _eligible_account("session-rebind-creator@example.test")
+    recipient_id = _eligible_account("session-rebind-recipient@example.test")
+    invitation_id, token = _invitation(creator_id)
+    auth, binding = _primary_auth(recipient_id)
+    comparison_settings = get_settings().model_copy(
+        update={"private_comparisons_enabled": True}
+    )
+    preflight_complete = ThreadEvent()
+    revocation_complete = ThreadEvent()
+
+    def accept_after_rebind() -> str:
+        with SessionLocal() as db:
+            initial_private_comparison_session_preflight(
+                db,
+                auth=auth,
+                expected_binding=binding,
+                settings=comparison_settings,
+            )
+            account_ids = invitation_participant_account_ids(
+                db,
+                actor_account_id=recipient_id,
+                raw_token=token,
+                settings=comparison_settings,
+            )
+            db.rollback()
+            preflight_complete.set()
+            assert revocation_complete.wait(timeout=5)
+            try:
+                rebound = rebind_primary_web_session_for_mutation(
+                    db,
+                    auth=auth,
+                    expected_binding=binding,
+                    settings=comparison_settings,
+                    account_ids=account_ids,
+                )
+                accept_invitation(
+                    db,
+                    accepter_account_id=recipient_id,
+                    raw_token=token,
+                    consent_version=PRIVATE_COMPARISON_CONSENT_VERSION,
+                    settings=comparison_settings,
+                    before_write=final_rebind_callback(
+                        rebound,
+                        settings=comparison_settings,
+                    ),
+                )
+                db.commit()
+                return "accepted"
+            except HTTPException as exc:
+                db.rollback()
+                return f"rejected:{exc.status_code}"
+
+    def revoke_session() -> str:
+        assert preflight_complete.wait(timeout=5)
+        with SessionLocal() as db:
+            web_session = db.get(WebSession, auth.session.id)
+            assert web_session is not None
+            db.delete(web_session)
+            db.commit()
+        revocation_complete.set()
+        return "revoked"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        accept_future = pool.submit(accept_after_rebind)
+        revoke_future = pool.submit(revoke_session)
+        outcomes = (accept_future.result(timeout=10), revoke_future.result(timeout=10))
+
+    assert outcomes == ("rejected:409", "revoked")
+    with SessionLocal() as db:
+        invitation = db.get(PrivateComparisonInvitation, invitation_id)
+        assert invitation is not None and invitation.consumed_at is None
+        assert db.scalar(select(func.count(PrivateComparison.id))) == 0
+
+
+def test_postgres_list_and_revocation_use_the_same_account_then_relation_order() -> None:
+    creator_id = _eligible_account("list-order-creator@example.test")
+    recipient_id = _eligible_account("list-order-recipient@example.test")
+    public_id = _accepted_relation(creator_id, recipient_id)
+    barrier = Barrier(2)
+
+    def list_rows() -> str:
+        with SessionLocal() as db:
+            barrier.wait(timeout=5)
+            rows = list_comparisons(db, creator_id)
+            db.commit()
+            return rows[0]["status"] if rows else "empty"
+
+    def revoke() -> str:
+        with SessionLocal() as db:
+            barrier.wait(timeout=5)
+            changed = revoke_comparison(db, account_id=recipient_id, public_id=public_id)
+            db.commit()
+            return "revoked" if changed else "unchanged"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        listed = pool.submit(list_rows)
+        revoked = pool.submit(revoke)
+        outcomes = (listed.result(timeout=10), revoked.result(timeout=10))
+
+    assert outcomes[0] in {"active", "revoked"}
+    assert outcomes[1] == "revoked"
+    with SessionLocal() as db:
+        relation = db.scalar(select(PrivateComparison).where(PrivateComparison.public_id == public_id))
+        assert relation is not None and relation.revoked_at is not None
 
 
 def test_postgres_concurrent_acceptance_consumes_invitation_once() -> None:

@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { CalendarClock, Link2, Plus, ShieldCheck } from "lucide-react";
-import { useState } from "react";
+import { useLayoutEffect, useMemo, useState } from "react";
+import { flushSync } from "react-dom";
 import { Link } from "react-router-dom";
 import type {
   ActivePrivateComparisonListItem,
@@ -15,6 +16,7 @@ import { EmptyState } from "../../components/EmptyState";
 import { useToast } from "../../components/Toast";
 import { formatDate } from "../../lib/format";
 import { apiData, throwOnApiError } from "../../lib/generatedApi";
+import { armPrivateDeadline, purgeTerminalPrivateComparison } from "../../lib/privateComparisonLease";
 import {
   queryKeys,
   usePrivateComparisonConsentManifest,
@@ -135,20 +137,40 @@ export function PrivateComparisonsPage() {
   const [invitationToRevoke, setInvitationToRevoke] = useState<PrivateComparisonInvitationResponse | null>(null);
   const [comparisonToRevoke, setComparisonToRevoke] = useState<ActivePrivateComparisonListItem | null>(null);
 
-  const activeComparisons =
-    comparisons.data?.comparisons.filter(
-      (value): value is ActivePrivateComparisonListItem => value.status === "active",
-    ) ?? [];
-  const comparisonHistory =
-    comparisons.data?.comparisons.filter(
-      (value): value is TerminalPrivateComparisonHistoryItem => value.status !== "active",
-    ) ?? [];
+  const activeComparisons = useMemo(
+    () =>
+      comparisons.data?.comparisons.filter(
+        (value): value is ActivePrivateComparisonListItem =>
+          value.status === "active" && Date.parse(value.expires_at) > Date.now(),
+      ) ?? [],
+    [comparisons.data?.comparisons],
+  );
+  const comparisonHistory = useMemo(
+    () =>
+      comparisons.data?.comparisons.filter(
+        (value): value is TerminalPrivateComparisonHistoryItem => value.status !== "active",
+      ) ?? [],
+    [comparisons.data?.comparisons],
+  );
+
+  useLayoutEffect(() => {
+    const nextExpiry = activeComparisons.reduce<ActivePrivateComparisonListItem | null>(
+      (earliest, value) =>
+        !earliest || Date.parse(value.expires_at) < Date.parse(earliest.expires_at) ? value : earliest,
+      null,
+    );
+    if (!nextExpiry) return;
+    return armPrivateDeadline(nextExpiry.expires_at, () => {
+      flushSync(() => purgeTerminalPrivateComparison(queryClient, nextExpiry.public_id));
+    });
+  }, [activeComparisons, queryClient]);
 
   const revokeInvitation = useMutation({
     mutationFn: (publicId: string) =>
       runVerifiedRequest(sessionScope, (signal) =>
         apiData(
           privateComparisonsDeletePrivateComparisonInvitation({
+            headers: { "X-IMTEGRALE-SESSION-BINDING": sessionScope },
             path: { public_id: publicId },
             signal,
             throwOnError: throwOnApiError,
@@ -161,19 +183,23 @@ export function PrivateComparisonsPage() {
       showToast("Invitation révoquée.");
     },
     onError: () => showToast("Impossible de révoquer cette invitation pour le moment.", "error"),
+    meta: { privateComparisonSecurity: true },
   });
 
   const revokeComparison = useMutation({
-    mutationFn: (publicId: string) =>
-      runVerifiedRequest(sessionScope, (signal) =>
+    mutationFn: (publicId: string) => {
+      purgeTerminalPrivateComparison(queryClient, publicId);
+      return runVerifiedRequest(sessionScope, (signal) =>
         apiData(
           privateComparisonsDeletePrivateComparison({
+            headers: { "X-IMTEGRALE-SESSION-BINDING": sessionScope },
             path: { public_id: publicId },
             signal,
             throwOnError: throwOnApiError,
           }),
         ),
-      ),
+      );
+    },
     onSuccess: async (_, publicId) => {
       queryClient.removeQueries({ queryKey: queryKeys.privateComparison(accountId, publicId), exact: true });
       setComparisonToRevoke(null);
@@ -181,6 +207,7 @@ export function PrivateComparisonsPage() {
       showToast("Comparaison révoquée.");
     },
     onError: () => showToast("Impossible de mettre fin à cette comparaison pour le moment.", "error"),
+    meta: { privateComparisonSecurity: true },
   });
 
   const loadError = invitations.error ?? comparisons.error;

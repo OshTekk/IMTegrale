@@ -110,12 +110,14 @@ def test_index_path_bypasses_are_rejected(tmp_path: Path, relative_path: str, ex
     "relative_path",
     [
         "backend/app/private_comparison_contract.py",
+        "backend/app/private_comparison_security.py",
         "backend/app/routers/private_comparisons.py",
         "backend/app/services/private_comparisons.py",
         "docs/private-comparisons.md",
         "docs/security/private-comparisons-threat-model.md",
         "frontend/e2e/private-comparison-fixtures.ts",
         "frontend/e2e/private-comparisons.spec.ts",
+        "frontend/src/lib/privateComparisonLease.ts",
         "frontend/src/lib/privateComparisonsGenerated.test.ts",
         "frontend/src/pages/private-comparisons/PrivateComparisonAcceptPage.tsx",
         "frontend/src/pages/private-comparisons/PrivateComparisonCommonUes.tsx",
@@ -741,6 +743,7 @@ def test_public_private_comparison_wheel_modules_are_narrowly_allowlisted(tmp_pa
     wheel = tmp_path / "package.whl"
     with zipfile.ZipFile(wheel, "w") as archive:
         archive.writestr("app/private_comparison_contract.py", b"SYNTHETIC = True\n")
+        archive.writestr("app/private_comparison_security.py", b"SYNTHETIC = True\n")
         archive.writestr("app/routers/private_comparisons.py", b"SYNTHETIC = True\n")
         archive.writestr("app/services/private_comparisons.py", b"SYNTHETIC = True\n")
         archive.writestr("app/services/private_comparisons.py.bak", b"SYNTHETIC = True\n")
@@ -748,4 +751,4 @@ def test_public_private_comparison_wheel_modules_are_narrowly_allowlisted(tmp_pa
     result = scan_wheel(wheel)
 
     assert result.violations["PRIVATE_PATH_TRACKED"] == 1
-    assert result.artifact_files == 4
+    assert result.artifact_files == 5

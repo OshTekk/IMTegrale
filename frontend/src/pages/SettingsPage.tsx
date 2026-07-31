@@ -31,12 +31,14 @@ import { formatDate } from "../lib/format";
 import { apiData, throwOnApiError } from "../lib/generatedApi";
 import { registerPasskey } from "../lib/passkeys";
 import { queryKeys, useDashboard, useSettings } from "../lib/queries";
+import { useSessionAuthority } from "../lib/sessionAuthority";
 import type { Role } from "../types";
 
 export function SettingsPage({ role, isPrimaryOwner }: { role: Role; isPrimaryOwner: boolean }) {
   const settings = useSettings();
   const dashboard = useDashboard();
   const queryClient = useQueryClient();
+  const sessionAuthority = useSessionAuthority();
   const { showToast } = useToast();
   const [displayName, setDisplayName] = useState("");
   const [timezone, setTimezone] = useState("Europe/Paris");
@@ -58,7 +60,7 @@ export function SettingsPage({ role, isPrimaryOwner }: { role: Role; isPrimaryOw
 
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: queryKeys.account });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.session });
+    void sessionAuthority.refreshAuthoritativeSession();
   };
   const accountMutation = useMutation({
     mutationFn: () =>

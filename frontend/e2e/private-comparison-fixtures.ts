@@ -47,6 +47,7 @@ export interface PrivateComparisonE2eState {
   declineCalls: number;
   revokeInvitationCalls: number;
   revokeRelationCalls: number;
+  bindingFailures: number;
 }
 
 const actors: Record<ComparisonActor, SyntheticActor> = {
@@ -221,6 +222,7 @@ export function createPrivateComparisonE2eState(): PrivateComparisonE2eState {
     declineCalls: 0,
     revokeInvitationCalls: 0,
     revokeRelationCalls: 0,
+    bindingFailures: 0,
   };
 }
 
@@ -399,6 +401,7 @@ export async function installFakePrivateComparisonApi(
   page: Page,
   state: PrivateComparisonE2eState,
   actor: ComparisonActor,
+  appState?: FakeAppState,
 ) {
   await page.route("**/api/v1/private-comparisons**", async (route) => {
     const request = route.request();
@@ -408,6 +411,24 @@ export async function installFakePrivateComparisonApi(
     if (!available(actor, state)) {
       await unavailable(route);
       return;
+    }
+    if (request.method() === "POST" || request.method() === "DELETE") {
+      const expectedBinding = appState?.session.session_scope;
+      const suppliedBinding = request.headers()["x-imtegrale-session-binding"];
+      if (typeof expectedBinding !== "string" || suppliedBinding !== expectedBinding) {
+        state.bindingFailures += 1;
+        await json(
+          route,
+          {
+            detail: {
+              code: "PRIVATE_COMPARISON_SESSION_MISMATCH",
+              message: "La session de comparaison privée a changé. Réessaie depuis son état actuel.",
+            },
+          },
+          409,
+        );
+        return;
+      }
     }
 
     const body = request.postDataJSON() as Record<string, unknown> | null;

@@ -10452,6 +10452,12 @@ export type PrivateComparisonsGetPrivateComparisonInvitationsResponse = PrivateC
 
 export type PrivateComparisonsCreatePrivateComparisonInvitationData = {
     body: PrivateComparisonInvitationCreate;
+    headers: {
+        /**
+         * X-Imtegrale-Session-Binding
+         */
+        'X-IMTEGRALE-SESSION-BINDING': string;
+    };
     path?: never;
     query?: never;
     url: '/api/v1/private-comparisons/invitations';
@@ -10509,6 +10515,12 @@ export type PrivateComparisonsCreatePrivateComparisonInvitationResponse = Privat
 
 export type PrivateComparisonsAcceptPrivateComparisonInvitationData = {
     body: PrivateComparisonInvitationAcceptWritable;
+    headers: {
+        /**
+         * X-Imtegrale-Session-Binding
+         */
+        'X-IMTEGRALE-SESSION-BINDING': string;
+    };
     path?: never;
     query?: never;
     url: '/api/v1/private-comparisons/invitations/accept';
@@ -10566,6 +10578,12 @@ export type PrivateComparisonsAcceptPrivateComparisonInvitationResponse = Privat
 
 export type PrivateComparisonsDeclinePrivateComparisonInvitationData = {
     body: PrivateComparisonInvitationTokenRequest;
+    headers: {
+        /**
+         * X-Imtegrale-Session-Binding
+         */
+        'X-IMTEGRALE-SESSION-BINDING': string;
+    };
     path?: never;
     query?: never;
     url: '/api/v1/private-comparisons/invitations/decline';
@@ -10623,6 +10641,12 @@ export type PrivateComparisonsDeclinePrivateComparisonInvitationResponse = Priva
 
 export type PrivateComparisonsPreviewPrivateComparisonInvitationData = {
     body: PrivateComparisonInvitationTokenRequest;
+    headers: {
+        /**
+         * X-Imtegrale-Session-Binding
+         */
+        'X-IMTEGRALE-SESSION-BINDING': string;
+    };
     path?: never;
     query?: never;
     url: '/api/v1/private-comparisons/invitations/preview';
@@ -10680,6 +10704,12 @@ export type PrivateComparisonsPreviewPrivateComparisonInvitationResponse = Priva
 
 export type PrivateComparisonsDeletePrivateComparisonInvitationData = {
     body?: never;
+    headers: {
+        /**
+         * X-Imtegrale-Session-Binding
+         */
+        'X-IMTEGRALE-SESSION-BINDING': string;
+    };
     path: {
         /**
          * Public Id
@@ -10742,6 +10772,12 @@ export type PrivateComparisonsDeletePrivateComparisonInvitationResponse = Privat
 
 export type PrivateComparisonsDeletePrivateComparisonData = {
     body?: never;
+    headers: {
+        /**
+         * X-Imtegrale-Session-Binding
+         */
+        'X-IMTEGRALE-SESSION-BINDING': string;
+    };
     path: {
         /**
          * Public Id

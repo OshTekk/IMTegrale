@@ -13,6 +13,7 @@ from app.database import SessionLocal, utcnow
 from app.event_cursor import valid_event_cursor
 from app.models import Event
 from app.observability import runtime_metrics
+from app.private_comparison_contract import valid_private_comparison_public_id
 from app.security import get_auth_context, session_is_active
 from app.services.event_visibility import (
     EventVisibilityContext,
@@ -31,7 +32,12 @@ class StreamAuth:
 
 
 def stream_event_payload(event: Event) -> dict[str, str]:
-    return {"cursor": event.public_cursor}
+    payload = {"cursor": event.public_cursor}
+    if event.kind in {"private_comparison:revoked", "private_comparison:expired"}:
+        public_id = event.payload.get("public_id")
+        if isinstance(public_id, str) and valid_private_comparison_public_id(public_id):
+            payload.update({"kind": event.kind, "public_id": public_id})
+    return payload
 
 
 def _raise_event_cursor_unavailable() -> None:

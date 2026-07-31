@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, LockKeyhole, ShieldCheck } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { flushSync } from "react-dom";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { privateComparisonsDeletePrivateComparison } from "../../generated/api/sdk.gen";
 import { EmptyState } from "../../components/EmptyState";
@@ -9,11 +10,17 @@ import { formatDate } from "../../lib/format";
 import { apiData, throwOnApiError } from "../../lib/generatedApi";
 import { queryKeys, usePrivateComparison, useSession } from "../../lib/queries";
 import {
+  armPrivateDeadline,
+  purgeTerminalPrivateComparison,
+  usePrivateComparisonLeaseOpen,
+  validPrivateComparisonLease,
+} from "../../lib/privateComparisonLease";
+import {
   PRIVATE_COMPARISON_DOCUMENT_TITLE,
   primarySessionScope,
   useSecurityDocumentTitle,
 } from "../../lib/securityScope";
-import { useVerifiedSessionRequest } from "../../lib/sessionSecurity";
+import { useSessionSecurity, useVerifiedSessionRequest } from "../../lib/sessionSecurity";
 import { PrivateComparisonCommonUes } from "./PrivateComparisonCommonUes";
 import { PrivateComparisonConfirmModal } from "./PrivateComparisonConfirmModal";
 import { PrivateComparisonSummary } from "./PrivateComparisonSummary";
@@ -35,14 +42,45 @@ export function PrivateComparisonDetailPage() {
   const accountId = session.data?.account?.id ?? "anonymous";
   const sessionScope = primarySessionScope(session.data);
   const runVerifiedRequest = useVerifiedSessionRequest();
-  const detail = usePrivateComparison(validPublicId, Boolean(validPublicId));
+  const sessionSecurity = useSessionSecurity();
+  const leaseOpen = usePrivateComparisonLeaseOpen(validPublicId);
+  const detail = usePrivateComparison(validPublicId, Boolean(validPublicId && leaseOpen));
   const [revokeOpen, setRevokeOpen] = useState(false);
-  const unavailable = !validPublicId || privateComparisonUnavailable(detail.error);
+  const lease = useMemo(
+    () =>
+      validPublicId && detail.data?.status === "active"
+        ? {
+            authEpoch: sessionSecurity.authEpoch,
+            sessionScope,
+            publicId: validPublicId,
+            expiresAt: detail.data.expires_at,
+            status: "active" as const,
+            lastValidatedAt: detail.dataUpdatedAt,
+          }
+        : null,
+    [detail.data, detail.dataUpdatedAt, sessionScope, sessionSecurity.authEpoch, validPublicId],
+  );
+  const leaseValid = validPrivateComparisonLease(lease, {
+    authEpoch: sessionSecurity.authEpoch,
+    sessionScope,
+  });
+  const unavailable =
+    !validPublicId ||
+    !leaseOpen ||
+    privateComparisonUnavailable(detail.error) ||
+    (detail.data !== undefined && !leaseValid);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!validPublicId || !privateComparisonUnavailable(detail.error)) return;
-    queryClient.removeQueries({ queryKey: queryKeys.privateComparison(accountId, validPublicId), exact: true });
+    purgeTerminalPrivateComparison(queryClient, validPublicId);
   }, [accountId, detail.error, queryClient, validPublicId]);
+
+  useLayoutEffect(() => {
+    if (!lease || !validPublicId) return;
+    return armPrivateDeadline(lease.expiresAt, () => {
+      flushSync(() => purgeTerminalPrivateComparison(queryClient, validPublicId));
+    });
+  }, [lease, queryClient, validPublicId]);
 
   useEffect(
     () => () => {
@@ -53,16 +91,20 @@ export function PrivateComparisonDetailPage() {
   );
 
   const revoke = useMutation({
-    mutationFn: () =>
-      runVerifiedRequest(sessionScope, (signal) =>
+    mutationFn: () => {
+      purgeTerminalPrivateComparison(queryClient, validPublicId!);
+      return runVerifiedRequest(sessionScope, (signal) =>
         apiData(
           privateComparisonsDeletePrivateComparison({
+            headers: { "X-IMTEGRALE-SESSION-BINDING": sessionScope },
             path: { public_id: validPublicId! },
             signal,
             throwOnError: throwOnApiError,
           }),
         ),
-      ),
+      );
+    },
+    meta: { privateComparisonSecurity: true },
     onSuccess: async () => {
       if (validPublicId) {
         queryClient.removeQueries({ queryKey: queryKeys.privateComparison(accountId, validPublicId), exact: true });
@@ -94,7 +136,7 @@ export function PrivateComparisonDetailPage() {
       </div>
     );
   }
-  if (detail.error || !detail.data) {
+  if (detail.error || !detail.data || !leaseValid) {
     return (
       <EmptyState
         title="Impossible de charger la comparaison"

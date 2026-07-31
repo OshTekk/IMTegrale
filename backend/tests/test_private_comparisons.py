@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import inspect
 from datetime import timedelta
 from decimal import Decimal
 
 import pytest
+from app import private_comparison_security
 from app.api_models import (
     PrivateComparisonDetailResponse,
     PrivateComparisonOfficialIdentityResponse,
@@ -21,6 +23,7 @@ from app.models import (
     PrivateComparisonInvitation,
     ShareToken,
     UeSetting,
+    WebSession,
 )
 from app.private_comparison_contract import (
     PRIVATE_COMPARISON_CONSENT_VERSION,
@@ -52,6 +55,23 @@ CONSENT = {
 
 def test_feature_flag_defaults_to_disabled() -> None:
     assert Settings(_env_file=None, environment="test").private_comparisons_enabled is False
+
+
+def test_all_participant_account_locks_use_the_central_ascending_plan() -> None:
+    central_source = inspect.getsource(
+        private_comparison_security.private_comparison_account_lock_statement
+    )
+    assert ".order_by(Account.id)" in central_source
+    assert ".desc()" not in central_source
+    for lock_function in (
+        private_comparisons_service._locked_accounts,
+        private_comparisons_service._shared_locked_accounts,
+        private_comparisons_service._locked_accounts_including_disabled,
+        private_comparisons_service.load_fresh_active_primary_account_for_update,
+    ):
+        lock_source = inspect.getsource(lock_function)
+        assert "private_comparison_account_lock_statement" in lock_source
+        assert "order_by(" not in lock_source
 
 
 @pytest.fixture
@@ -108,6 +128,17 @@ def _install_session(
     session_cookie, csrf_cookie = cookie_names(settings)
     client.cookies.set(session_cookie, raw_session)
     client.cookies.set(csrf_cookie, raw_csrf)
+
+
+def comparison_headers(client: TestClient) -> dict[str, str]:
+    session = client.get("/api/v1/auth/session")
+    assert session.status_code == 200, session.text
+    binding = session.json().get("session_scope")
+    assert isinstance(binding, str)
+    return {
+        **csrf_headers(client),
+        "X-IMTEGRALE-SESSION-BINDING": binding,
+    }
 
 
 def _seed_owner(
@@ -239,7 +270,7 @@ def _create_invitation(client: TestClient, *, duration_days: int = 30) -> dict:
     response = client.post(
         "/api/v1/private-comparisons/invitations",
         json={**CONSENT, "duration_days": duration_days},
-        headers=csrf_headers(client),
+        headers=comparison_headers(client),
     )
     assert response.status_code == 201, response.text
     return response.json()
@@ -249,7 +280,7 @@ def _accept(client: TestClient, token: str) -> dict:
     response = client.post(
         "/api/v1/private-comparisons/invitations/accept",
         json={**CONSENT, "token": token},
-        headers=csrf_headers(client),
+        headers=comparison_headers(client),
     )
     assert response.status_code == 201, response.text
     return response.json()
@@ -404,13 +435,13 @@ def test_only_consent_v2_can_create_an_invitation(comparisons_enabled) -> None: 
         rejected = owner.post(
             "/api/v1/private-comparisons/invitations",
             json={**CONSENT, "consent_version": unsupported_version, "duration_days": 30},
-            headers=csrf_headers(owner),
+            headers=comparison_headers(owner),
         )
         assert rejected.status_code == 422
     accepted = owner.post(
         "/api/v1/private-comparisons/invitations",
         json={**CONSENT, "consent_version": 2, "duration_days": 30},
-        headers=csrf_headers(owner),
+        headers=comparison_headers(owner),
     )
     assert accepted.status_code == 201
     assert accepted.json()["consent_version"] == 2
@@ -474,7 +505,7 @@ def test_owner_flow_is_one_shot_private_and_limited_to_common_ues(
     preview = recipient.post(
         "/api/v1/private-comparisons/invitations/preview",
         json={"token": token},
-        headers=csrf_headers(recipient),
+        headers=comparison_headers(recipient),
     )
     assert preview.status_code == 200
     assert preview.json()["creator"] == {"official_name": "Alice FIXTURE"}
@@ -485,7 +516,7 @@ def test_owner_flow_is_one_shot_private_and_limited_to_common_ues(
     replay = recipient.post(
         "/api/v1/private-comparisons/invitations/accept",
         json={**CONSENT, "token": token},
-        headers=csrf_headers(recipient),
+        headers=comparison_headers(recipient),
     )
     assert replay.status_code == 404
     detail = recipient.get(f"/api/v1/private-comparisons/{relation['public_id']}")
@@ -555,7 +586,7 @@ def test_only_primary_owners_create_invitations(
     response = client.post(
         "/api/v1/private-comparisons/invitations",
         json={**CONSENT, "duration_days": 30},
-        headers=csrf_headers(client),
+        headers=comparison_headers(client),
     )
     assert response.status_code == expected
 
@@ -662,7 +693,7 @@ def test_delegated_sessions_cannot_use_any_private_comparison_surface(
     )
     relation = _accept(recipient, _create_invitation(creator)["token"])
     pending = _create_invitation(creator)
-    action_headers = csrf_headers(delegated)
+    action_headers = comparison_headers(delegated)
 
     responses = [
         delegated.get("/api/v1/private-comparisons/consent-manifest"),
@@ -706,6 +737,7 @@ def test_anonymous_and_disabled_accounts_are_refused(comparisons_enabled) -> Non
     assert anonymous.get("/api/v1/private-comparisons").status_code == 401
 
     client, account_id = _seed_owner("disabled@example.test", "Desactive")
+    action_headers = comparison_headers(client)
     with SessionLocal() as db:
         account = db.get(Account, account_id)
         assert account is not None
@@ -714,7 +746,7 @@ def test_anonymous_and_disabled_accounts_are_refused(comparisons_enabled) -> Non
     response = client.post(
         "/api/v1/private-comparisons/invitations",
         json={**CONSENT, "duration_days": 30},
-        headers=csrf_headers(client),
+        headers=action_headers,
     )
     assert response.status_code == 403
     assert response.json()["detail"]["code"] == "ACCOUNT_DISABLED"
@@ -723,22 +755,240 @@ def test_anonymous_and_disabled_accounts_are_refused(comparisons_enabled) -> Non
 def test_mutations_require_csrf_origin_and_strict_payload(comparisons_enabled) -> None:  # noqa: ANN001
     client, _account_id = _seed_owner("csrf@example.test", "Claire")
     payload = {**CONSENT, "duration_days": 30}
+    binding_only = {
+        "X-IMTEGRALE-SESSION-BINDING": comparison_headers(client)[
+            "X-IMTEGRALE-SESSION-BINDING"
+        ]
+    }
 
-    assert client.post("/api/v1/private-comparisons/invitations", json=payload).status_code == 403
     assert (
         client.post(
             "/api/v1/private-comparisons/invitations",
             json=payload,
-            headers={**csrf_headers(client), "Origin": "https://invalid.example.test"},
+            headers=binding_only,
+        ).status_code
+        == 403
+    )
+    assert (
+        client.post(
+            "/api/v1/private-comparisons/invitations",
+            json=payload,
+            headers={**comparison_headers(client), "Origin": "https://invalid.example.test"},
         ).status_code
         == 403
     )
     extra = client.post(
         "/api/v1/private-comparisons/invitations",
         json={**payload, "recipient_login": "forbidden@example.test"},
-        headers=csrf_headers(client),
+        headers=comparison_headers(client),
     )
     assert extra.status_code == 422
+
+
+def test_comparison_mutation_requires_a_session_binding_before_any_durable_effect(
+    comparisons_enabled,
+) -> None:  # noqa: ANN001
+    client, _account_id = _seed_owner("binding-required@example.test", "Binding")
+
+    response = client.post(
+        "/api/v1/private-comparisons/invitations",
+        json={**CONSENT, "duration_days": 30},
+        headers=csrf_headers(client),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "PRIVATE_COMPARISON_SESSION_MISMATCH"
+    with SessionLocal() as db:
+        assert db.scalar(select(func.count(PrivateComparisonInvitation.id))) == 0
+        assert (
+            db.scalar(
+                select(func.count(Event.id)).where(
+                    Event.kind.startswith("private_comparison:")
+                )
+            )
+            == 0
+        )
+
+
+def test_every_sensitive_comparison_operation_requires_the_binding(
+    comparisons_enabled,
+) -> None:  # noqa: ANN001
+    creator, _creator_id = _seed_owner(
+        "binding-all-creator@example.test",
+        "BindingCreator",
+    )
+    recipient, _recipient_id = _seed_owner(
+        "binding-all-recipient@example.test",
+        "BindingRecipient",
+    )
+    relation = _accept(recipient, _create_invitation(creator)["token"])
+    accept_invitation = _create_invitation(creator)
+    decline_invitation = _create_invitation(creator)
+    revoke_invitation = _create_invitation(creator)
+    with SessionLocal() as db:
+        event_count_before = db.scalar(
+            select(func.count(Event.id)).where(
+                Event.kind.startswith("private_comparison:")
+            )
+        )
+
+    responses = [
+        creator.post(
+            "/api/v1/private-comparisons/invitations",
+            json={**CONSENT, "duration_days": 30},
+            headers=csrf_headers(creator),
+        ),
+        recipient.post(
+            "/api/v1/private-comparisons/invitations/preview",
+            json={"token": accept_invitation["token"]},
+            headers=csrf_headers(recipient),
+        ),
+        recipient.post(
+            "/api/v1/private-comparisons/invitations/accept",
+            json={**CONSENT, "token": accept_invitation["token"]},
+            headers=csrf_headers(recipient),
+        ),
+        recipient.post(
+            "/api/v1/private-comparisons/invitations/decline",
+            json={"token": decline_invitation["token"]},
+            headers=csrf_headers(recipient),
+        ),
+        creator.delete(
+            f"/api/v1/private-comparisons/invitations/{revoke_invitation['public_id']}",
+            headers=csrf_headers(creator),
+        ),
+        creator.delete(
+            f"/api/v1/private-comparisons/{relation['public_id']}",
+            headers=csrf_headers(creator),
+        ),
+    ]
+
+    assert [response.status_code for response in responses] == [409] * len(responses)
+    assert {
+        response.json()["detail"]["code"] for response in responses
+    } == {"PRIVATE_COMPARISON_SESSION_MISMATCH"}
+    with SessionLocal() as db:
+        untouched = list(
+            db.scalars(
+                select(PrivateComparisonInvitation).where(
+                    PrivateComparisonInvitation.public_id.in_(
+                        (
+                            accept_invitation["public_id"],
+                            decline_invitation["public_id"],
+                            revoke_invitation["public_id"],
+                        )
+                    )
+                )
+            )
+        )
+        assert len(untouched) == 3
+        assert all(row.consumed_at is None and row.revoked_at is None for row in untouched)
+        relation_row = db.scalar(
+            select(PrivateComparison).where(
+                PrivateComparison.public_id == relation["public_id"]
+            )
+        )
+        assert relation_row is not None and relation_row.revoked_at is None
+        assert (
+            db.scalar(
+                select(func.count(Event.id)).where(
+                    Event.kind.startswith("private_comparison:")
+                )
+            )
+            == event_count_before
+        )
+
+
+def test_comparison_mutation_rejects_a_binding_from_the_replaced_web_session(
+    comparisons_enabled,
+) -> None:  # noqa: ANN001
+    client, account_id = _seed_owner("binding-replaced@example.test", "Remplacee")
+    previous_binding = comparison_headers(client)["X-IMTEGRALE-SESSION-BINDING"]
+    with SessionLocal() as db:
+        account = db.get(Account, account_id)
+        assert account is not None
+        db.expunge(account)
+    _install_session(client, account)
+    stale_headers = {
+        **csrf_headers(client),
+        "X-IMTEGRALE-SESSION-BINDING": previous_binding,
+    }
+
+    response = client.post(
+        "/api/v1/private-comparisons/invitations",
+        json={**CONSENT, "duration_days": 30},
+        headers=stale_headers,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "PRIVATE_COMPARISON_SESSION_MISMATCH"
+    with SessionLocal() as db:
+        assert db.scalar(select(func.count(PrivateComparisonInvitation.id))) == 0
+
+
+@pytest.mark.parametrize(
+    "transition",
+    ["revoked", "expired", "disabled", "generation", "feature-disabled"],
+)
+def test_final_session_rebind_rejects_a_transition_committed_after_the_initial_check(
+    comparisons_enabled,
+    monkeypatch,
+    transition: str,
+) -> None:  # noqa: ANN001
+    client, account_id = _seed_owner(f"binding-{transition}@example.test", "Transition")
+    original_preflight = private_comparisons_router.initial_private_comparison_session_preflight
+
+    def transition_after_preflight(*args, **kwargs) -> None:  # noqa: ANN002,ANN003
+        original_preflight(*args, **kwargs)
+        auth = kwargs["auth"]
+        with SessionLocal() as concurrent:
+            if transition == "revoked":
+                web_session = concurrent.get(WebSession, auth.session.id)
+                assert web_session is not None
+                concurrent.delete(web_session)
+            elif transition == "expired":
+                web_session = concurrent.get(WebSession, auth.session.id)
+                assert web_session is not None
+                web_session.expires_at = utcnow() - timedelta(seconds=1)
+            elif transition in {"disabled", "generation"}:
+                account = concurrent.get(Account, account_id)
+                assert account is not None
+                if transition == "disabled":
+                    account.is_disabled = True
+                else:
+                    account.access_generation += 1
+            else:
+                monkeypatch.setattr(
+                    settings_config,
+                    "private_comparisons_enabled",
+                    False,
+                )
+            concurrent.commit()
+
+    monkeypatch.setattr(
+        private_comparisons_router,
+        "initial_private_comparison_session_preflight",
+        transition_after_preflight,
+    )
+
+    response = client.post(
+        "/api/v1/private-comparisons/invitations",
+        json={**CONSENT, "duration_days": 30},
+        headers=comparison_headers(client),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "PRIVATE_COMPARISON_SESSION_MISMATCH"
+    with SessionLocal() as db:
+        assert db.scalar(select(func.count(PrivateComparisonInvitation.id))) == 0
+        assert (
+            db.scalar(
+                select(func.count(Event.id)).where(
+                    Event.kind.startswith("private_comparison:")
+                )
+            )
+            == 0
+        )
 
 
 def test_invalid_expired_revoked_and_self_invitations_are_generic(
@@ -750,7 +1000,7 @@ def test_invalid_expired_revoked_and_self_invitations_are_generic(
     invalid = recipient.post(
         "/api/v1/private-comparisons/invitations/accept",
         json={**CONSENT, "token": "pcinv1_" + "a" * 43},
-        headers=csrf_headers(recipient),
+        headers=comparison_headers(recipient),
     )
     assert invalid.status_code == 404
     self_invitation = _create_invitation(creator)
@@ -758,7 +1008,7 @@ def test_invalid_expired_revoked_and_self_invitations_are_generic(
         creator.post(
             "/api/v1/private-comparisons/invitations/accept",
             json={**CONSENT, "token": self_invitation["token"]},
-            headers=csrf_headers(creator),
+            headers=comparison_headers(creator),
         ).status_code
         == 404
     )
@@ -777,7 +1027,7 @@ def test_invalid_expired_revoked_and_self_invitations_are_generic(
         recipient.post(
             "/api/v1/private-comparisons/invitations/accept",
             json={**CONSENT, "token": expired["token"]},
-            headers=csrf_headers(recipient),
+            headers=comparison_headers(recipient),
         ).status_code
         == 404
     )
@@ -785,7 +1035,7 @@ def test_invalid_expired_revoked_and_self_invitations_are_generic(
     assert (
         creator.delete(
             f"/api/v1/private-comparisons/invitations/{revoked['public_id']}",
-            headers=csrf_headers(creator),
+            headers=comparison_headers(creator),
         ).status_code
         == 200
     )
@@ -793,7 +1043,7 @@ def test_invalid_expired_revoked_and_self_invitations_are_generic(
         recipient.post(
             "/api/v1/private-comparisons/invitations/accept",
             json={**CONSENT, "token": revoked["token"]},
-            headers=csrf_headers(recipient),
+            headers=comparison_headers(recipient),
         ).status_code
         == 404
     )
@@ -822,7 +1072,7 @@ def test_incompatible_academic_profiles_fail_without_revealing_which_condition(
     response = recipient.post(
         "/api/v1/private-comparisons/invitations/accept",
         json={**CONSENT, "token": token},
-        headers=csrf_headers(recipient),
+        headers=comparison_headers(recipient),
     )
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "PRIVATE_COMPARISON_NOT_ELIGIBLE"
@@ -843,7 +1093,7 @@ def test_direct_id_access_cannot_cross_to_a_third_account(comparisons_enabled) -
     assert (
         outsider.delete(
             f"/api/v1/private-comparisons/{relation['public_id']}",
-            headers=csrf_headers(outsider),
+            headers=comparison_headers(outsider),
         ).status_code
         == 404
     )
@@ -867,7 +1117,7 @@ def test_revocation_is_immediate_and_does_not_change_academic_rows(
 
     revoked = creator.delete(
         f"/api/v1/private-comparisons/{relation['public_id']}",
-        headers=csrf_headers(creator),
+        headers=comparison_headers(creator),
     )
     assert revoked.status_code == 200
     assert recipient.get(f"/api/v1/private-comparisons/{relation['public_id']}").status_code == 404
@@ -881,6 +1131,22 @@ def test_revocation_is_immediate_and_does_not_change_academic_rows(
         }
         row = db.scalar(select(PrivateComparison))
         assert row is not None and row.revoked_at is not None
+        terminal_events = list(
+            db.scalars(
+                select(Event).where(
+                    Event.kind == "private_comparison:revoked",
+                    Event.account_id.in_((creator_id, recipient_id)),
+                )
+            )
+        )
+        assert {event.account_id for event in terminal_events} == {
+            creator_id,
+            recipient_id,
+        }
+        assert [event.payload for event in terminal_events] == [
+            {"public_id": relation["public_id"]},
+            {"public_id": relation["public_id"]},
+        ]
     assert after == before
 
 
@@ -898,7 +1164,7 @@ def test_terminal_history_never_projects_live_peer_data_after_revocation(
 
     revoked = creator.delete(
         f"/api/v1/private-comparisons/{relation['public_id']}",
-        headers=csrf_headers(creator),
+        headers=comparison_headers(creator),
     )
     assert revoked.status_code == 200
 
@@ -978,7 +1244,7 @@ def test_stale_invitation_cannot_reactivate_revoked_relation(
 
     revoked = creator.delete(
         f"/api/v1/private-comparisons/{relation['public_id']}",
-        headers=csrf_headers(creator),
+        headers=comparison_headers(creator),
     )
     assert revoked.status_code == 200
     with SessionLocal() as db:
@@ -995,7 +1261,7 @@ def test_stale_invitation_cannot_reactivate_revoked_relation(
     response = recipient.post(
         "/api/v1/private-comparisons/invitations/accept",
         json={**CONSENT, "token": stale_invitation["token"]},
-        headers=csrf_headers(recipient),
+        headers=comparison_headers(recipient),
     )
 
     assert response.status_code == 404
@@ -1034,14 +1300,14 @@ def test_active_pair_probe_does_not_preserve_stale_invitation_for_reactivation(
     probe = recipient.post(
         "/api/v1/private-comparisons/invitations/accept",
         json={**CONSENT, "token": stale_invitation["token"]},
-        headers=csrf_headers(recipient),
+        headers=comparison_headers(recipient),
     )
     assert probe.status_code == 404
     assert probe.json()["detail"]["code"] == "PRIVATE_COMPARISON_INVITATION_UNAVAILABLE"
     assert (
         creator.delete(
             f"/api/v1/private-comparisons/{relation['public_id']}",
-            headers=csrf_headers(creator),
+            headers=comparison_headers(creator),
         ).status_code
         == 200
     )
@@ -1049,7 +1315,7 @@ def test_active_pair_probe_does_not_preserve_stale_invitation_for_reactivation(
     replay = recipient.post(
         "/api/v1/private-comparisons/invitations/accept",
         json={**CONSENT, "token": stale_invitation["token"]},
-        headers=csrf_headers(recipient),
+        headers=comparison_headers(recipient),
     )
 
     assert replay.status_code == 404
@@ -1096,7 +1362,7 @@ def test_pre_expiry_invitation_cannot_reactivate_expired_relation(
     replay = recipient.post(
         "/api/v1/private-comparisons/invitations/accept",
         json={**CONSENT, "token": stale_invitation["token"]},
-        headers=csrf_headers(recipient),
+        headers=comparison_headers(recipient),
     )
 
     assert replay.status_code == 404
@@ -1125,7 +1391,7 @@ def test_invitation_at_terminal_boundary_is_rejected(
     assert (
         creator.delete(
             f"/api/v1/private-comparisons/{relation['public_id']}",
-            headers=csrf_headers(creator),
+            headers=comparison_headers(creator),
         ).status_code
         == 200
     )
@@ -1145,7 +1411,7 @@ def test_invitation_at_terminal_boundary_is_rejected(
     replay = recipient.post(
         "/api/v1/private-comparisons/invitations/accept",
         json={**CONSENT, "token": stale_invitation["token"]},
-        headers=csrf_headers(recipient),
+        headers=comparison_headers(recipient),
     )
 
     assert replay.status_code == 404
@@ -1169,7 +1435,7 @@ def test_fresh_invitation_can_start_a_new_cycle_after_revocation(
     assert (
         creator.delete(
             f"/api/v1/private-comparisons/{first_relation['public_id']}",
-            headers=csrf_headers(creator),
+            headers=comparison_headers(creator),
         ).status_code
         == 200
     )
@@ -1313,7 +1579,7 @@ def test_decline_never_discloses_the_decliner_or_token(comparisons_enabled) -> N
     response = recipient.post(
         "/api/v1/private-comparisons/invitations/decline",
         json={"token": invitation["token"]},
-        headers=csrf_headers(recipient),
+        headers=comparison_headers(recipient),
     )
     assert response.status_code == 200
     history = creator.get("/api/v1/private-comparisons/invitations")
@@ -1340,7 +1606,7 @@ def test_invalid_token_is_not_echoed_in_response_or_logs(
     response = recipient.post(
         "/api/v1/private-comparisons/invitations/accept",
         json={**CONSENT, "token": synthetic_token},
-        headers=csrf_headers(recipient),
+        headers=comparison_headers(recipient),
     )
 
     assert response.status_code == 404
@@ -1378,7 +1644,7 @@ def test_active_invitation_limit_is_serialized_by_creator(comparisons_enabled) -
     limited = creator.post(
         "/api/v1/private-comparisons/invitations",
         json={**CONSENT, "duration_days": 30},
-        headers=csrf_headers(creator),
+        headers=comparison_headers(creator),
     )
     assert limited.status_code == 409
     assert limited.json()["detail"]["code"] == "PRIVATE_COMPARISON_INVITATION_LIMIT"

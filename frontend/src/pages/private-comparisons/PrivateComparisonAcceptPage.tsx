@@ -12,6 +12,8 @@ import { EmptyState } from "../../components/EmptyState";
 import { useToast } from "../../components/Toast";
 import { formatDate } from "../../lib/format";
 import { apiData, throwOnApiError } from "../../lib/generatedApi";
+import { armPrivateDeadline } from "../../lib/privateComparisonLease";
+import { consumeInvitationFragment, initializeInvitationFragmentOwner } from "../../lib/invitationFragmentOwner";
 import { queryKeys, useSession } from "../../lib/queries";
 import {
   PRIVATE_COMPARISON_DOCUMENT_TITLE,
@@ -19,7 +21,7 @@ import {
   useSessionBoundOneShot,
   useSecurityDocumentTitle,
 } from "../../lib/securityScope";
-import { useVerifiedSessionRequest } from "../../lib/sessionSecurity";
+import { useSessionSecurity, useVerifiedSessionRequest } from "../../lib/sessionSecurity";
 import { PrivateComparisonConfirmModal } from "./PrivateComparisonConfirmModal";
 import {
   emptyPrivateComparisonConsent,
@@ -28,11 +30,7 @@ import {
   type PrivateComparisonConsentState,
 } from "./PrivateComparisonConsent";
 import { PrivateComparisonScope } from "./PrivateComparisonScope";
-import {
-  invitationFromFragment,
-  privateComparisonErrorMessage,
-  usablePrivateComparisonConsentManifest,
-} from "./privateComparisonPresentation";
+import { privateComparisonErrorMessage, usablePrivateComparisonConsentManifest } from "./privateComparisonPresentation";
 
 type AcceptPageState = "checking" | "preview" | "missing" | "unavailable";
 
@@ -45,6 +43,7 @@ export function PrivateComparisonAcceptPage() {
   const accountId = session.data?.account?.id ?? "anonymous";
   const sessionScope = primarySessionScope(session.data);
   const runVerifiedRequest = useVerifiedSessionRequest();
+  const sessionSecurity = useSessionSecurity();
   const processedRef = useRef(false);
   const [state, setState] = useState<AcceptPageState>("checking");
   const [preview, setPreview] = useState<PrivateComparisonInvitationPreviewResponse | null>(null);
@@ -64,18 +63,34 @@ export function PrivateComparisonAcceptPage() {
   runVerifiedRequestRef.current = runVerifiedRequest;
 
   useLayoutEffect(() => {
+    if (!preview) return;
+    return armPrivateDeadline(preview.expires_at, () => bearerRef.current.purge());
+  }, [preview]);
+
+  useLayoutEffect(() => {
     if (processedRef.current) return;
     processedRef.current = true;
-    const fragment = invitationFromFragment(window.location.hash);
-    const cleanUrl = `${window.location.pathname}${window.location.search}`;
-    window.history.replaceState(window.history.state, "", cleanUrl);
-    if (fragment.state !== "valid") {
-      setState(fragment.state === "missing" ? "missing" : "unavailable");
+    const owner = initializeInvitationFragmentOwner();
+    owner.observe({
+      securityState: sessionSecurity.status,
+      authEpoch: sessionSecurity.authEpoch,
+      session: session.data,
+      sessionScope: sessionSecurity.scope,
+      sessionExpiresAt: session.data?.session_expires_at ?? null,
+      monotonicDeadline: null,
+      wallDeadline: null,
+      currentRequestSequence: 0,
+      latestCommittedSequence: 0,
+      transitionReason: null,
+    });
+    const token = consumeInvitationFragment(sessionSecurity.authEpoch, sessionScope);
+    if (!token) {
+      setState(owner.consumeRejectedFragment() ? "unavailable" : "missing");
       return;
     }
     const currentBearer = bearerRef.current;
     const request = currentBearer.begin();
-    if (!currentBearer.set(request, fragment.token)) {
+    if (!currentBearer.set(request, token)) {
       currentBearer.purge();
       return;
     }
@@ -83,7 +98,8 @@ export function PrivateComparisonAcceptPage() {
       .current(request.scope, (signal) =>
         apiData(
           privateComparisonsPreviewPrivateComparisonInvitation({
-            body: { token: fragment.token },
+            headers: { "X-IMTEGRALE-SESSION-BINDING": request.scope },
+            body: { token },
             signal,
             throwOnError: throwOnApiError,
           }),
@@ -103,7 +119,7 @@ export function PrivateComparisonAcceptPage() {
       .catch(() => {
         if (currentBearer.usable(request)) currentBearer.purge();
       });
-  }, []);
+  }, [session.data, sessionScope, sessionSecurity.authEpoch, sessionSecurity.scope, sessionSecurity.status]);
 
   const accept = async () => {
     const token = bearer.current();
@@ -114,6 +130,7 @@ export function PrivateComparisonAcceptPage() {
       const relation = await runVerifiedRequest(requestScope, (signal) =>
         apiData(
           privateComparisonsAcceptPrivateComparisonInvitation({
+            headers: { "X-IMTEGRALE-SESSION-BINDING": requestScope },
             body: {
               token,
               consent_version: preview.consent_manifest.consent_version,
@@ -150,6 +167,7 @@ export function PrivateComparisonAcceptPage() {
       await runVerifiedRequest(requestScope, (signal) =>
         apiData(
           privateComparisonsDeclinePrivateComparisonInvitation({
+            headers: { "X-IMTEGRALE-SESSION-BINDING": requestScope },
             body: { token },
             signal,
             throwOnError: throwOnApiError,

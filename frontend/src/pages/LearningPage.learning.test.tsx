@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { ToastProvider } from "../components/Toast";
 import { queryKeys } from "../lib/queries";
+import { SessionAuthority, SessionAuthorityRoot } from "../lib/sessionAuthority";
 import { inspectFetchRequest, readFetchJson } from "../test/fetchRequest";
 import { expectNoSeriousLearningViolations } from "../test/learningTestA11y";
 import type { Session } from "../types";
@@ -43,20 +44,23 @@ function renderDirectRoute(value: Session, initialEntry = "/parcours") {
       mutations: { retry: false },
     },
   });
+  const authority = new SessionAuthority();
   client.setQueryData(queryKeys.session, value);
   const result = render(
-    <QueryClientProvider client={client}>
-      <ToastProvider>
-        <MemoryRouter initialEntries={[initialEntry]}>
-          <Routes>
-            <Route path="/" element={<h1>[FICTIF] Accueil principal</h1>} />
-            <Route path="/parcours/*" element={<LearningPage session={value} />} />
-          </Routes>
-        </MemoryRouter>
-      </ToastProvider>
-    </QueryClientProvider>,
+    <SessionAuthorityRoot authority={authority} autoStart={false}>
+      <QueryClientProvider client={client}>
+        <ToastProvider>
+          <MemoryRouter initialEntries={[initialEntry]}>
+            <Routes>
+              <Route path="/" element={<h1>[FICTIF] Accueil principal</h1>} />
+              <Route path="/parcours/*" element={<LearningPage session={value} />} />
+            </Routes>
+          </MemoryRouter>
+        </ToastProvider>
+      </QueryClientProvider>
+    </SessionAuthorityRoot>,
   );
-  return { ...result, client };
+  return { ...result, authority, client };
 }
 
 function jsonResponse(payload: unknown, status = 200): Response {

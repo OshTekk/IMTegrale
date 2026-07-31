@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import {
   CircleHelp,
   ExternalLink,
@@ -12,7 +12,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { type FormEvent, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { BRAND } from "../brand";
 import { BrandMark, Logo } from "../components/Logo";
 import { GitHubMark } from "../components/GitHubMark";
@@ -21,18 +21,18 @@ import { ThemeToggle } from "../components/ThemeToggle";
 import { authLoginImt, authLoginToken } from "../generated/api/sdk.gen";
 import { apiData, throwOnApiError } from "../lib/generatedApi";
 import { authenticateWithPasskey, passkeysSupported } from "../lib/passkeys";
-import { replaceSessionState } from "../lib/queries";
-import { broadcastSessionChange } from "../lib/sessionSync";
+import { useSessionAuthority } from "../lib/sessionAuthority";
 
 type LoginMode = "passkey" | "imt" | "token";
 
 export function LoginPage() {
+  const location = useLocation();
   const [mode, setMode] = useState<LoginMode>("imt");
   const [showPassword, setShowPassword] = useState(false);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [token, setToken] = useState("");
-  const queryClient = useQueryClient();
+  const sessionAuthority = useSessionAuthority();
   const login = useMutation({
     mutationFn: async () => {
       if (mode === "passkey") return authenticateWithPasskey();
@@ -51,9 +51,8 @@ export function LoginPage() {
         }),
       );
     },
-    onSuccess: (session) => {
-      replaceSessionState(queryClient, session);
-      broadcastSessionChange();
+    onSuccess: () => {
+      sessionAuthority.signalLocalTransition("login");
     },
   });
 
@@ -123,6 +122,11 @@ export function LoginPage() {
         </section>
 
         <section className="login-panel">
+          {location.pathname === "/comparisons/accept" ? (
+            <p className="login-method-note" role="status">
+              Rouvre le lien d’invitation original avec ton compte personnel pour continuer.
+            </p>
+          ) : null}
           <div className="login-heading">
             <span>{mode === "imt" ? "Première connexion ou retour" : "Compte déjà créé"}</span>
             <h2>

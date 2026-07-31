@@ -17,6 +17,8 @@ import type {
 } from "../../generated/api/types.gen";
 import { PrivateComparisonAcceptGate } from "../../App";
 import { ToastProvider } from "../../components/Toast";
+import { resetInvitationFragmentOwnerForTests } from "../../lib/invitationFragmentOwner";
+import { resetPrivateComparisonLeasesForTests } from "../../lib/privateComparisonLease";
 import { clearAccountStateOnCapabilityChange, queryKeys, useSession } from "../../lib/queries";
 import { primarySessionScope } from "../../lib/securityScope";
 import { fetchSecuritySession, SessionSecurityBoundary } from "../../lib/sessionSecurity";
@@ -384,9 +386,12 @@ function persistedPageTransition(type: "pagehide" | "pageshow"): Event {
 
 afterEach(() => {
   cleanup();
+  resetInvitationFragmentOwnerForTests();
+  resetPrivateComparisonLeasesForTests();
   window.localStorage.clear();
   window.sessionStorage.clear();
   window.history.replaceState(null, "", "/");
+  Object.defineProperty(navigator, "onLine", { configurable: true, value: true });
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -603,7 +608,11 @@ describe("invitation one-shot", () => {
       window.dispatchEvent(
         new StorageEvent("storage", {
           key: "botnote:session-change",
-          newValue: "synthetic-replacement",
+          newValue: JSON.stringify({
+            version: 1,
+            type: "session-change",
+            nonce: "00000000-0000-4000-8000-000000000002",
+          }),
         }),
       );
     });
@@ -995,7 +1004,7 @@ describe("acceptation depuis le fragment", () => {
     second.unmount();
 
     const tokenSession: Session = { ...ownerSession, auth_method: "token" };
-    render(
+    const gate = render(
       <MemoryRouter>
         <PrivateComparisonAcceptGate session={tokenSession}>
           <PrivateComparisonAcceptPage />
@@ -1003,6 +1012,25 @@ describe("acceptation depuis le fragment", () => {
       </MemoryRouter>,
     );
     expect(screen.getByText("Compte personnel requis")).toBeTruthy();
+    expect(
+      screen.getByText("Rouvre le lien d’invitation original avec ton compte personnel pour continuer."),
+    ).toBeTruthy();
+    gate.rerender(
+      <MemoryRouter>
+        <PrivateComparisonAcceptGate
+          session={{
+            ...ownerSession,
+            private_comparisons: { available: false },
+          }}
+        >
+          <PrivateComparisonAcceptPage />
+        </PrivateComparisonAcceptGate>
+      </MemoryRouter>,
+    );
+    expect(screen.getByText("Comparaisons privées indisponibles")).toBeTruthy();
+    expect(
+      screen.getByText("Rouvre le lien d’invitation original avec ton compte personnel pour continuer."),
+    ).toBeTruthy();
     expect(calls).toBe(0);
   });
 
@@ -1149,6 +1177,27 @@ describe("détail bilatéral et cache privé", () => {
     client.setQueryData(queryKeys.privateComparison(ownerSession.account!.id, RELATION_ID), detail);
     renderRoute(<PrivateComparisonDetailPage />, `/comparisons/${RELATION_ID}`, client);
     expect(await screen.findByText("Cette comparaison n’est plus disponible")).toBeTruthy();
+    expect(screen.queryByText("15,2 / 20")).toBeNull();
+    expect(client.getQueryData(queryKeys.privateComparison(ownerSession.account!.id, RELATION_ID))).toBeUndefined();
+  });
+
+  it("ferme une relation qui expire hors ligne et purge immédiatement son cache", async () => {
+    const expiringDetail = {
+      ...detail,
+      expires_at: new Date(Date.now() + 1_000).toISOString(),
+    };
+    apiMockServer.use(http.get(`*/api/v1/private-comparisons/${RELATION_ID}`, () => HttpResponse.json(expiringDetail)));
+    const client = testClient();
+    renderRoute(<PrivateComparisonDetailPage />, `/comparisons/${RELATION_ID}`, client);
+    expect(await screen.findByText("Comparaison avec Camille Exemple")).toBeTruthy();
+
+    Object.defineProperty(navigator, "onLine", { configurable: true, value: false });
+
+    expect(
+      await screen.findByText("Cette comparaison n’est plus disponible", undefined, {
+        timeout: 2_000,
+      }),
+    ).toBeTruthy();
     expect(screen.queryByText("15,2 / 20")).toBeNull();
     expect(client.getQueryData(queryKeys.privateComparison(ownerSession.account!.id, RELATION_ID))).toBeUndefined();
   });

@@ -1,11 +1,12 @@
 import { Copy, Link2, LockKeyhole } from "lucide-react";
-import { useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import type {
   PrivateComparisonConsentManifestResponse,
   PrivateComparisonInvitationCreatedResponse,
 } from "../../generated/api/types.gen";
 import { privateComparisonsCreatePrivateComparisonInvitation } from "../../generated/api/sdk.gen";
 import { apiData, throwOnApiError } from "../../lib/generatedApi";
+import { armPrivateDeadline } from "../../lib/privateComparisonLease";
 import { useSessionBoundOneShot } from "../../lib/securityScope";
 import { useSessionSecurity, useVerifiedSessionRequest } from "../../lib/sessionSecurity";
 import { Modal } from "../../components/Modal";
@@ -55,8 +56,15 @@ export function PrivateComparisonInvitationModal({
     setDuration(30);
     onClose();
   });
+  const oneShotRef = useRef(oneShot);
+  oneShotRef.current = oneShot;
   const usableManifest = manifest && usablePrivateComparisonConsentManifest(manifest) ? manifest : null;
   const scopedCreated = oneShot.value?.session_scope === sessionScope ? oneShot.value : null;
+
+  useLayoutEffect(() => {
+    if (!scopedCreated) return;
+    return armPrivateDeadline(scopedCreated.expires_at, () => oneShotRef.current.purge());
+  }, [scopedCreated]);
 
   const close = oneShot.purge;
 
@@ -70,6 +78,7 @@ export function PrivateComparisonInvitationModal({
       const response = await runVerifiedRequest(request.scope, (sessionSignal) =>
         apiData(
           privateComparisonsCreatePrivateComparisonInvitation({
+            headers: { "X-IMTEGRALE-SESSION-BINDING": request.scope },
             body: {
               consent_version: usableManifest.consent_version,
               acknowledge_identity_visibility: consent.identity,

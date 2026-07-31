@@ -1,4 +1,3 @@
-import { useQueryClient } from "@tanstack/react-query";
 import { lazy, Suspense, type ReactNode, useEffect, useLayoutEffect } from "react";
 import { Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AppShell } from "./components/AppShell";
@@ -10,11 +9,12 @@ import { SyncSetupModal } from "./components/SyncSetupModal";
 import { SimulationLayout } from "./components/SimulationLayout";
 import { LoginPage } from "./pages/LoginPage";
 import { isPrimaryOwnerSession } from "./lib/auth";
+import { initializeInvitationFragmentOwner } from "./lib/invitationFragmentOwner";
 import { primarySessionScope } from "./lib/securityScope";
-import { fetchSecuritySession, SessionSecurityBoundary } from "./lib/sessionSecurity";
+import { SessionSecurityBoundary } from "./lib/sessionSecurity";
+import { useSessionAuthority } from "./lib/sessionAuthority";
 import { learningDocumentTitle } from "./lib/learning";
-import { queryKeys, replaceSessionState, useSession } from "./lib/queries";
-import { broadcastSessionChange } from "./lib/sessionSync";
+import { useSession } from "./lib/queries";
 
 const loadOverviewPage = () => import("./pages/OverviewPage");
 const loadResultsPages = () => import("./pages/results");
@@ -112,11 +112,14 @@ export function PrivateComparisonAcceptGate({
   session: NonNullable<ReturnType<typeof useSession>["data"]>;
   children: ReactNode;
 }) {
+  // main.tsx owns the production bootstrap. This idempotent call also keeps
+  // route-level harnesses fail-closed before evaluating authorization.
+  initializeInvitationFragmentOwner();
   if (!isPrimaryOwnerSession(session)) {
     return (
       <EmptyState
         title="Compte personnel requis"
-        detail="Ce lien doit être ouvert avec ton compte IMTégrale personnel."
+        detail="Rouvre le lien d’invitation original avec ton compte personnel pour continuer."
         action={
           <Link className="secondary-button" to="/">
             Revenir à l’accueil
@@ -129,7 +132,7 @@ export function PrivateComparisonAcceptGate({
     return (
       <EmptyState
         title="Comparaisons privées indisponibles"
-        detail="Cette fonctionnalité n’est pas disponible pour cette session."
+        detail="Rouvre le lien d’invitation original avec ton compte personnel pour continuer."
         action={
           <Link className="secondary-button" to="/">
             Revenir à l’accueil
@@ -180,7 +183,7 @@ export default function App() {
 function StudentApp() {
   const location = useLocation();
   const session = useSession();
-  const queryClient = useQueryClient();
+  const sessionAuthority = useSessionAuthority();
   const authenticated = Boolean(session.data?.authenticated);
 
   useEffect(() => {
@@ -194,20 +197,19 @@ function StudentApp() {
 
   useEffect(() => {
     const handleUnauthorized = () => {
-      replaceSessionState(queryClient, { authenticated: false });
-      broadcastSessionChange();
+      sessionAuthority.signalLocalTransition("unauthorized");
     };
     window.addEventListener("botnote:unauthorized", handleUnauthorized);
     return () => window.removeEventListener("botnote:unauthorized", handleUnauthorized);
-  }, [queryClient]);
+  }, [sessionAuthority]);
 
   useEffect(() => {
     const handleLearningReverification = () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.session });
+      void sessionAuthority.refreshAuthoritativeSession();
     };
     window.addEventListener("botnote:learning-reverify", handleLearningReverification);
     return () => window.removeEventListener("botnote:learning-reverify", handleLearningReverification);
-  }, [queryClient]);
+  }, [sessionAuthority]);
 
   if (session.isPending) {
     return (
@@ -226,11 +228,7 @@ function StudentApp() {
   const privateComparisonsAvailable = Boolean(isPrimaryOwner && session.data.private_comparisons?.available === true);
   const privateComparisonSessionScope = primarySessionScope(session.data);
   return (
-    <SessionSecurityBoundary
-      session={session.data}
-      sessionPending={session.isPending}
-      refetchSession={fetchSecuritySession}
-    >
+    <SessionSecurityBoundary>
       <>
         <Routes>
           <Route element={<AppShell session={session.data} preloadRoute={preloadStudentRoute} />}>
@@ -290,11 +288,11 @@ function StudentApp() {
         <SecuritySetupModal
           open={Boolean(isPrimaryOwner && session.data.needs_security_setup)}
           isPrimaryOwner={isPrimaryOwner}
-          onComplete={() => queryClient.invalidateQueries({ queryKey: queryKeys.session })}
+          onComplete={() => sessionAuthority.refreshAuthoritativeSession()}
         />
         <SyncSetupModal
           open={Boolean(isPrimaryOwner && !session.data.needs_security_setup && session.data.needs_sync_setup)}
-          onComplete={() => queryClient.invalidateQueries({ queryKey: queryKeys.session })}
+          onComplete={() => sessionAuthority.refreshAuthoritativeSession()}
         />
       </>
     </SessionSecurityBoundary>

@@ -963,11 +963,11 @@ export async function installFakeEventSource(page: Page) {
     Object.defineProperty(window, "EventSource", { configurable: true, value: FakeEventSource });
     Object.defineProperty(window, "__emitSyntheticUpdate", {
       configurable: true,
-      value: () => {
+      value: (payload: Record<string, unknown> = {}) => {
         for (const source of FakeEventSource.instances) {
           source.dispatchEvent(
             new MessageEvent("update", {
-              data: "{}",
+              data: JSON.stringify(payload),
               lastEventId: `evc1_${"b".repeat(32)}`,
             }),
           );

@@ -17,6 +17,12 @@ from app.api_models import (
 from app.config import Settings, get_settings
 from app.database import get_db
 from app.private_comparison_contract import private_comparison_consent_manifest
+from app.private_comparison_security import (
+    final_rebind_callback,
+    initial_private_comparison_session_preflight,
+    rebind_primary_web_session_for_mutation,
+    require_private_comparison_session_binding,
+)
 from app.schemas import (
     PrivateComparisonInvitationAccept,
     PrivateComparisonInvitationCreate,
@@ -37,10 +43,12 @@ from app.services.private_comparisons import (
     comparison_detail,
     create_invitation,
     decline_invitation,
+    invitation_participant_account_ids,
     list_comparisons,
     list_invitations,
     preview_invitation,
     raise_private_comparison_invitation_unavailable,
+    relation_participant_account_ids,
     require_private_comparisons_enabled,
     revoke_comparison,
     revoke_invitation,
@@ -104,9 +112,24 @@ def create_private_comparison_invitation(
     payload: PrivateComparisonInvitationCreate,
     request: Request,
     auth: AuthContext = Depends(require_primary_owner_action),
+    session_binding: str = Depends(require_private_comparison_session_binding),
     db: Session = Depends(get_db),
     settings: Settings = Depends(_feature_settings),
 ) -> dict:
+    initial_private_comparison_session_preflight(
+        db,
+        auth=auth,
+        expected_binding=session_binding,
+        settings=settings,
+    )
+    rebound = rebind_primary_web_session_for_mutation(
+        db,
+        auth=auth,
+        expected_binding=session_binding,
+        settings=settings,
+        account_ids=(auth.account.id,),
+    )
+    auth = rebound.auth
     invitation_account_rate_limiter.check(f"account:{auth.account.id}")
     invitation_client_rate_limiter.check(f"client:{client_identity(request, settings)}")
     try:
@@ -116,6 +139,7 @@ def create_private_comparison_invitation(
             consent_version=payload.consent_version,
             duration_days=payload.duration_days,
             settings=settings,
+            before_write=final_rebind_callback(rebound, settings=settings),
         )
         record_event(
             db,
@@ -162,12 +186,32 @@ def get_private_comparison_invitations(
 def preview_private_comparison_invitation(
     payload: PrivateComparisonInvitationTokenRequest,
     auth: AuthContext = Depends(require_primary_owner_action),
+    session_binding: str = Depends(require_private_comparison_session_binding),
     db: Session = Depends(get_db),
     settings: Settings = Depends(_feature_settings),
 ) -> dict:
+    initial_private_comparison_session_preflight(
+        db,
+        auth=auth,
+        expected_binding=session_binding,
+        settings=settings,
+    )
+    account_ids = invitation_participant_account_ids(
+        db,
+        actor_account_id=auth.account.id,
+        raw_token=payload.token.get_secret_value(),
+        settings=settings,
+    )
+    rebound = rebind_primary_web_session_for_mutation(
+        db,
+        auth=auth,
+        expected_binding=session_binding,
+        settings=settings,
+        account_ids=account_ids,
+    )
     return preview_invitation(
         db,
-        accepter_account_id=auth.account.id,
+        accepter_account_id=rebound.auth.account.id,
         raw_token=payload.token.get_secret_value(),
         settings=settings,
     )
@@ -181,9 +225,30 @@ def preview_private_comparison_invitation(
 def accept_private_comparison_invitation(
     payload: PrivateComparisonInvitationAccept,
     auth: AuthContext = Depends(require_primary_owner_action),
+    session_binding: str = Depends(require_private_comparison_session_binding),
     db: Session = Depends(get_db),
     settings: Settings = Depends(_feature_settings),
 ) -> dict:
+    initial_private_comparison_session_preflight(
+        db,
+        auth=auth,
+        expected_binding=session_binding,
+        settings=settings,
+    )
+    account_ids = invitation_participant_account_ids(
+        db,
+        actor_account_id=auth.account.id,
+        raw_token=payload.token.get_secret_value(),
+        settings=settings,
+    )
+    rebound = rebind_primary_web_session_for_mutation(
+        db,
+        auth=auth,
+        expected_binding=session_binding,
+        settings=settings,
+        account_ids=account_ids,
+    )
+    auth = rebound.auth
     try:
         comparison = accept_invitation(
             db,
@@ -191,6 +256,7 @@ def accept_private_comparison_invitation(
             raw_token=payload.token.get_secret_value(),
             consent_version=payload.consent_version,
             settings=settings,
+            before_write=final_rebind_callback(rebound, settings=settings),
         )
         for account_id in (comparison.account_a_id, comparison.account_b_id):
             record_event(
@@ -214,14 +280,36 @@ def accept_private_comparison_invitation(
 def decline_private_comparison_invitation(
     payload: PrivateComparisonInvitationTokenRequest,
     auth: AuthContext = Depends(require_primary_owner_action),
+    session_binding: str = Depends(require_private_comparison_session_binding),
     db: Session = Depends(get_db),
     settings: Settings = Depends(_feature_settings),
 ) -> dict:
+    initial_private_comparison_session_preflight(
+        db,
+        auth=auth,
+        expected_binding=session_binding,
+        settings=settings,
+    )
+    account_ids = invitation_participant_account_ids(
+        db,
+        actor_account_id=auth.account.id,
+        raw_token=payload.token.get_secret_value(),
+        settings=settings,
+    )
+    rebound = rebind_primary_web_session_for_mutation(
+        db,
+        auth=auth,
+        expected_binding=session_binding,
+        settings=settings,
+        account_ids=account_ids,
+    )
+    auth = rebound.auth
     invitation = decline_invitation(
         db,
         decliner_account_id=auth.account.id,
         raw_token=payload.token.get_secret_value(),
         settings=settings,
+        before_write=final_rebind_callback(rebound, settings=settings),
     )
     record_event(
         db,
@@ -237,13 +325,29 @@ def decline_private_comparison_invitation(
 def delete_private_comparison_invitation(
     public_id: str,
     auth: AuthContext = Depends(require_primary_owner_action),
+    session_binding: str = Depends(require_private_comparison_session_binding),
     db: Session = Depends(get_db),
-    _settings: Settings = Depends(_feature_settings),
+    settings: Settings = Depends(_feature_settings),
 ) -> dict:
+    initial_private_comparison_session_preflight(
+        db,
+        auth=auth,
+        expected_binding=session_binding,
+        settings=settings,
+    )
+    rebound = rebind_primary_web_session_for_mutation(
+        db,
+        auth=auth,
+        expected_binding=session_binding,
+        settings=settings,
+        account_ids=(auth.account.id,),
+    )
+    auth = rebound.auth
     changed = revoke_invitation(
         db,
         creator_account_id=auth.account.id,
         public_id=public_id,
+        before_write=final_rebind_callback(rebound, settings=settings),
     )
     if changed:
         record_event(
@@ -279,17 +383,44 @@ def get_private_comparison(
 def delete_private_comparison(
     public_id: str,
     auth: AuthContext = Depends(require_primary_owner_action),
+    session_binding: str = Depends(require_private_comparison_session_binding),
     db: Session = Depends(get_db),
-    _settings: Settings = Depends(_feature_settings),
+    settings: Settings = Depends(_feature_settings),
 ) -> dict:
-    changed = revoke_comparison(db, account_id=auth.account.id, public_id=public_id)
+    initial_private_comparison_session_preflight(
+        db,
+        auth=auth,
+        expected_binding=session_binding,
+        settings=settings,
+    )
+    account_ids = relation_participant_account_ids(
+        db,
+        actor_account_id=auth.account.id,
+        public_id=public_id,
+    )
+    rebound = rebind_primary_web_session_for_mutation(
+        db,
+        auth=auth,
+        expected_binding=session_binding,
+        settings=settings,
+        account_ids=account_ids,
+    )
+    auth = rebound.auth
+    changed = revoke_comparison(
+        db,
+        account_id=auth.account.id,
+        public_id=public_id,
+        before_write=final_rebind_callback(rebound, settings=settings),
+    )
     if changed:
-        record_event(
-            db,
-            account_id=auth.account.id,
-            kind="private_comparison:revoked",
-            actor=auth.actor,
-        )
+        for account_id in account_ids:
+            record_event(
+                db,
+                account_id=account_id,
+                kind="private_comparison:revoked",
+                actor=auth.actor if account_id == auth.account.id else "system",
+                payload={"public_id": public_id},
+            )
         db.commit()
     return {"ok": True}
 

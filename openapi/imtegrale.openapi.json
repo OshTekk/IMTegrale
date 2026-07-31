@@ -20850,6 +20850,17 @@
       },
       "post": {
         "operationId": "private_comparisons_create_private_comparison_invitation",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-IMTEGRALE-SESSION-BINDING",
+            "required": true,
+            "schema": {
+              "title": "X-Imtegrale-Session-Binding",
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -20971,6 +20982,17 @@
     "/api/v1/private-comparisons/invitations/accept": {
       "post": {
         "operationId": "private_comparisons_accept_private_comparison_invitation",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-IMTEGRALE-SESSION-BINDING",
+            "required": true,
+            "schema": {
+              "title": "X-Imtegrale-Session-Binding",
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -21092,6 +21114,17 @@
     "/api/v1/private-comparisons/invitations/decline": {
       "post": {
         "operationId": "private_comparisons_decline_private_comparison_invitation",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-IMTEGRALE-SESSION-BINDING",
+            "required": true,
+            "schema": {
+              "title": "X-Imtegrale-Session-Binding",
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -21213,6 +21246,17 @@
     "/api/v1/private-comparisons/invitations/preview": {
       "post": {
         "operationId": "private_comparisons_preview_private_comparison_invitation",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-IMTEGRALE-SESSION-BINDING",
+            "required": true,
+            "schema": {
+              "title": "X-Imtegrale-Session-Binding",
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -21343,6 +21387,15 @@
               "title": "Public Id",
               "type": "string"
             }
+          },
+          {
+            "in": "header",
+            "name": "X-IMTEGRALE-SESSION-BINDING",
+            "required": true,
+            "schema": {
+              "title": "X-Imtegrale-Session-Binding",
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -21463,6 +21516,15 @@
             "required": true,
             "schema": {
               "title": "Public Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-IMTEGRALE-SESSION-BINDING",
+            "required": true,
+            "schema": {
+              "title": "X-Imtegrale-Session-Binding",
               "type": "string"
             }
           }

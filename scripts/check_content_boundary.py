@@ -45,6 +45,7 @@ PUBLIC_PRIVATE_COMPARISON_PATH_ALLOWLIST = frozenset(
     {
         "backend/alembic/versions/0029_private_comparisons.py",
         "backend/app/private_comparison_contract.py",
+        "backend/app/private_comparison_security.py",
         "backend/app/routers/private_comparisons.py",
         "backend/app/services/private_comparisons.py",
         "backend/postgres_tests/test_private_comparisons.py",
@@ -55,6 +56,7 @@ PUBLIC_PRIVATE_COMPARISON_PATH_ALLOWLIST = frozenset(
         "docs/security/private-comparisons-threat-model.md",
         "frontend/e2e/private-comparison-fixtures.ts",
         "frontend/e2e/private-comparisons.spec.ts",
+        "frontend/src/lib/privateComparisonLease.ts",
         "frontend/src/lib/privateComparisonsGenerated.test.ts",
         "frontend/src/pages/private-comparisons/PrivateComparisonAcceptPage.tsx",
         "frontend/src/pages/private-comparisons/PrivateComparisonCommonUes.tsx",
@@ -70,6 +72,7 @@ PUBLIC_PRIVATE_COMPARISON_PATH_ALLOWLIST = frozenset(
         "frontend/src/pages/private-comparisons/privateComparisons.css",
         "frontend/src/pages/private-comparisons/privateComparisons.test.tsx",
         "app/private_comparison_contract.py",
+        "app/private_comparison_security.py",
         "app/routers/private_comparisons.py",
         "app/services/private_comparisons.py",
     }

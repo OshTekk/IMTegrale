@@ -73,6 +73,7 @@ afterEach(() => {
   cleanup();
   vi.useRealTimers();
   window.localStorage.clear();
+  Object.defineProperty(navigator, "onLine", { configurable: true, value: true });
   document.documentElement.removeAttribute("data-session-security");
   vi.restoreAllMocks();
 });
@@ -130,7 +131,11 @@ describe("SessionSecurityBoundary", () => {
       window.dispatchEvent(
         new StorageEvent("storage", {
           key: "botnote:session-change",
-          newValue: "synthetic-session-change",
+          newValue: JSON.stringify({
+            version: 1,
+            type: "session-change",
+            nonce: "00000000-0000-4000-8000-000000000001",
+          }),
         }),
       );
     });
@@ -219,6 +224,33 @@ describe("SessionSecurityBoundary", () => {
     );
 
     expect(screen.queryByText("DONNEE_PRIVEE_SYNTHETIQUE")).toBeNull();
-    expect(document.documentElement.dataset.sessionSecurity).toBe("invalidating");
+    expect(document.documentElement.dataset.sessionSecurity).toBe("expired");
+  });
+
+  it("ne réancre jamais une deadline plus tardive pour le même scope", async () => {
+    vi.useFakeTimers();
+    const client = new QueryClient();
+    const initial = authenticatedSession(SCOPE_A, "2099-07-30T12:00:05.000Z");
+    const extended = authenticatedSession(SCOPE_A, "2099-07-30T12:00:30.000Z");
+    const view = render(
+      <Providers client={client} session={initial} refetchSession={vi.fn()}>
+        <SecurityProbe />
+      </Providers>,
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    view.rerender(
+      <Providers client={client} session={extended} refetchSession={vi.fn()}>
+        <SecurityProbe />
+      </Providers>,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4_001);
+    });
+
+    expect(screen.queryByText("DONNEE_PRIVEE_SYNTHETIQUE")).toBeNull();
+    expect(document.documentElement.dataset.sessionSecurity).toBe("expired");
   });
 });

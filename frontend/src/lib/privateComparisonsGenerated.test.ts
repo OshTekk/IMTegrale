@@ -16,6 +16,7 @@ const consent = {
   acknowledge_academic_scope: true,
   acknowledge_copy_risk: true,
 } as const;
+const sessionBinding = `bss1_${"f".repeat(64)}`;
 
 const consentManifest: PrivateComparisonConsentManifestResponse = {
   consent_version: 2,
@@ -71,11 +72,15 @@ describe("private comparison generated contract", () => {
     const created = await apiData(
       privateComparisonsCreatePrivateComparisonInvitation({
         body: { ...consent, duration_days: 30 },
+        headers: { "X-IMTEGRALE-SESSION-BINDING": sessionBinding },
         throwOnError: throwOnApiError,
       }),
     );
 
     expect(created.token).toBe(oneShot);
+    const request = (fetch as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
+    expect(request).toBeInstanceOf(Request);
+    expect((request as Request).headers.get("X-IMTEGRALE-SESSION-BINDING")).toBe(sessionBinding);
     const listContract: PrivateComparisonInvitationListResponse = { invitations: [] };
     expect(listContract).toEqual({ invitations: [] });
   });
@@ -101,6 +106,7 @@ describe("private comparison generated contract", () => {
     await apiData(
       privateComparisonsAcceptPrivateComparisonInvitation({
         body: { ...consent, token },
+        headers: { "X-IMTEGRALE-SESSION-BINDING": sessionBinding },
         throwOnError: throwOnApiError,
       }),
     );
@@ -110,6 +116,7 @@ describe("private comparison generated contract", () => {
     const typedRequest = request as Request;
     expect(typedRequest.method).toBe("POST");
     expect(typedRequest.url).not.toContain(token);
+    expect(typedRequest.headers.get("X-IMTEGRALE-SESSION-BINDING")).toBe(sessionBinding);
     await expect(typedRequest.clone().json()).resolves.toMatchObject({ token });
   });
 });

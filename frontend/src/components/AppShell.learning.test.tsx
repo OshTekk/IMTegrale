@@ -5,6 +5,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { queryKeys } from "../lib/queries";
+import { SessionAuthority, SessionAuthorityRoot } from "../lib/sessionAuthority";
 import type { Dashboard, Session } from "../types";
 import { AppShell } from "./AppShell";
 import { ToastProvider } from "./Toast";
@@ -31,19 +32,21 @@ function learningSession(authMethod: "imt" | "token"): Session {
   };
 }
 
-function shell(client: QueryClient, session: Session) {
+function shell(client: QueryClient, session: Session, authority: SessionAuthority) {
   return (
-    <QueryClientProvider client={client}>
-      <ToastProvider>
-        <MemoryRouter initialEntries={["/"]}>
-          <Routes>
-            <Route element={<AppShell session={session} preloadRoute={() => undefined} />}>
-              <Route index element={<p>[FICTIF] Vue d'ensemble</p>} />
-            </Route>
-          </Routes>
-        </MemoryRouter>
-      </ToastProvider>
-    </QueryClientProvider>
+    <SessionAuthorityRoot authority={authority} autoStart={false}>
+      <QueryClientProvider client={client}>
+        <ToastProvider>
+          <MemoryRouter initialEntries={["/"]}>
+            <Routes>
+              <Route element={<AppShell session={session} preloadRoute={() => undefined} />}>
+                <Route index element={<p>[FICTIF] Vue d'ensemble</p>} />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </ToastProvider>
+      </QueryClientProvider>
+    </SessionAuthorityRoot>
   );
 }
 
@@ -66,6 +69,7 @@ afterEach(() => {
 describe("AppShell learning entry points", () => {
   it("removes navigation and CTA immediately when a primary session becomes a token", () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const authority = new SessionAuthority();
     const primary = learningSession("imt");
     client.setQueryData(queryKeys.session, primary);
     client.setQueryData(queryKeys.dashboard(account.id), {
@@ -73,14 +77,14 @@ describe("AppShell learning entry points", () => {
       latest_event_cursor: undefined,
     } as unknown as Dashboard);
 
-    const view = render(shell(client, primary));
+    const view = render(shell(client, primary, authority));
     expect(screen.getByRole("link", { name: "Parcours" })).toBeTruthy();
     expect(screen.getByRole("link", { name: "Réussir ma 2A" })).toBeTruthy();
     expect(screen.getByText("Synchroniser")).toBeTruthy();
 
     const delegated = learningSession("token");
     client.setQueryData(queryKeys.session, delegated);
-    view.rerender(shell(client, delegated));
+    view.rerender(shell(client, delegated, authority));
 
     expect(screen.queryByRole("link", { name: "Parcours" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Réussir ma 2A" })).toBeNull();

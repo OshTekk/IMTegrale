@@ -80,7 +80,7 @@ from app.schemas_admin import (
     AdminPasswordChange,
     AdminSyncRequest,
 )
-from app.security import ensure_utc
+from app.security import ensure_utc, lock_web_sessions_for_account_transition
 from app.services.admin_passkeys import (
     AdminPasskeyError,
     admin_authentication_options,
@@ -791,6 +791,8 @@ def manage_account(
     auth: AdminAuthContext = Depends(require_admin_recent_mfa_action),
     db: Session = Depends(get_db),
 ) -> dict:
+    if payload.action in {"disable", "revoke_access"}:
+        lock_web_sessions_for_account_transition(db, account_id)
     account = _get_account_for_update(db, account_id)
     profile = db.get(LeaderboardProfile, account.id)
     reason = (payload.reason or "").strip()
@@ -1155,6 +1157,7 @@ def delete_account(
     auth: AdminAuthContext = Depends(require_admin_recent_mfa_action),
     db: Session = Depends(get_db),
 ) -> dict:
+    lock_web_sessions_for_account_transition(db, account_id)
     account = _get_account(db, account_id)
     account_snapshot = {"id": account.id, "display_name": account.display_name}
     try:

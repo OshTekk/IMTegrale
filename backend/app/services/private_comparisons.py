@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import secrets
 from collections import Counter, defaultdict
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import NoReturn
 
@@ -36,6 +37,7 @@ from app.private_comparison_contract import (
     valid_private_comparison_public_id,
     valid_private_comparison_token,
 )
+from app.private_comparison_security import private_comparison_account_lock_statement
 from app.security import ensure_utc, token_digest, token_digests
 from app.services.dashboard import calculate_ues
 from app.services.leaderboard import academic_segment, official_name
@@ -126,8 +128,15 @@ def lock_private_comparison_invitations_for_account_deletion(
     db: Session,
     account_id: str,
 ) -> None:
-    # Accept locks one invitation before the participant accounts. Locking all
-    # invitations in stable order keeps account deletion on the same path.
+    # Acquire the account before dependent invitation rows even when a caller
+    # loaded it without FOR UPDATE.
+    db.scalar(
+        private_comparison_account_lock_statement(
+            (account_id,),
+            include_disabled=True,
+            shared=False,
+        )
+    )
     list(
         db.scalars(
             select(PrivateComparisonInvitation.id)
@@ -241,14 +250,11 @@ def _eligible_pair(db: Session, first: Account, second: Account) -> bool:
 def _locked_accounts(db: Session, account_ids: tuple[str, ...]) -> dict[str, Account]:
     rows = list(
         db.scalars(
-            select(Account)
-            .where(
-                Account.id.in_(account_ids),
-                Account.is_disabled.is_(False),
+            private_comparison_account_lock_statement(
+                account_ids,
+                include_disabled=False,
+                shared=False,
             )
-            .order_by(Account.id)
-            .execution_options(populate_existing=True)
-            .with_for_update()
         )
     )
     return {account.id: account for account in rows}
@@ -257,14 +263,11 @@ def _locked_accounts(db: Session, account_ids: tuple[str, ...]) -> dict[str, Acc
 def _shared_locked_accounts(db: Session, account_ids: tuple[str, ...]) -> dict[str, Account]:
     rows = list(
         db.scalars(
-            select(Account)
-            .where(
-                Account.id.in_(account_ids),
-                Account.is_disabled.is_(False),
+            private_comparison_account_lock_statement(
+                account_ids,
+                include_disabled=False,
+                shared=True,
             )
-            .order_by(Account.id)
-            .execution_options(populate_existing=True)
-            .with_for_update(read=True)
         )
     )
     return {account.id: account for account in rows}
@@ -276,11 +279,11 @@ def _locked_accounts_including_disabled(
 ) -> dict[str, Account]:
     rows = list(
         db.scalars(
-            select(Account)
-            .where(Account.id.in_(account_ids))
-            .order_by(Account.id)
-            .execution_options(populate_existing=True)
-            .with_for_update()
+            private_comparison_account_lock_statement(
+                account_ids,
+                include_disabled=True,
+                shared=False,
+            )
         )
     )
     return {account.id: account for account in rows}
@@ -291,13 +294,11 @@ def load_fresh_active_primary_account_for_update(
     account_id: str,
 ) -> Account | None:
     return db.scalar(
-        select(Account)
-        .where(
-            Account.id == account_id,
-            Account.is_disabled.is_(False),
+        private_comparison_account_lock_statement(
+            (account_id,),
+            include_disabled=False,
+            shared=False,
         )
-        .execution_options(populate_existing=True)
-        .with_for_update()
     )
 
 
@@ -308,6 +309,7 @@ def create_invitation(
     consent_version: int,
     duration_days: int = PRIVATE_COMPARISON_DEFAULT_DURATION_DAYS,
     settings: Settings,
+    before_write: Callable[[], None] | None = None,
 ) -> tuple[PrivateComparisonInvitation, str]:
     if consent_version != PRIVATE_COMPARISON_CONSENT_VERSION:
         _eligibility_error()
@@ -351,6 +353,8 @@ def create_invitation(
                 "message": "Limite temporaire d'invitations atteinte.",
             },
         )
+    if before_write is not None:
+        before_write()
     raw_token = generate_private_comparison_token()
     invitation = PrivateComparisonInvitation(
         public_id=_generate_public_id(PRIVATE_COMPARISON_INVITATION_PUBLIC_ID_PREFIX),
@@ -399,12 +403,27 @@ def revoke_invitation(
     *,
     creator_account_id: str,
     public_id: str,
+    before_write: Callable[[], None] | None = None,
 ) -> bool:
     if not valid_private_comparison_invitation_public_id(public_id):
+        raise_private_comparison_invitation_unavailable()
+    coordinates = db.execute(
+        select(
+            PrivateComparisonInvitation.id,
+            PrivateComparisonInvitation.creator_account_id,
+        ).where(
+            PrivateComparisonInvitation.public_id == public_id,
+            PrivateComparisonInvitation.creator_account_id == creator_account_id,
+        )
+    ).one_or_none()
+    if coordinates is None:
+        raise_private_comparison_invitation_unavailable()
+    if load_fresh_active_primary_account_for_update(db, creator_account_id) is None:
         raise_private_comparison_invitation_unavailable()
     invitation = db.scalar(
         select(PrivateComparisonInvitation)
         .where(
+            PrivateComparisonInvitation.id == coordinates.id,
             PrivateComparisonInvitation.public_id == public_id,
             PrivateComparisonInvitation.creator_account_id == creator_account_id,
         )
@@ -413,8 +432,8 @@ def revoke_invitation(
     )
     if invitation is None:
         raise_private_comparison_invitation_unavailable()
-    if load_fresh_active_primary_account_for_update(db, creator_account_id) is None:
-        raise_private_comparison_invitation_unavailable()
+    if before_write is not None:
+        before_write()
     if invitation_status(invitation) is not PrivateComparisonInvitationStatus.ACTIVE:
         return False
     invitation.revoked_at = utcnow()
@@ -445,6 +464,19 @@ def _invitation_for_token(
     ):
         raise_private_comparison_invitation_unavailable()
     return invitation
+
+
+def invitation_participant_account_ids(
+    db: Session,
+    *,
+    actor_account_id: str,
+    raw_token: str,
+    settings: Settings,
+) -> tuple[str, ...]:
+    invitation = _invitation_for_token(db, raw_token, settings, lock=False)
+    if invitation.creator_account_id == actor_account_id:
+        raise_private_comparison_invitation_unavailable()
+    return tuple(sorted((invitation.creator_account_id, actor_account_id)))
 
 
 def preview_invitation(
@@ -481,18 +513,25 @@ def accept_invitation(
     raw_token: str,
     consent_version: int,
     settings: Settings,
+    before_write: Callable[[], None] | None = None,
 ) -> PrivateComparison:
     if consent_version != PRIVATE_COMPARISON_CONSENT_VERSION:
         _eligibility_error()
-    invitation = _invitation_for_token(db, raw_token, settings, lock=True)
-    if invitation.creator_account_id == accepter_account_id:
+    invitation_coordinates = _invitation_for_token(db, raw_token, settings, lock=False)
+    if invitation_coordinates.creator_account_id == accepter_account_id:
         raise_private_comparison_invitation_unavailable()
-    account_ids = tuple(sorted((invitation.creator_account_id, accepter_account_id)))
+    account_ids = tuple(sorted((invitation_coordinates.creator_account_id, accepter_account_id)))
     accounts = _locked_accounts(db, account_ids)
-    creator = accounts.get(invitation.creator_account_id)
+    creator = accounts.get(invitation_coordinates.creator_account_id)
     accepter = accounts.get(accepter_account_id)
     if creator is None or accepter is None or not _eligible_pair(db, creator, accepter):
         _eligibility_error()
+    invitation = _invitation_for_token(db, raw_token, settings, lock=True)
+    if (
+        invitation.id != invitation_coordinates.id
+        or invitation.creator_account_id != invitation_coordinates.creator_account_id
+    ):
+        raise_private_comparison_invitation_unavailable()
     existing = db.scalar(
         select(PrivateComparison)
         .where(
@@ -503,6 +542,8 @@ def accept_invitation(
         .with_for_update()
     )
     now = utcnow()
+    if before_write is not None:
+        before_write()
     if existing is not None:
         existing_status = _comparison_status(existing, now=now)
         if existing_status is PrivateComparisonStatus.ACTIVE:
@@ -556,12 +597,22 @@ def decline_invitation(
     decliner_account_id: str,
     raw_token: str,
     settings: Settings,
+    before_write: Callable[[], None] | None = None,
 ) -> PrivateComparisonInvitation:
+    invitation_coordinates = _invitation_for_token(db, raw_token, settings, lock=False)
+    if invitation_coordinates.creator_account_id == decliner_account_id:
+        raise_private_comparison_invitation_unavailable()
+    accounts = _locked_accounts(
+        db,
+        (invitation_coordinates.creator_account_id, decliner_account_id),
+    )
+    if len(accounts) != 2:
+        raise_private_comparison_invitation_unavailable()
     invitation = _invitation_for_token(db, raw_token, settings, lock=True)
-    if invitation.creator_account_id == decliner_account_id:
+    if invitation.id != invitation_coordinates.id:
         raise_private_comparison_invitation_unavailable()
-    if load_fresh_active_primary_account_for_update(db, decliner_account_id) is None:
-        raise_private_comparison_invitation_unavailable()
+    if before_write is not None:
+        before_write()
     invitation.revoked_at = utcnow()
     invitation.revoked_reason = "declined"
     db.flush()
@@ -674,6 +725,25 @@ def _relation_coordinates(
     return row.id, row.account_a_id, row.account_b_id
 
 
+def relation_participant_account_ids(
+    db: Session,
+    *,
+    actor_account_id: str,
+    public_id: str,
+) -> tuple[str, ...]:
+    if not valid_private_comparison_public_id(public_id):
+        _comparison_unavailable()
+    coordinates = _relation_coordinates(
+        db,
+        account_id=actor_account_id,
+        public_id=public_id,
+    )
+    if coordinates is None:
+        _comparison_unavailable()
+    _relation_id, account_a_id, account_b_id = coordinates
+    return tuple(sorted((account_a_id, account_b_id)))
+
+
 def _find_fresh_active_private_comparison(
     db: Session,
     *,
@@ -737,8 +807,6 @@ def _terminal_history_item(
 
 
 def list_comparisons(db: Session, account_id: str) -> list[dict]:
-    if _shared_locked_accounts(db, (account_id,)).get(account_id) is None:
-        return []
     comparison_rows = list(
         db.execute(
             select(
@@ -760,6 +828,15 @@ def list_comparisons(db: Session, account_id: str) -> list[dict]:
             .order_by(PrivateComparison.updated_at.desc(), PrivateComparison.id.desc())
         )
     )
+    account_ids = {
+        participant_id
+        for row in comparison_rows
+        for participant_id in (row.account_a_id, row.account_b_id)
+    }
+    account_ids.add(account_id)
+    locked_accounts = _shared_locked_accounts(db, tuple(account_ids))
+    if locked_accounts.get(account_id) is None:
+        return []
     now = utcnow()
     result: list[dict] = []
     for row in comparison_rows:
@@ -782,10 +859,9 @@ def list_comparisons(db: Session, account_id: str) -> list[dict]:
             )
             continue
 
-        accounts = _shared_locked_accounts(db, (row.account_a_id, row.account_b_id))
-        current = accounts.get(account_id)
+        current = locked_accounts.get(account_id)
         other_id = row.account_b_id if row.account_a_id == account_id else row.account_a_id
-        other = accounts.get(other_id)
+        other = locked_accounts.get(other_id)
         comparison = _find_fresh_active_private_comparison(
             db,
             account_id=account_id,
@@ -908,6 +984,7 @@ def revoke_comparison(
     *,
     account_id: str,
     public_id: str,
+    before_write: Callable[[], None] | None = None,
 ) -> bool:
     if not valid_private_comparison_public_id(public_id):
         _comparison_unavailable()
@@ -935,6 +1012,8 @@ def revoke_comparison(
     )
     if comparison is None:
         _comparison_unavailable()
+    if before_write is not None:
+        before_write()
     if comparison.revoked_at is not None:
         return False
     now = utcnow()
