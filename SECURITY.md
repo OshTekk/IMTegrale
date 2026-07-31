@@ -66,26 +66,43 @@ Le consentement des deux participants utilise le manifeste backend V2 unique :
 il énumère les champs du résumé et des UE communes, les métadonnées de relation,
 les catégories exclues, la révocation et le risque de copie. La création et
 l'acceptation sont bloquées si ce manifeste n'est pas disponible ou si sa
-version diverge ; tout élargissement du détail exige une nouvelle version. Le
-bearer one-shot est lié au scope opaque de la session primaire qui l'a créé :
-un remplacement de compte, une délégation, une perte de capacité, une réponse
-tardive ou une restauration BFCache le purge avant tout rendu ou copie.
-Le navigateur n'affiche les données croisées que dans l'état `verified` d'une
-frontière centrale. Le serveur fournit un scope opaque propre à la session et
-une expiration ; le client ancre la durée restante sur une horloge monotone,
-masque immédiatement le DOM et purge requêtes, mutations et bearers lors d'une
-expiration, d'un signal inter-onglets, d'un `pagehide` ou d'une restauration
-BFCache, y compris hors ligne. Après la fin d'une relation, l'historique ne
-contient que son identifiant opaque, son statut et sa date de fin. Les décisions
-d'autorisation relisent la relation et les comptes depuis PostgreSQL avec
-`populate_existing` et les verrous adaptés afin de ne jamais faire confiance à
-une instance ORM périmée.
+version diverge ; tout élargissement du détail exige une nouvelle version.
+
+Un propriétaire de fragment document-scoped capture et scrubbe le bearer avant
+le routeur, le route gate et toute vérification de session. Il le conserve au
+plus dans une mémoire volatile one-shot liée à l'époque et au scope de la
+session primaire ; tout principal non autorisé ou toute transition le détruit
+définitivement.
+
+`SessionAuthority` est l'unique writer de la session et vit au-dessus du
+QueryClient et du routeur. Les requêtes sont séquencées ; une réponse ancienne
+ne peut pas publier. Chaque `auth_epoch` possède un nouveau QueryClient, et
+l'ancien est annulé, vidé puis démonté. La deadline soustrait le RTT complet et
+ne peut que raccourcir pour un même scope. Expiration, signal inter-onglets,
+offline, `pagehide` et BFCache retirent synchroniquement le DOM privé avant
+tout travail asynchrone, puis purgent requêtes, mutations, previews et bearers.
+
+Chaque mutation Comparaisons ajoute au cookie HttpOnly, à Origin et à CSRF le
+header opaque obligatoire `X-IMTEGRALE-SESSION-BINDING`. PostgreSQL relit la
+`WebSession` et les comptes sous verrou au début et juste avant le premier
+effet durable. L'ordre total est `WebSession`, comptes triés, invitation,
+relation. Un mismatch ne révèle pas sa cause et ne crée aucun token, digest,
+consentement, relation ou événement. Après une fin de relation, l'historique ne
+contient que son identifiant opaque, son statut et sa date de fin ; un signal
+SSE minimal envoyé aux deux participants bloque le lease et vide le cache avant
+refetch.
 Les événements `private_comparison:*` sont eux aussi réservés au propriétaire
 primaire. Cette assurance est appliquée avant lecture au dashboard, à son
 `latest_event_cursor` et au flux SSE. Les identifiants séquentiels internes ne
 sont jamais sérialisés : chaque reprise utilise un curseur aléatoire opaque de
 192 bits, résolu dans le compte et la visibilité courants, afin qu'un token
 `owner` ne puisse pas déduire une activité privée par un trou de séquence.
+
+La remédiation C6A ne couvre pas la pseudo-révocation réversible liée à
+l'éligibilité, l'oracle de rétention d'événements et la copy de consentement
+propre à chaque acteur (C6B), ni les constats ZIP, binaires, Telegram et
+snapshot de release (C6C). Le flag reste faux et la migration `0029` non
+déployée ; aucun scan indépendant supplémentaire n'est demandé avant ces lots.
 
 Le scanner de secrets de publication traite les fichiers en streaming sans
 seuil silencieux de cinq Mio. Il inspecte les membres ZIP/wheel avec limites
@@ -137,7 +154,7 @@ Le frontend masque les commandes incompatibles et explique la reconnexion néces
 | Révoquer un credential IMT | `DELETE /api/v1/settings/sync-credential` | Propriétaire primaire, Origin et CSRF | La suppression locale reste disponible même lorsque l'enrôlement est fermé et conserve la session PASS/HUB |
 | Supprimer tout accès PASS/HUB | `POST /api/v1/settings/pass-access/purge` | Propriétaire primaire, Origin et CSRF | Révoque credential et sessions techniques, puis repasse en mode manuel sans supprimer les données académiques |
 | Publier ou retirer les données de classement | `POST` ou `DELETE /api/v1/leaderboard/*` | Toute session `owner`, avec Origin et CSRF | Le retrait et l'effacement doivent rester immédiats. La publication est candidate à un step-up récent, sans changement de comportement dans ce correctif |
-| Créer, accepter, refuser ou révoquer une comparaison privée | `/api/v1/private-comparisons/*` | Propriétaire primaire ; Origin et CSRF pour toute mutation | Le consentement bilatéral donne accès à des résultats académiques croisés. La capacité frontend ne remplace jamais l'autorisation serveur ; le feature flag reste fermé jusqu'à une revue d'activation séparée |
+| Créer, accepter, refuser ou révoquer une comparaison privée | `/api/v1/private-comparisons/*` | Propriétaire primaire ; Origin, CSRF et binding de session opaque obligatoire pour toute mutation | La `WebSession`, le compte, le rôle, la méthode, la génération, la capacité et le binding sont revérifiés sous verrou avant effet ; le feature flag reste fermé jusqu'à une revue d'activation séparée |
 | Supprimer une simulation | `DELETE /api/v1/simulations/{id}`, `DELETE /api/v1/note-simulations/{id}` | Propriétaire primaire | Données privées modifiables uniquement par le titulaire |
 | Remplacer le mot de passe administrateur | `POST /api/v1/admin/auth/password` | Réseau privé, mot de passe actuel, CSRF, MFA et step-up passkey récent après l'initialisation | Toutes les anciennes sessions admin sont révoquées |
 | Ajouter ou supprimer une passkey admin | `/api/v1/admin/auth/passkeys*` | Mot de passe récent pour la première ; MFA et step-up récent pour les suivantes | La dernière passkey ne peut pas être supprimée |

@@ -1,7 +1,8 @@
 # Comparaisons privées V1
 
-État : backend Lot A et interface Lot B développés sur une branche et une draft
-PR non publiées. La fonctionnalité reste désactivée par défaut avec
+État : backend Lot A, interface Lot B et remédiation de sécurité C6A développés
+sur une branche et une draft PR non publiées. La fonctionnalité reste
+désactivée par défaut avec
 `BOTNOTE_PRIVATE_COMPARISONS_ENABLED=false`, la migration `0029` n'est pas
 déployée et l'activation exige une revue de sécurité et de déploiement séparée.
 
@@ -35,8 +36,8 @@ gagnant ou perdant n'est calculé.
 4. Le créateur transmet le lien par un canal de son choix.
 5. Le destinataire se connecte comme propriétaire principal, consulte le
    périmètre, puis accepte ou refuse volontairement.
-6. Une transaction verrouille l'invitation et les deux comptes dans un ordre
-   canonique. Une seule acceptation peut réussir.
+6. Une transaction verrouille la session web, les deux comptes dans l'ordre
+   canonique, l'invitation puis la relation. Une seule acceptation peut réussir.
 7. La relation expire au terme choisi, entre 1 et 90 jours, ou est révoquée
    immédiatement par l'un des participants.
 
@@ -46,12 +47,20 @@ L'interface construit le lien avec le secret dans le fragment du navigateur :
 /comparisons/accept#invite=SECRET
 ```
 
-Le fragment n'est pas envoyé dans la requête HTTP ni dans le `Referer`. Le
-navigateur l'extrait puis envoie le secret uniquement dans le body d'un `POST`.
-Le frontend le retire de l'URL avec `history.replaceState` avant la preview,
-sans télémétrie, trace ou stockage persistant. Un rechargement après cet
-effacement ne restaure pas le secret : l'utilisateur doit rouvrir le lien
-original.
+Le fragment n'est pas envoyé dans la requête HTTP ni dans le `Referer`. Un
+`InvitationFragmentOwner` installé au bootstrap le lit une seule fois et le
+retire immédiatement avec `history.replaceState`, avant le routeur, le route
+gate, tout rendu et toute lecture de session. Cette procédure s'applique aussi
+à une session anonyme, viewer, editor, `owner` token, expirée, désactivée ou
+sans feature flag. Un fragment injecté plus tard est également retiré et rend
+le bearer initial inutilisable.
+
+Le secret valide peut seulement rester dans la mémoire volatile de ce
+propriétaire central. Il n'entre ni dans `localStorage`, `sessionStorage`,
+IndexedDB, TanStack Query, `history.state`, l'URL ou le titre. Il n'est livré
+qu'une fois à la page d'acceptation, après liaison à l'`auth_epoch` local et au
+`session_scope` vérifié. Un rechargement ou toute transition détruit cette
+capacité : l'utilisateur doit rouvrir le lien original.
 
 ## Interface, session et cache
 
@@ -62,27 +71,43 @@ Classement. La navigation n'est affichée que lorsque la session expose
 actif lorsque le feature flag est ouvert. Cette capacité améliore l'ergonomie ;
 les dépendances backend restent la frontière d'autorisation.
 
-Le secret one-shot reste uniquement dans l'état mémoire de la modale qui
-l'affiche ou dans une référence éphémère pendant preview, acceptation ou refus.
-Ces appels utilisent directement le client TypeScript généré : le secret
-n'entre dans aucune query key, aucun cache de query ou mutation, aucun storage,
-aucun `history.state`, titre, toast ou libellé accessible. Fermer la modale,
-terminer le flux, changer de session ou démonter la page efface la référence.
-Le serveur fournit à chaque session web un scope opaque dérivé de son identité
-de sécurité. Le sous-arbre Comparaisons est remonté quand ce scope change et le
-secret conserve le scope exact de sa création. Une garde de rendu, une garde
-avant copie et une garde sur les réponses asynchrones interdisent donc qu'un
-remplacement direct de compte, une délégation par token, une perte de capacité
-ou une restauration BFCache réaffiche le bearer. Les requêtes en cours sont
-annulées lorsque le navigateur le permet, sans faire de cette annulation
-l'unique contrôle.
+`SessionAuthority` est l'unique writer de la session navigateur. Il est créé
+pour toute la durée du document, au-dessus de `EpochQueryClientHost`, du
+`BrowserRouter` et des routes. Ses états sont `verifying`, `verified`,
+`invalidating`, `expired` et `anonymous`. Son `auth_epoch` local et monotone
+change avant toute revalidation lors d'une transition de principal, de rôle,
+de méthode d'authentification, de génération, de capacité, d'onglet, de
+page/BFCache, d'expiration ou d'échec fermé.
 
-Les listes et détails utilisent des clés TanStack Query bornées par l'identifiant
-du compte courant. Les listes sont toujours revérifiées au focus. Un détail a
-`staleTime=0`, `gcTime=0` et est supprimé au démontage, après révocation, après
-un `404`, lors d'une déconnexion ou d'un changement de capacité. Aucun cache
-persistant ou service worker ne conserve les réponses, qui restent `private,
-no-store` côté serveur.
+Chaque époque possède son propre `QueryClient`. Dès que l'époque change,
+l'ancien client annule ses requêtes, vide son `QueryCache` et son
+`MutationCache`, puis est démonté ; aucune donnée académique ne passe au client
+suivant. L'autorité et son observateur `BroadcastChannel`/`storage` restent
+montés même lorsqu'aucune route Comparaisons ne l'est. Les messages ne
+contiennent qu'une version, un type et un nonce borné et dédupliqué.
+
+Toutes les lectures de session passent par
+`refreshAuthoritativeSession()`. Elles capturent l'époque, une séquence
+croissante, un `AbortController` et l'heure monotone de départ. Seule la
+dernière séquence de l'époque courante peut publier ; une réponse ou une erreur
+tardive ne peut ni restaurer un principal, ni écrire dans le QueryClient, ni
+prolonger une deadline.
+
+La deadline conservatrice soustrait le RTT complet à
+`session_expires_at - server_time`, puis s'ancre sur `performance.now()` et une
+borne murale complémentaire. Pour un même `session_scope`, une réponse peut la
+raccourcir mais jamais la repousser. Une heure serveur régressive, une date
+absente ou invalide, une durée négative ou excessive, une suspension,
+`pagehide`, le BFCache ou le passage hors ligne ferment Comparaisons.
+
+Les listes et détails conservent `staleTime=0`, `gcTime=0` et des réponses
+serveur `private, no-store`. Une relation active possède un lease explicite lié
+à l'époque, au scope, au `public_id`, à l'expiration, à l'état `active` et à la
+dernière validation. Expiration locale, `404`, révocation locale ou distante,
+perte de principal/capacité et offline bloquent d'abord le rendu, puis purgent
+requêtes, mutations, previews et bearers. L'observer du détail est désactivé
+avant le retrait du cache afin qu'un refetch automatique ne puisse pas le
+repeupler.
 
 Sur mobile, Comparaisons reste dans le panneau Plus et les résumés/UE communes
 sont présentés en cartes sans table comprimée. Les modales restaurent le focus,
@@ -149,9 +174,20 @@ une erreur générique sans indiquer la propriété de l'autre compte qui échou
 
 Les routes exigent une session propriétaire principale. Les viewers, tokens
 `owner`, administrateurs et anonymes ne peuvent ni créer, accepter, refuser,
-lire ou révoquer une comparaison. Les mutations ajoutent Origin et CSRF. Les
-`public_id` aléatoires ne sont jamais une autorisation : chaque requête filtre
-aussi la relation par le compte de la session.
+lire ou révoquer une comparaison. Les mutations ajoutent Origin, CSRF et le
+header obligatoire `X-IMTEGRALE-SESSION-BINDING`. Sa valeur est le
+`session_scope` opaque attendu par le client ; elle ne constitue pas un secret
+d'authentification autonome.
+
+Au début de chaque mutation, puis immédiatement avant le premier effet durable,
+le serveur relit la `WebSession` avec `populate_existing=True` et `FOR UPDATE`.
+Il revérifie sans message distinctif le compte, le rôle, `auth_method`,
+l'absence de délégation, la génération d'accès, l'expiration, l'état actif, le
+feature flag et le binding recalculé en comparaison constant-time. Un mismatch
+produit `PRIVATE_COMPARISON_SESSION_MISMATCH` sans token, invitation, relation,
+consentement, événement ou métrique métier. Les `public_id` aléatoires ne sont
+jamais une autorisation : chaque requête filtre aussi la relation par le compte
+de la session.
 
 Les événements de cycle de vie `private_comparison:*` suivent la même assurance :
 seuls les propriétaires primaires IMT ou passkey peuvent les lire. Une politique
@@ -174,9 +210,13 @@ avant ou exactement à la fin du cycle devient terminale et ne peut pas effacer
 la révocation ni restaurer un consentement antérieur. Cette politique évite
 plusieurs historiques concurrents pour une même paire.
 
-Une révocation commitée bloque toute lecture suivante. Une expiration est
-évaluée à chaque lecture et ne dépend d'aucun worker. La suppression d'un compte
-supprime en cascade ses invitations et relations. Les tables ne contiennent
+Une révocation commitée bloque toute lecture suivante. Elle enregistre pour les
+deux participants un événement terminal dont le flux SSE ne sérialise que
+`kind` et le `public_id` opaque nécessaires à la purge. Le client bloque le DOM
+et retire le cache dans le gestionnaire synchrone avant toute invalidation de
+query. Une expiration est évaluée à chaque lecture et ne dépend d'aucun worker.
+La suppression d'un compte supprime en cascade ses invitations et relations.
+Les tables ne contiennent
 aucune moyenne, note, UE, identité copiée ou autre résultat académique : le
 détail est recalculé à la demande avec `calculate_ues` et les fonctions de
 pondération existantes.
@@ -190,17 +230,19 @@ donnée académique n'est chargée. Des cycles successifs restent donc des état
 relationnels minimaux, sans snapshot personnel.
 
 Chaque décision sensible contourne explicitement l'identity map SQLAlchemy.
-Les mutations relisent le compte actif avec `populate_existing` et
-`FOR UPDATE`; le détail relit la relation avec tous ses prédicats
-d'autorisation, `populate_existing` et un verrou partagé, puis stabilise les
-deux comptes dans la même transaction. Une révocation commitée avant cette
-lecture est refusée ; une révocation concurrente attend la fin du snapshot.
+L'ordre total est documenté et commun : `WebSession` courante, comptes
+participants triés par UUID canonique, invitation, relation. Les transitions
+de compte susceptibles de supprimer ou invalider des sessions verrouillent
+elles aussi les `WebSession` avant le compte. Le détail et le listing ne
+verrouillent pas une session, mais prennent les comptes puis les relations dans
+le même ordre. Une révocation commitée avant la lecture est refusée ; une
+révocation concurrente attend la fin du snapshot.
 
 Un changement de cursus, de promotion, d'identité vérifiée ou de disponibilité
 des données rend immédiatement le détail indisponible. La consultation ne
 déclenche jamais de synchronisation PASS ou COMPETENCES.
 
-## Frontière navigateur
+## Frontière navigateur C6A
 
 La réponse de session authentifiée fournit un `session_scope` HMAC opaque,
 `session_expires_at` et `server_time`. Le scope varie avec la session web, le
@@ -208,13 +250,22 @@ compte, le rôle, la méthode d'authentification, la délégation, la générati
 d'accès et la capacité Comparaisons sans exposer aucun de ces identifiants.
 Seul l'état central `verified` rend le sous-arbre sensible.
 
-Le navigateur calcule la durée restante depuis l'horloge serveur puis l'ancre
-sur `performance.now()`. À l'expiration, lors d'un changement inter-onglets ou
-d'un `pagehide`, il masque le DOM de façon synchrone, ferme les modales, annule
-les requêtes, efface les caches TanStack et détruit les bearers en mémoire,
-même hors ligne. Un `pageshow` provenant du BFCache garde cette barrière jusqu'à
-une revalidation `no-store` complète. Le bearer d'acceptation n'est jamais
-reconstruit après retour : l'utilisateur doit rouvrir le lien original.
+La topologie est :
+
+```text
+SessionAuthorityRoot
+└── EpochQueryClientHost
+    └── BrowserRouter
+        └── Application
+```
+
+À l'expiration, lors d'un changement inter-onglets, du passage offline ou d'un
+`pagehide`, l'autorité place synchroniquement
+`data-session-security` dans un état non vérifié. Le sous-arbre privé est
+retiré du DOM — `hidden` et `inert` ne sont que des défenses complémentaires —
+avant fetch, annulation ou refetch. Un `pageshow` BFCache garde cette barrière
+jusqu'à une revalidation `no-store` complète. Le bearer d'acceptation n'est
+jamais reconstruit après retour.
 
 ## API V1
 
@@ -249,6 +300,13 @@ répond `404` avant le parsing du body et aucune ligne ne peut être créée.
 - la migration `0029` est additive, ne copie aucune donnée personnelle ou
   académique, backfille un curseur aléatoire indépendant pour chaque événement
   existant et refuse le downgrade lorsqu'une invitation ou relation existe.
+
+La remédiation C6A ne traite volontairement pas encore la pseudo-révocation
+réversible liée à l'éligibilité, l'oracle de rétention d'événements ni la copy
+de consentement propre à chaque acteur ; ils relèvent de C6B. Les constats ZIP,
+binaires, Telegram et snapshot de release relèvent de C6C. Aucun nouveau scan
+indépendant n'est demandé avant l'achèvement de ces deux lots. Le feature flag
+reste faux et la migration `0029` reste non déployée.
 
 Avant une activation future : revoir et fusionner séparément la draft PR,
 migrer une base isolée, vérifier zéro ligne, déployer avec le flag fermé,

@@ -22,6 +22,23 @@
   titre de document générique.
 - frontière centrale de session vérifiée : deadline monotone, purge synchrone
   du DOM et des caches, révocation inter-onglets et échec fermé hors ligne.
+- remédiation C6A : `SessionAuthority` document-scoped au-dessus du routeur,
+  QueryClient recréé pour chaque `auth_epoch`, observateur inter-onglets
+  permanent et requêtes de session séquencées.
+- fragment d'invitation capturé et scrubbed au bootstrap avant toute
+  autorisation, capacité volatile one-shot liée au scope vérifié et détruite
+  pour tout principal ou état non autorisé.
+- deadline de session conservatrice avec RTT intégral soustrait et interdiction
+  de prolonger un même scope ; fermeture synchronique à l'expiration, offline,
+  `pagehide` et au retour BFCache.
+- binding `X-IMTEGRALE-SESSION-BINDING` obligatoire dans le contrat OpenAPI et
+  le client généré ; `WebSession`, compte, rôle, méthode, génération et
+  capacité relus sous verrou avant tout effet durable.
+- ordre total des verrous Comparaisons : `WebSession`, comptes participants
+  triés, invitation puis relation, avec courses PostgreSQL sans deadlock.
+- lease frontend explicite et événements terminaux minimaux envoyés aux deux
+  participants ; DOM, QueryCache, MutationCache, preview et bearers purgés
+  avant tout refetch.
 - historique terminal réduit au statut et à la date de fin, sans identité ni
   résultat vivant ; décisions relationnelles et comptes relus fraîchement sous
   verrou avant toute lecture ou mutation.
@@ -31,6 +48,9 @@
 - scanner de secrets fail-closed et en streaming, y compris au-delà de cinq
   Mio et dans les archives de publication, avec comptage explicite des fichiers
   rejetés ou non scannés.
+- C6A laisse explicitement à C6B la pseudo-révocation d'éligibilité, l'oracle
+  de rétention et la copy actor-specific, et à C6C les constats ZIP, binaires,
+  Telegram et snapshot ; flag toujours faux et migration `0029` non déployée.
 
 ## 4.8.0 - 23 juillet 2026
 
