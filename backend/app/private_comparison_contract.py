@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
+import secrets
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Literal
 
-PRIVATE_COMPARISON_CONSENT_VERSION = 2
+PRIVATE_COMPARISON_CONSENT_VERSION = 3
 PRIVATE_COMPARISON_TOKEN_VERSION = 1
 PRIVATE_COMPARISON_TOKEN_ENTROPY_BYTES = 32
 PRIVATE_COMPARISON_INVITATION_TTL_DAYS = 7
@@ -25,7 +29,10 @@ PRIVATE_COMPARISON_INVITATION_REVOCATION_REASONS = (
 PRIVATE_COMPARISON_REVOCATION_REASONS = (
     "participant_revoked",
     "operator_revoked",
+    "eligibility_changed",
 )
+PRIVATE_COMPARISON_CONSENT_ACTOR_ROLES = ("creator", "acceptor")
+PrivateComparisonConsentActorRole = Literal["creator", "acceptor"]
 
 
 @dataclass(frozen=True)
@@ -174,9 +181,41 @@ _PRIVATE_COMPARISON_CONSENT_EXCLUDED_SECTIONS = (
 )
 
 
-def private_comparison_consent_manifest() -> dict[str, object]:
+def _private_comparison_consent_manifest_body(
+    *,
+    actor_role: PrivateComparisonConsentActorRole,
+) -> dict[str, object]:
+    if actor_role == "creator":
+        identity_description = (
+            "Ton identité officielle sera visible dans l’aperçu de l’invitation. "
+            "Si un étudiant qui l’accepte confirme son accord, son identité officielle "
+            "te sera alors affichée et vous verrez réciproquement les données décrites "
+            "ci-dessous."
+        )
+        identity_confirmation = (
+            "Je comprends que mon identité officielle sera montrée à l’étudiant qui "
+            "ouvre l’invitation avant son acceptation."
+        )
+    elif actor_role == "acceptor":
+        identity_description = (
+            "Tu vois l’identité officielle du créateur avant d’accepter. Si tu acceptes, "
+            "ton identité officielle sera affichée au créateur et vous verrez "
+            "réciproquement les données décrites ci-dessous."
+        )
+        identity_confirmation = (
+            "J’accepte que mon identité officielle soit affichée au créateur après "
+            "l’acceptation."
+        )
+    else:
+        raise ValueError("Unsupported private comparison consent actor role")
+
     return {
         "consent_version": PRIVATE_COMPARISON_CONSENT_VERSION,
+        "actor_role": actor_role,
+        "identity_disclosure": {
+            "description": identity_description,
+            "confirmation": identity_confirmation,
+        },
         "included_sections": [
             {
                 "key": section.key,
@@ -208,10 +247,63 @@ def private_comparison_consent_manifest() -> dict[str, object]:
                 "La comparaison reste privée aux deux participants tant que la relation est active."
             ),
         },
-        "copy_risk": (
-            "L’autre participant peut recopier ou capturer les informations visibles avant une révocation."
+        "academic_scope_confirmation": (
+            "J’accepte le partage réciproque des seules données académiques incluses "
+            "ci-dessus, à l’exclusion de toutes les autres données."
         ),
+        "copy_risk": {
+            "description": (
+                "L’autre participant peut recopier ou capturer les informations visibles "
+                "avant une révocation."
+            ),
+            "confirmation": (
+                "Je comprends que les informations déjà copiées ou capturées ne peuvent "
+                "pas être effacées par une révocation."
+            ),
+        },
     }
+
+
+def _private_comparison_manifest_digest(manifest: dict[str, object]) -> str:
+    canonical = json.dumps(
+        manifest,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def private_comparison_consent_manifest(
+    *,
+    actor_role: PrivateComparisonConsentActorRole,
+) -> dict[str, object]:
+    manifest = _private_comparison_consent_manifest_body(actor_role=actor_role)
+    return {
+        **manifest,
+        "manifest_digest": _private_comparison_manifest_digest(manifest),
+    }
+
+
+def valid_private_comparison_consent(
+    *,
+    actor_role: str,
+    consent_version: int,
+    manifest_digest: str,
+) -> bool:
+    if (
+        actor_role not in PRIVATE_COMPARISON_CONSENT_ACTOR_ROLES
+        or consent_version != PRIVATE_COMPARISON_CONSENT_VERSION
+        or not re.fullmatch(r"[0-9a-f]{64}", manifest_digest)
+    ):
+        return False
+    expected = private_comparison_consent_manifest(
+        actor_role=actor_role,  # type: ignore[arg-type]
+    )["manifest_digest"]
+    return isinstance(expected, str) and secrets.compare_digest(
+        manifest_digest,
+        expected,
+    )
 
 
 _INVITATION_TOKEN_PATTERN = re.compile(r"^pcinv1_[A-Za-z0-9_-]{43}$")
@@ -228,6 +320,7 @@ class PrivateComparisonInvitationStatus(StrEnum):
 
 class PrivateComparisonStatus(StrEnum):
     ACTIVE = "active"
+    SUSPENDED = "suspended"
     EXPIRED = "expired"
     REVOKED = "revoked"
 

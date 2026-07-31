@@ -1,7 +1,7 @@
 # Comparaisons privées V1
 
-État : backend Lot A, interface Lot B et remédiation de sécurité C6A développés
-sur une branche et une draft PR non publiées. La fonctionnalité reste
+État : backend Lot A, interface Lot B et remédiations de sécurité C6A et C6B
+développés sur une branche et une draft PR non publiées. La fonctionnalité reste
 désactivée par défaut avec
 `BOTNOTE_PRIVATE_COMPARISONS_ENABLED=false`, la migration `0029` n'est pas
 déployée et l'activation exige une revue de sécurité et de déploiement séparée.
@@ -118,19 +118,37 @@ compétitif. Les routes liste, acceptation et détail utilisent toutes le titre
 générique « Comparaison privée · IMTégrale » ; l'identité de l'autre
 participant reste uniquement dans le contenu autorisé de la page.
 
-## Consentement version 2
+## Consentement actor-specific version 3
 
-`PRIVATE_COMPARISON_CONSENT_VERSION = 2`. La migration `0029`, jamais
-déployée, refuse désormais toute version différente. Le créateur consent lors
-de la création et le destinataire lors de l'acceptation. Les trois
+`PRIVATE_COMPARISON_CONSENT_VERSION = 3`. La migration `0029`, jamais
+déployée, refuse les versions 1, 2 et toute version future. Le créateur consent
+lors de la création et le destinataire lors de l'acceptation. Les trois
 confirmations sont obligatoires, jamais implicites et toujours précédées du
-même manifeste canonique servi par le backend.
+manifeste canonique correspondant au rôle réel.
 
-`GET /api/v1/private-comparisons/consent-manifest` fournit ce manifeste au
-propriétaire principal lorsque le feature flag est ouvert. La création et la
-preview renvoient exactement la même structure et le frontend n'entretient
-aucune seconde liste de consentement. La création ou l'acceptation reste
-impossible si le manifeste est indisponible ou si sa version diverge.
+`GET /api/v1/private-comparisons/consent-manifest/{actor_role}` accepte
+uniquement `creator` ou `acceptor`. Le manifeste créateur explique que son
+identité est déjà visible dans l'aperçu du lien, puis que l'identité du futur
+accepteur lui sera affichée après acceptation. Le manifeste accepteur explique
+que l'identité du créateur est déjà visible et que sa propre identité sera
+affichée au créateur s'il accepte. Les deux variantes décrivent ensuite le même
+périmètre académique bilatéral. Le frontend rend exclusivement ces textes
+backend et ne possède aucune copy de sécurité parallèle.
+
+Chaque variante contient `consent_version`, `actor_role`, les déclarations
+d'identité, les sections incluses et exclues, la durée, la révocation, le risque
+de copie et un `manifest_digest`. Ce digest est le SHA-256 de la sérialisation
+JSON canonique — clés triées, UTF-8, séparateurs déterministes — de toutes les
+déclarations, de la version et du rôle. Il est renvoyé par l'API, soumis avec la
+mutation puis recalculé et comparé en temps constant par le serveur. Une
+création ou une acceptation est impossible si le manifeste manque, si le rôle,
+la version ou le digest diffère, ou si la réponse appartient à une ancienne
+portée de session.
+
+L'invitation conserve `creator_consent_manifest_digest`. La relation conserve
+le compte qui a créé l'invitation ainsi que
+`creator_consent_manifest_digest` et `acceptor_consent_manifest_digest`.
+L'ordre des rôles ne dépend donc jamais de l'ordre canonique des UUID.
 
 Le manifeste détaille explicitement :
 
@@ -146,14 +164,11 @@ Le manifeste détaille explicitement :
   classement, score, commentaire, donnée tierce et partage public ;
 - le risque résiduel de copie ou de capture par l'autre participant.
 
-Les trois confirmations restent :
+Les trois confirmations proviennent elles aussi du manifeste :
 
-- « Mon identité officielle sera visible par l'autre participant. »
-- « Nous verrons nos résumés académiques et nos UE communes, avec moyenne,
-  GPA, grade et ECTS, pendant la durée indiquée. Aucun détail d'évaluation
-  n'est inclus dans cette version. »
-- « Chacun peut révoquer immédiatement la comparaison, mais l'autre participant
-  peut recopier ou capturer ce qu'il voit avant la révocation. »
+- direction et moment exacts de la divulgation d'identité pour le rôle courant ;
+- partage réciproque du seul périmètre académique déclaré ;
+- risque de copie ou capture, même après une révocation.
 
 Un test structurel compare les champs sérialisables de
 `PrivateComparisonDetailResponse` aux chemins déclarés par le manifeste. Tout
@@ -171,6 +186,18 @@ Les deux comptes doivent être actifs, posséder une identité et un profil
 académique vérifiés, avoir des données officielles PASS/COMPETENCES, et relever
 exactement du même cursus et de la même promotion. Une incompatibilité renvoie
 une erreur générique sans indiquer la propriété de l'autre compte qui échoue.
+
+Chaque compte possède une
+`private_comparison_eligibility_generation`, entière, positive, non exposée et
+initialisée à 1. Elle avance transactionnellement une seule fois par transaction
+lors d'une désactivation/réactivation, d'un changement de cursus, promotion,
+source académique, identité officielle, présence d'identité vérifiée ou statut
+étudiant vérifié. Un retour à l'ancienne valeur avance encore la génération.
+Les écritures applicatives passent par un helper central et un hook SQLAlchemy
+verrouille les comptes dans l'ordre canonique avant de calculer l'incrément ;
+un rollback annule à la fois génération, terminaison et événements. Les
+timestamps de synchronisation, la fraîcheur, les notes et un simple
+rafraîchissement non sémantique n'avancent pas cette génération.
 
 Les routes exigent une session propriétaire principale. Les viewers, tokens
 `owner`, administrateurs et anonymes ne peuvent ni créer, accepter, refuser,
@@ -201,22 +228,49 @@ visibilité antérieures.
 
 ## Cycle de vie
 
-Une paire de comptes possède au plus une ligne relationnelle. Une invitation
-pour une relation déjà active échoue. Après expiration ou révocation, une
-invitation créée strictement après la fin du cycle et deux nouveaux
-consentements peuvent réactiver cette ligne ; elle reçoit alors un nouveau
-`public_id`, ce qui invalide l'ancien lien de relation. Une invitation créée
-avant ou exactement à la fin du cycle devient terminale et ne peut pas effacer
-la révocation ni restaurer un consentement antérieur. Cette politique évite
-plusieurs historiques concurrents pour une même paire.
+Une paire de comptes possède au plus une ligne relationnelle. À l'activation,
+la transaction enregistre les deux générations fraîches dans
+`account_a_eligibility_generation` et
+`account_b_eligibility_generation`, avec les deux preuves de consentement V3.
+Une invitation pour une relation déjà active échoue. Après expiration ou
+révocation, une invitation créée strictement après la fin du cycle et deux
+nouveaux consentements peuvent réactiver cette ligne ; elle reçoit alors un
+nouveau `public_id`, ce qui invalide l'ancien lien de relation. Une invitation
+créée avant ou exactement à la fin du cycle devient terminale et ne peut pas
+effacer la révocation ni restaurer un consentement antérieur.
+
+Les quatre états sont non ambigus :
+
+- `active` : consentements V3, générations capturées inchangées, relation non
+  révoquée et non expirée, données officielles lisibles ;
+- `suspended` : indisponibilité technique temporaire, générations inchangées,
+  réponse réduite à `public_id`, statut et libellé générique, sans identité,
+  moyenne, GPA, ECTS, grade, fraîcheur ou UE ;
+- `revoked` : état terminal, soit demandé par un participant, soit persisté
+  avec la raison interne `eligibility_changed` ;
+- `expired` : état terminal à l'échéance.
+
+Une absence temporaire de `academic_verified_at` ou
+`last_successful_sync_at` suspend la lecture et peut reprendre quand la donnée
+revient, uniquement si les générations sont restées identiques. Une donnée
+simplement ancienne conserve la politique de fraîcheur existante. Une
+désactivation, un changement de cursus, promotion, identité, source
+autoritative ou statut étudiant terminalise au contraire la relation dans la
+même transaction que l'incrément. Deux événements
+`private_comparison:revoked` minimaux — un par participant, avec seulement le
+`public_id` — sont produits une seule fois. Plusieurs observateurs d'un même
+mismatch conservent le premier `ended_at` et ne dupliquent pas cette transition.
 
 Une révocation commitée bloque toute lecture suivante. Elle enregistre pour les
 deux participants un événement terminal dont le flux SSE ne sérialise que
 `kind` et le `public_id` opaque nécessaires à la purge. Le client bloque le DOM
 et retire le cache dans le gestionnaire synchrone avant toute invalidation de
 query. Une expiration est évaluée à chaque lecture et ne dépend d'aucun worker.
-La suppression d'un compte supprime en cascade ses invitations et relations.
-Les tables ne contiennent
+La suppression d'un compte prend d'abord les verrous bilatéraux canoniques,
+avance sa génération et terminalise les relations actives. La cascade efface
+ensuite les invitations, relations et événements du compte supprimé ; le pair
+survivant conserve seulement l'événement terminal minimal nécessaire à la
+purge de son cache. Les tables ne contiennent
 aucune moyenne, note, UE, identité copiée ou autre résultat académique : le
 détail est recalculé à la demande avec `calculate_ues` et les fonctions de
 pondération existantes.
@@ -238,9 +292,49 @@ verrouillent pas une session, mais prennent les comptes puis les relations dans
 le même ordre. Une révocation commitée avant la lecture est refusée ; une
 révocation concurrente attend la fin du snapshot.
 
-Un changement de cursus, de promotion, d'identité vérifiée ou de disponibilité
-des données rend immédiatement le détail indisponible. La consultation ne
+Un changement sémantique ne peut donc jamais réactiver l'ancien consentement,
+même si la valeur d'origine est restaurée. La suppression d'un compte détruit
+en cascade toute capacité relationnelle correspondante. La consultation ne
 déclenche jamais de synchronisation PASS ou COMPETENCES.
+
+## Classes d'événements et rétention
+
+Chaque événement possède désormais une `visibility_class` interne, non nulle,
+bornée par `CHECK`, indexée avec `(account_id, visibility_class, id)` et
+immuable après insertion par validation ORM et trigger PostgreSQL/SQLite. La
+classification est dérivée du `kind` par une fonction centrale ; le caller ne
+peut pas choisir la classe. Un préfixe inconnu est refusé à l'exécution sans
+écriture et les éventuels événements historiques inconnus sont backfillés dans
+la classe la plus restrictive.
+
+| Classe | Familles |
+| --- | --- |
+| `shared` | `calendar:`, `note:`, `pass_access:`, `pass_session:`, `passkey:`, `security_setup:`, `sync:`, `sync_credential:`, `ue:` |
+| `owner` | `account:`, `auth:`, `leaderboard:`, `learning:`, `telegram:`, `token:` |
+| `primary_owner` | `private_comparison:` et tout préfixe historique inconnu |
+| `simulation` | `simulation:`, séparé afin que les exports sans simulation gardent la politique historique sans partager leur quota avec Comparaisons |
+
+La sélection SQL du dashboard, du polling et du SSE utilise la classe stockée,
+pas un filtre tardif sur le payload. `shared` est lisible par les rôles
+historiquement autorisés, `owner` exige le rôle propriétaire et
+`primary_owner` exige une vraie session IMT/passkey non déléguée. `simulation`
+ajoute à cette même assurance l'autorisation explicite d'inclure les
+simulations ; un export académique peut ainsi les masquer sans masquer les
+événements Comparaisons.
+
+Le quota de 2 000 lignes est indépendant pour chaque couple
+`(account_id, visibility_class)`. Un writer verrouille le compte, insère
+l'événement, puis ne supprime que les lignes plus anciennes de cette même
+classe. Une activité `private_comparison` ne peut donc ni évincer une ancre
+`shared`, ni modifier son statut, sa pagination, le dernier curseur visible ou
+la reprise `Last-Event-ID`. À l'inverse, seule une pression réelle dans la
+classe de l'ancre peut la faire expirer. Les erreurs pour curseur inconnu,
+caché, d'un autre compte ou d'un autre rôle restent toutes génériques.
+
+La migration `0029` backfille la classe de façon déterministe et sans réseau,
+puis installe contraintes, index et triggers dans la même transaction. Le
+downgrade retire entièrement ces ajouts ; il reste refusé si des données
+Comparaisons existent.
 
 ## Frontière navigateur C6A
 
@@ -271,7 +365,7 @@ jamais reconstruit après retour.
 
 | Méthode  | Route                                                 | Effet                                                         |
 | -------- | ----------------------------------------------------- | ------------------------------------------------------------- |
-| `GET`    | `/api/v1/private-comparisons/consent-manifest`        | Retourne le manifeste canonique V2 sans donnée académique     |
+| `GET`    | `/api/v1/private-comparisons/consent-manifest/{actor_role}` | Retourne le manifeste canonique V3 du créateur ou de l'accepteur |
 | `POST`   | `/api/v1/private-comparisons/invitations`             | Crée une invitation et retourne le secret une fois            |
 | `GET`    | `/api/v1/private-comparisons/invitations`             | Liste les invitations du créateur sans secret ni destinataire |
 | `POST`   | `/api/v1/private-comparisons/invitations/preview`     | Prévisualise le créateur et le périmètre avec le secret       |
@@ -293,27 +387,33 @@ répond `404` avant le parsing du body et aucune ligne ne peut être créée.
 - limitation complémentaire par client, sans métrique nominative ;
 - aucun token, digest, résultat académique ou identifiant croisé dans les
   événements et logs ;
-- événements Comparaisons limités au propriétaire primaire, y compris dans les
-  curseurs dashboard et SSE ;
+- événements classifiés avant écriture et retenus par classe, avec les
+  événements Comparaisons limités au propriétaire primaire dans le dashboard,
+  le polling, les curseurs et le SSE ;
 - le contrôle opérationnel expose uniquement l'état du flag et des compteurs
-  agrégés, et alerte sur les lignes incohérentes ou présentes flag fermé ;
+  agrégés globaux : événements sans classe, classes inconnues, curseurs
+  internes invalides et partitions dépassant leur quota. Il n'expose ni
+  compte, ni paire, ni curseur, ni volume d'une classe cachée à un token
+  dashboard, et alerte sur toute valeur non nulle ainsi que sur les lignes
+  Comparaisons incohérentes ou présentes flag fermé ;
 - la migration `0029` est additive, ne copie aucune donnée personnelle ou
-  académique, backfille un curseur aléatoire indépendant pour chaque événement
-  existant et refuse le downgrade lorsqu'une invitation ou relation existe.
+  académique, backfille un curseur aléatoire et une classe conservative pour
+  chaque événement existant et refuse le downgrade lorsqu'une invitation ou
+  relation existe.
 
-La remédiation C6A ne traite volontairement pas encore la pseudo-révocation
-réversible liée à l'éligibilité, l'oracle de rétention d'événements ni la copy
-de consentement propre à chaque acteur ; ils relèvent de C6B. Les constats ZIP,
-binaires, Telegram et snapshot de release relèvent de C6C. Aucun nouveau scan
-indépendant n'est demandé avant l'achèvement de ces deux lots. Le feature flag
-reste faux et la migration `0029` reste non déployée.
+Les remédiations C6A et C6B couvrent l'autorité de session, le cycle
+d'éligibilité, la suspension explicite, le consentement actor-specific lié à
+son digest et la rétention sans oracle interclasse. Les constats ZIP, binaires,
+Telegram et snapshot de release relèvent exclusivement de C6C. Aucun scan
+indépendant n'est demandé avant la fin de C6C. Le feature flag reste faux et la
+migration `0029` reste non déployée.
 
 Avant une activation future : revoir et fusionner séparément la draft PR,
 migrer une base isolée, vérifier zéro ligne, déployer avec le flag fermé,
 exécuter les contrôles d'IDOR, concurrence, confidentialité, cache et responsive,
-puis décider explicitement de l'ouverture. La V2 éventuelle des évaluations
-détaillées exigera un périmètre, une version de consentement et une revue de
-menace séparés.
+puis décider explicitement de l'ouverture. Toute future version exposant des
+évaluations détaillées exigera un périmètre, une nouvelle version de
+consentement et une revue de menace séparés.
 
 Le modèle de menace dédié est dans
 [`docs/security/private-comparisons-threat-model.md`](security/private-comparisons-threat-model.md).

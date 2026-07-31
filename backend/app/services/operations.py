@@ -9,16 +9,20 @@ from sqlalchemy.orm import Session
 
 from app.config import AutonomousSyncRollout, Settings
 from app.database import utcnow
+from app.event_contract import EVENT_VISIBILITY_CLASSES
+from app.event_cursor import EVENT_CURSOR_LENGTH, EVENT_CURSOR_PREFIX
 from app.imt_sync_credential_contract import (
     IMT_SYNC_CREDENTIAL_ENVELOPE_BYTES,
     IMT_SYNC_CREDENTIAL_REVOCATION_REASONS,
     ImtSyncCredentialState,
     valid_imt_sync_credential_key_id,
 )
+from app.limits import MAX_EVENTS_PER_ACCOUNT
 from app.models import (
     Account,
     CalendarFetchAttempt,
     DurableJob,
+    Event,
     ImtSyncCredential,
     NotificationOutbox,
     PassOperation,
@@ -242,7 +246,20 @@ def _private_comparison_metrics(db: Session, settings: Settings, now) -> dict:  
                     PrivateComparison.activated_at.is_(None),
                     (
                         PrivateComparison.revoked_at.is_(None)
-                        != PrivateComparison.revoked_by_account_id.is_(None)
+                        & PrivateComparison.revoked_by_account_id.is_not(None)
+                    ),
+                    (
+                        PrivateComparison.revoked_at.is_not(None)
+                        & (
+                            (
+                                (PrivateComparison.revoked_reason == "eligibility_changed")
+                                & PrivateComparison.revoked_by_account_id.is_not(None)
+                            )
+                            | (
+                                (PrivateComparison.revoked_reason != "eligibility_changed")
+                                & PrivateComparison.revoked_by_account_id.is_(None)
+                            )
+                        )
                     ),
                     (
                         PrivateComparison.revoked_at.is_(None)
@@ -261,6 +278,55 @@ def _private_comparison_metrics(db: Session, settings: Settings, now) -> dict:  
         "active_relations": active_relations,
         "inconsistent_invitations": inconsistent_invitations,
         "inconsistent_relations": inconsistent_relations,
+    }
+
+
+def _event_integrity_metrics(db: Session) -> dict:
+    missing_visibility_class = int(
+        db.scalar(
+            select(func.count(Event.id)).where(
+                Event.visibility_class.is_(None),
+            )
+        )
+        or 0
+    )
+    unknown_visibility_class = int(
+        db.scalar(
+            select(func.count(Event.id)).where(
+                Event.visibility_class.not_in(EVENT_VISIBILITY_CLASSES),
+            )
+        )
+        or 0
+    )
+    invalid_public_cursor = int(
+        db.scalar(
+            select(func.count(Event.id)).where(
+                or_(
+                    Event.public_cursor.is_(None),
+                    func.length(Event.public_cursor) != EVENT_CURSOR_LENGTH,
+                    ~Event.public_cursor.startswith(EVENT_CURSOR_PREFIX),
+                )
+            )
+        )
+        or 0
+    )
+    over_limit_partitions = (
+        select(
+            Event.account_id,
+            Event.visibility_class,
+        )
+        .group_by(Event.account_id, Event.visibility_class)
+        .having(func.count(Event.id) > MAX_EVENTS_PER_ACCOUNT)
+        .subquery()
+    )
+    visibility_partitions_over_limit = int(
+        db.scalar(select(func.count()).select_from(over_limit_partitions)) or 0
+    )
+    return {
+        "missing_visibility_class": missing_visibility_class,
+        "unknown_visibility_class": unknown_visibility_class,
+        "invalid_public_cursor": invalid_public_cursor,
+        "visibility_partitions_over_limit": visibility_partitions_over_limit,
     }
 
 
@@ -326,6 +392,7 @@ def operations_metrics(db: Session, settings: Settings) -> dict:
             "attempts_24h": sum(calendar_counts.values()),
             "errors_24h": calendar_counts.get("invalid", 0) + calendar_counts.get("upstream", 0),
         },
+        "events": _event_integrity_metrics(db),
         "private_comparisons": _private_comparison_metrics(db, settings, now),
     }
 
@@ -517,6 +584,17 @@ def operational_alert_codes(db: Session, settings: Settings) -> list[str]:
         comparison_metrics["invitations_total"] or comparison_metrics["relations_total"]
     ):
         alerts.add("PRIVATE_COMPARISON_DATA_WHILE_DISABLED")
+    event_metrics = metrics.get(
+        "events",
+        {
+            "missing_visibility_class": 0,
+            "unknown_visibility_class": 0,
+            "invalid_public_cursor": 0,
+            "visibility_partitions_over_limit": 0,
+        },
+    )
+    if any(event_metrics.values()):
+        alerts.add("EVENT_RETENTION_INTEGRITY_INVALID")
     for queue in metrics["queues"]:
         name = str(queue["name"]).upper()
         if queue["dead_letter"]:

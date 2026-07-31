@@ -12,11 +12,21 @@ export const PRIVATE_COMPARISON_GRADES = ["A", "B", "C", "D", "E", "FX", "F"] as
 
 const invitationTokenPattern = /^pcinv1_[A-Za-z0-9_-]{43}$/;
 const privateComparisonPublicIdPattern = /^pc_[A-Za-z0-9_-]{24}$/;
+const manifestDigestPattern = /^[0-9a-f]{64}$/;
 const hasText = (value: string) => Boolean(value.trim());
 
-export function usablePrivateComparisonConsentManifest(manifest: PrivateComparisonConsentManifestResponse): boolean {
+export function usablePrivateComparisonConsentManifest(
+  manifest: PrivateComparisonConsentManifestResponse,
+  expectedRole?: "creator" | "acceptor",
+): boolean {
   return (
-    manifest.consent_version === 2 &&
+    manifest.consent_version === 3 &&
+    (manifest.actor_role === "creator" || manifest.actor_role === "acceptor") &&
+    (!expectedRole || manifest.actor_role === expectedRole) &&
+    manifestDigestPattern.test(manifest.manifest_digest) &&
+    hasText(manifest.identity_disclosure.description) &&
+    hasText(manifest.identity_disclosure.confirmation) &&
+    hasText(manifest.academic_scope_confirmation) &&
     manifest.included_sections.length > 0 &&
     manifest.included_sections.every(
       (section) =>
@@ -27,7 +37,8 @@ export function usablePrivateComparisonConsentManifest(manifest: PrivateComparis
     manifest.excluded_sections.length > 0 &&
     manifest.excluded_sections.every((section) => hasText(section.label)) &&
     Object.values(manifest.duration_and_revocation).every(hasText) &&
-    hasText(manifest.copy_risk)
+    hasText(manifest.copy_risk.description) &&
+    hasText(manifest.copy_risk.confirmation)
   );
 }
 
@@ -66,15 +77,18 @@ export function privateComparisonStatusLabel(
   status:
     | PrivateComparisonInvitationResponse["status"]
     | ActivePrivateComparisonListItem["status"]
-    | TerminalPrivateComparisonHistoryItem["status"],
+    | TerminalPrivateComparisonHistoryItem["status"]
+    | "suspended",
 ): string {
   return status === "active"
     ? "Active"
-    : status === "consumed"
-      ? "Utilisée"
-      : status === "expired"
-        ? "Expirée"
-        : "Révoquée";
+    : status === "suspended"
+      ? "Suspendue"
+      : status === "consumed"
+        ? "Utilisée"
+        : status === "expired"
+          ? "Expirée"
+          : "Révoquée";
 }
 
 export function privateComparisonErrorMessage(

@@ -73,8 +73,8 @@ export const queryKeys = {
   leaderboard: (accountId: string, metric: string, campus: string, cohort: string) =>
     ["account", accountId, "leaderboard", metric, campus, cohort] as const,
   privateComparisonsRoot: (accountId: string) => ["account", accountId, "private-comparisons"] as const,
-  privateComparisonConsentManifest: (accountId: string) =>
-    ["account", accountId, "private-comparisons", "consent-manifest"] as const,
+  privateComparisonConsentManifest: (accountId: string, sessionScope: string, actorRole: "creator" | "acceptor") =>
+    ["account", accountId, "private-comparisons", "consent-manifest", sessionScope, actorRole] as const,
   privateComparisonInvitations: (accountId: string) =>
     ["account", accountId, "private-comparisons", "invitations"] as const,
   privateComparisons: (accountId: string) => ["account", accountId, "private-comparisons", "relations"] as const,
@@ -111,6 +111,15 @@ export function clearAccountStateOnCapabilityChange(
 
 function currentAccountId(queryClient: QueryClient): string {
   return sessionAccountId(queryClient.getQueryData<Session>(queryKeys.session)) ?? "anonymous";
+}
+
+function currentPrivateComparisonSessionScope(queryClient: QueryClient): string {
+  const session = queryClient.getQueryData<Session>(queryKeys.session);
+  return session?.authenticated === true &&
+    session.private_comparisons?.available === true &&
+    /^bss1_[0-9a-f]{64}$/.test(session.session_scope ?? "")
+    ? session.session_scope!
+    : "unverified";
 }
 
 function currentLearningScope(queryClient: QueryClient): { accountId: string; catalogVersion: string } {
@@ -525,14 +534,16 @@ export function usePrivateComparisonInvitations(enabled = true) {
   });
 }
 
-export function usePrivateComparisonConsentManifest(enabled = true) {
+export function usePrivateComparisonConsentManifest(actorRole: "creator" | "acceptor" = "creator", enabled = true) {
   const client = useQueryClient();
   const accountId = currentAccountId(client);
+  const sessionScope = currentPrivateComparisonSessionScope(client);
   return useQuery({
-    queryKey: queryKeys.privateComparisonConsentManifest(accountId),
+    queryKey: queryKeys.privateComparisonConsentManifest(accountId, sessionScope, actorRole),
     queryFn: ({ signal }) =>
       apiData(
         privateComparisonsGetPrivateComparisonConsentManifest({
+          path: { actor_role: actorRole },
           signal,
           throwOnError: throwOnApiError,
         }),

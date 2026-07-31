@@ -13,33 +13,62 @@ from app.config import get_settings
 from app.database import SessionLocal, engine, utcnow
 from app.models import (
     Account,
+    Event,
     Note,
     PrivateComparison,
     PrivateComparisonInvitation,
     UeSetting,
     WebSession,
 )
-from app.private_comparison_contract import PRIVATE_COMPARISON_CONSENT_VERSION
+from app.private_comparison_contract import (
+    PRIVATE_COMPARISON_CONSENT_VERSION,
+    private_comparison_consent_manifest,
+)
+from app.private_comparison_lifecycle import apply_private_comparison_account_mutation
 from app.private_comparison_security import (
     final_rebind_callback,
     initial_private_comparison_session_preflight,
     rebind_primary_web_session_for_mutation,
 )
 from app.security import AuthContext, browser_session_scope, create_web_session
+from app.services import events as event_service
 from app.services import private_comparisons as private_comparisons_service
+from app.services.events import record_event
 from app.services.private_comparisons import (
     SupersededPrivateComparisonInvitation,
-    accept_invitation,
     comparison_detail,
-    create_invitation,
     invitation_participant_account_ids,
     list_comparisons,
     lock_private_comparison_invitations_for_account_deletion,
     revoke_comparison,
     revoke_invitation,
 )
+from app.services.private_comparisons import (
+    accept_invitation as _accept_invitation,
+)
+from app.services.private_comparisons import (
+    create_invitation as _create_invitation,
+)
 from fastapi import HTTPException
-from sqlalchemy import func, inspect, select
+from sqlalchemy import func, inspect, select, text
+from sqlalchemy.exc import DBAPIError
+
+_CREATOR_MANIFEST_DIGEST = private_comparison_consent_manifest(
+    actor_role="creator"
+)["manifest_digest"]
+_ACCEPTOR_MANIFEST_DIGEST = private_comparison_consent_manifest(
+    actor_role="acceptor"
+)["manifest_digest"]
+
+
+def create_invitation(*args, **kwargs):  # noqa: ANN002,ANN003,ANN201
+    kwargs.setdefault("manifest_digest", _CREATOR_MANIFEST_DIGEST)
+    return _create_invitation(*args, **kwargs)
+
+
+def accept_invitation(*args, **kwargs):  # noqa: ANN002,ANN003,ANN201
+    kwargs.setdefault("manifest_digest", _ACCEPTOR_MANIFEST_DIGEST)
+    return _accept_invitation(*args, **kwargs)
 
 
 def test_postgres_0029_downgrades_and_replays_without_creating_data() -> None:
@@ -634,6 +663,8 @@ def test_postgres_acceptance_and_creator_deletion_leave_no_orphan() -> None:
             creator = db.get(Account, creator_id)
             assert creator is not None
             lock_private_comparison_invitations_for_account_deletion(db, creator_id)
+            apply_private_comparison_account_mutation(creator, is_disabled=True)
+            db.flush()
             db.delete(creator)
             db.commit()
             return "deleted"
@@ -649,6 +680,69 @@ def test_postgres_acceptance_and_creator_deletion_leave_no_orphan() -> None:
         assert db.get(Account, creator_id) is None
         assert db.scalar(select(func.count(PrivateComparisonInvitation.id))) == 0
         assert db.scalar(select(func.count(PrivateComparison.id))) == 0
+        surviving_events = list(
+            db.scalars(
+                select(Event).where(
+                    Event.account_id == recipient_id,
+                    Event.kind == "private_comparison:revoked",
+                )
+            )
+        )
+    if outcomes[0].startswith("accepted:"):
+        assert len(surviving_events) == 1
+        assert surviving_events[0].payload == {
+            "public_id": outcomes[0].removeprefix("accepted:")
+        }
+    else:
+        assert surviving_events == []
+
+
+def test_postgres_account_deletion_terminalizes_before_erasure() -> None:
+    creator_id = _eligible_account("delete-active-creator@example.test")
+    recipient_id = _eligible_account("delete-active-recipient@example.test")
+    public_id = _accepted_relation(creator_id, recipient_id)
+
+    with SessionLocal() as db:
+        creator = db.get(Account, creator_id)
+        assert creator is not None
+        generation = creator.private_comparison_eligibility_generation
+        lock_private_comparison_invitations_for_account_deletion(db, creator_id)
+        apply_private_comparison_account_mutation(creator, is_disabled=True)
+        db.flush()
+
+        relation = db.scalar(
+            select(PrivateComparison).where(
+                PrivateComparison.public_id == public_id
+            )
+        )
+        terminal_events = list(
+            db.scalars(
+                select(Event).where(
+                    Event.kind == "private_comparison:revoked",
+                )
+            )
+        )
+        assert creator.private_comparison_eligibility_generation == generation + 1
+        assert relation is not None
+        assert relation.revoked_reason == "eligibility_changed"
+        assert len(terminal_events) == 2
+
+        db.delete(creator)
+        db.commit()
+
+    with SessionLocal() as db:
+        assert db.get(Account, creator_id) is None
+        assert db.scalar(select(func.count(PrivateComparison.id))) == 0
+        surviving_events = list(
+            db.scalars(
+                select(Event).where(
+                    Event.account_id == recipient_id,
+                    Event.kind == "private_comparison:revoked",
+                )
+            )
+        )
+    assert len(surviving_events) == 1
+    assert surviving_events[0].payload == {"public_id": public_id}
 
 
 def test_postgres_simultaneous_participant_revocation_is_idempotent() -> None:
@@ -787,3 +881,364 @@ def test_postgres_preloaded_account_cannot_create_after_committed_disable(
     assert token_generated is False
     with SessionLocal() as db:
         assert db.scalar(select(func.count(PrivateComparisonInvitation.id))) == 0
+
+
+def test_postgres_concurrent_semantic_mutations_never_lose_generation_bumps() -> None:
+    creator_id = _eligible_account("generation-race-creator@example.test")
+    recipient_id = _eligible_account("generation-race-recipient@example.test")
+    public_id = _accepted_relation(creator_id, recipient_id)
+    barrier = Barrier(2)
+
+    def mutate(changes: dict) -> int:
+        with SessionLocal() as db:
+            account = db.get(Account, recipient_id)
+            assert account is not None
+            barrier.wait(timeout=5)
+            apply_private_comparison_account_mutation(account, **changes)
+            db.commit()
+            db.refresh(account)
+            return account.private_comparison_eligibility_generation
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        name_future = pool.submit(mutate, {"official_first_name": "Nouvelle"})
+        segment_future = pool.submit(mutate, {"promotion_year": 2029})
+        observed_generations = {
+            name_future.result(timeout=10),
+            segment_future.result(timeout=10),
+        }
+
+    assert observed_generations == {2, 3}
+    with SessionLocal() as db:
+        recipient = db.get(Account, recipient_id)
+        relation = db.scalar(
+            select(PrivateComparison).where(
+                PrivateComparison.public_id == public_id
+            )
+        )
+        events = list(
+            db.scalars(
+                select(Event)
+                .where(Event.kind == "private_comparison:revoked")
+                .order_by(Event.id)
+            )
+        )
+
+    assert recipient is not None
+    assert recipient.private_comparison_eligibility_generation == 3
+    assert relation is not None
+    assert relation.revoked_at is not None
+    assert relation.revoked_reason == "eligibility_changed"
+    assert relation.revoked_by_account_id is None
+    assert len(events) == 2
+    assert {event.account_id for event in events} == {creator_id, recipient_id}
+    assert all(event.payload == {"public_id": public_id} for event in events)
+
+
+def test_postgres_acceptance_serializes_with_semantic_invalidation() -> None:
+    creator_id = _eligible_account("accept-generation-creator@example.test")
+    recipient_id = _eligible_account("accept-generation-recipient@example.test")
+    _invitation_id, token = _invitation(creator_id)
+    barrier = Barrier(2)
+
+    def accept() -> str:
+        barrier.wait(timeout=5)
+        with SessionLocal() as db:
+            try:
+                relation = accept_invitation(
+                    db,
+                    accepter_account_id=recipient_id,
+                    raw_token=token,
+                    consent_version=PRIVATE_COMPARISON_CONSENT_VERSION,
+                    settings=get_settings(),
+                )
+                db.commit()
+                return f"accepted:{relation.public_id}"
+            except HTTPException as exc:
+                db.rollback()
+                return f"rejected:{exc.status_code}"
+
+    def invalidate() -> str:
+        with SessionLocal() as db:
+            account = db.get(Account, recipient_id)
+            assert account is not None
+            barrier.wait(timeout=5)
+            apply_private_comparison_account_mutation(
+                account,
+                promotion_year=2029,
+            )
+            db.commit()
+            return "invalidated"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        accept_future = pool.submit(accept)
+        invalidate_future = pool.submit(invalidate)
+        outcomes = (
+            accept_future.result(timeout=10),
+            invalidate_future.result(timeout=10),
+        )
+
+    assert outcomes[0].startswith(("accepted:", "rejected:409"))
+    assert outcomes[1] == "invalidated"
+    with SessionLocal() as db:
+        recipient = db.get(Account, recipient_id)
+        relation = db.scalar(select(PrivateComparison))
+        active_count = db.scalar(
+            select(func.count(PrivateComparison.id)).where(
+                PrivateComparison.revoked_at.is_(None)
+            )
+        )
+
+    assert recipient is not None
+    assert recipient.private_comparison_eligibility_generation == 2
+    assert active_count == 0
+    if outcomes[0].startswith("accepted:"):
+        assert relation is not None
+        assert relation.revoked_at is not None
+        assert relation.revoked_reason == "eligibility_changed"
+    else:
+        assert relation is None
+
+
+def test_postgres_detail_serializes_with_semantic_invalidation() -> None:
+    creator_id = _eligible_account("detail-generation-creator@example.test")
+    recipient_id = _eligible_account("detail-generation-recipient@example.test")
+    public_id = _accepted_relation(creator_id, recipient_id)
+    barrier = Barrier(2)
+
+    def read_detail() -> str:
+        barrier.wait(timeout=5)
+        with SessionLocal() as db:
+            try:
+                comparison_detail(
+                    db,
+                    account_id=creator_id,
+                    public_id=public_id,
+                )
+                db.commit()
+                return "read"
+            except HTTPException as exc:
+                db.rollback()
+                return f"unavailable:{exc.status_code}"
+
+    def invalidate() -> str:
+        with SessionLocal() as db:
+            account = db.get(Account, recipient_id)
+            assert account is not None
+            barrier.wait(timeout=5)
+            apply_private_comparison_account_mutation(
+                account,
+                promotion_year=2029,
+            )
+            db.commit()
+            return "invalidated"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        detail_future = pool.submit(read_detail)
+        invalidate_future = pool.submit(invalidate)
+        outcomes = (
+            detail_future.result(timeout=10),
+            invalidate_future.result(timeout=10),
+        )
+
+    assert outcomes[0] in {"read", "unavailable:404"}
+    assert outcomes[1] == "invalidated"
+    with SessionLocal() as db:
+        relation = db.scalar(
+            select(PrivateComparison).where(
+                PrivateComparison.public_id == public_id
+            )
+        )
+        event_count = db.scalar(
+            select(func.count(Event.id)).where(
+                Event.kind == "private_comparison:revoked"
+            )
+        )
+    assert relation is not None
+    assert relation.revoked_reason == "eligibility_changed"
+    assert event_count == 2
+
+
+def test_postgres_revocation_serializes_with_semantic_invalidation() -> None:
+    creator_id = _eligible_account("revoke-generation-creator@example.test")
+    recipient_id = _eligible_account("revoke-generation-recipient@example.test")
+    public_id = _accepted_relation(creator_id, recipient_id)
+    barrier = Barrier(2)
+
+    def revoke() -> bool:
+        barrier.wait(timeout=5)
+        with SessionLocal() as db:
+            changed = revoke_comparison(
+                db,
+                account_id=creator_id,
+                public_id=public_id,
+            )
+            db.commit()
+            return changed
+
+    def invalidate() -> str:
+        with SessionLocal() as db:
+            account = db.get(Account, recipient_id)
+            assert account is not None
+            barrier.wait(timeout=5)
+            apply_private_comparison_account_mutation(
+                account,
+                official_first_name="Après",
+            )
+            db.commit()
+            return "invalidated"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        revoke_future = pool.submit(revoke)
+        invalidate_future = pool.submit(invalidate)
+        outcomes = (
+            revoke_future.result(timeout=10),
+            invalidate_future.result(timeout=10),
+        )
+
+    assert outcomes[0] in {True, False}
+    assert outcomes[1] == "invalidated"
+    with SessionLocal() as db:
+        recipient = db.get(Account, recipient_id)
+        relation = db.scalar(
+            select(PrivateComparison).where(
+                PrivateComparison.public_id == public_id
+            )
+        )
+    assert recipient is not None
+    assert recipient.private_comparison_eligibility_generation == 2
+    assert relation is not None and relation.revoked_at is not None
+    assert relation.revoked_reason in {
+        "participant_revoked",
+        "eligibility_changed",
+    }
+
+
+def test_postgres_concurrent_retention_isolated_by_visibility_class(
+    monkeypatch,
+) -> None:  # noqa: ANN001
+    account_id = _eligible_account("event-retention-race@example.test")
+    monkeypatch.setattr(event_service, "MAX_EVENTS_PER_ACCOUNT", 5)
+
+    with SessionLocal() as db:
+        original_shared = [
+            record_event(
+                db,
+                account_id=account_id,
+                kind="sync:test",
+                payload={"sequence": sequence},
+            ).public_cursor
+            for sequence in range(5)
+        ]
+        db.commit()
+
+    def write(kind: str, sequence: int) -> str:
+        with SessionLocal() as db:
+            event = record_event(
+                db,
+                account_id=account_id,
+                kind=kind,
+                payload={"sequence": sequence},
+            )
+            db.commit()
+            return event.public_cursor
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        hidden_futures = [
+            pool.submit(write, "private_comparison:test", sequence)
+            for sequence in range(8)
+        ]
+        hidden_cursors = {
+            future.result(timeout=10) for future in hidden_futures
+        }
+
+    with SessionLocal() as db:
+        shared_after_hidden = set(
+            db.scalars(
+                select(Event.public_cursor).where(
+                    Event.account_id == account_id,
+                    Event.visibility_class == "shared",
+                )
+            )
+        )
+        primary_after_hidden = set(
+            db.scalars(
+                select(Event.public_cursor).where(
+                    Event.account_id == account_id,
+                    Event.visibility_class == "primary_owner",
+                )
+            )
+        )
+
+    assert shared_after_hidden == set(original_shared)
+    assert len(primary_after_hidden) == 5
+    assert primary_after_hidden <= hidden_cursors
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        shared_futures = [
+            pool.submit(write, "sync:test", sequence)
+            for sequence in range(8)
+        ]
+        new_shared_cursors = {
+            future.result(timeout=10) for future in shared_futures
+        }
+
+    with SessionLocal() as db:
+        final_shared = set(
+            db.scalars(
+                select(Event.public_cursor).where(
+                    Event.account_id == account_id,
+                    Event.visibility_class == "shared",
+                )
+            )
+        )
+        final_primary = set(
+            db.scalars(
+                select(Event.public_cursor).where(
+                    Event.account_id == account_id,
+                    Event.visibility_class == "primary_owner",
+                )
+            )
+        )
+
+    assert len(final_shared) == 5
+    assert final_shared <= new_shared_cursors
+    assert final_primary == primary_after_hidden
+
+
+def test_postgres_event_visibility_class_is_database_immutable() -> None:
+    account_id = _eligible_account("event-class-trigger@example.test")
+    with SessionLocal() as db:
+        event = record_event(
+            db,
+            account_id=account_id,
+            kind="sync:test",
+        )
+        db.commit()
+        event_id = event.id
+
+    with SessionLocal() as db, pytest.raises(DBAPIError):
+        db.execute(
+            text(
+                "UPDATE events SET visibility_class = :visibility_class "
+                "WHERE id = :event_id"
+            ),
+            {"visibility_class": "owner", "event_id": event_id},
+        )
+        db.commit()
+
+    with SessionLocal() as db:
+        stored_class = db.scalar(
+            select(Event.visibility_class).where(Event.id == event_id)
+        )
+    assert stored_class == "shared"
+
+    with SessionLocal() as db, pytest.raises(DBAPIError):
+        db.execute(
+            text("UPDATE events SET kind = :kind WHERE id = :event_id"),
+            {"kind": "private_comparison:test", "event_id": event_id},
+        )
+        db.commit()
+
+    with SessionLocal() as db:
+        stored_kind = db.scalar(select(Event.kind).where(Event.id == event_id))
+    assert stored_kind == "sync:test"

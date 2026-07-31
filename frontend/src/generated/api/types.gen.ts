@@ -621,6 +621,28 @@ export type AdminDurationMetricsResponse = {
 };
 
 /**
+ * AdminEventIntegrityMetricsResponse
+ */
+export type AdminEventIntegrityMetricsResponse = {
+    /**
+     * Invalid Public Cursor
+     */
+    invalid_public_cursor: number;
+    /**
+     * Missing Visibility Class
+     */
+    missing_visibility_class: number;
+    /**
+     * Unknown Visibility Class
+     */
+    unknown_visibility_class: number;
+    /**
+     * Visibility Partitions Over Limit
+     */
+    visibility_partitions_over_limit: number;
+};
+
+/**
  * AdminHttpRuntimeMetricsResponse
  */
 export type AdminHttpRuntimeMetricsResponse = {
@@ -855,6 +877,7 @@ export type AdminLoginRequest = {
  */
 export type AdminOperationsMetricsResponse = {
     calendar: AdminCalendarOperationalMetricsResponse;
+    events: AdminEventIntegrityMetricsResponse;
     /**
      * Generated At
      */
@@ -4125,6 +4148,20 @@ export type PrivateComparisonCommonUeResponse = {
 };
 
 /**
+ * PrivateComparisonConsentDisclosureResponse
+ */
+export type PrivateComparisonConsentDisclosureResponse = {
+    /**
+     * Confirmation
+     */
+    confirmation: string;
+    /**
+     * Description
+     */
+    description: string;
+};
+
+/**
  * PrivateComparisonConsentExclusionResponse
  */
 export type PrivateComparisonConsentExclusionResponse = {
@@ -4183,22 +4220,32 @@ export type PrivateComparisonConsentLifecycleResponse = {
  */
 export type PrivateComparisonConsentManifestResponse = {
     /**
+     * Academic Scope Confirmation
+     */
+    academic_scope_confirmation: string;
+    /**
+     * Actor Role
+     */
+    actor_role: 'creator' | 'acceptor';
+    /**
      * Consent Version
      */
-    consent_version: 2;
-    /**
-     * Copy Risk
-     */
-    copy_risk: string;
+    consent_version: 3;
+    copy_risk: PrivateComparisonConsentDisclosureResponse;
     duration_and_revocation: PrivateComparisonConsentLifecycleResponse;
     /**
      * Excluded Sections
      */
     excluded_sections: Array<PrivateComparisonConsentExclusionResponse>;
+    identity_disclosure: PrivateComparisonConsentDisclosureResponse;
     /**
      * Included Sections
      */
     included_sections: Array<PrivateComparisonConsentSectionResponse>;
+    /**
+     * Manifest Digest
+     */
+    manifest_digest: string;
 };
 
 /**
@@ -4272,9 +4319,17 @@ export type PrivateComparisonInvitationAccept = {
      */
     acknowledge_identity_visibility: true;
     /**
+     * Actor Role
+     */
+    actor_role: 'acceptor';
+    /**
      * Consent Version
      */
     consent_version: number;
+    /**
+     * Manifest Digest
+     */
+    manifest_digest: string;
 };
 
 /**
@@ -4294,6 +4349,10 @@ export type PrivateComparisonInvitationCreate = {
      */
     acknowledge_identity_visibility: true;
     /**
+     * Actor Role
+     */
+    actor_role: 'creator';
+    /**
      * Consent Version
      */
     consent_version: number;
@@ -4301,6 +4360,10 @@ export type PrivateComparisonInvitationCreate = {
      * Duration Days
      */
     duration_days?: number;
+    /**
+     * Manifest Digest
+     */
+    manifest_digest: string;
 };
 
 /**
@@ -4407,7 +4470,7 @@ export type PrivateComparisonListResponse = {
     /**
      * Comparisons
      */
-    comparisons: Array<ActivePrivateComparisonListItem | TerminalPrivateComparisonHistoryItem>;
+    comparisons: Array<ActivePrivateComparisonListItem | SuspendedPrivateComparisonListItem | TerminalPrivateComparisonHistoryItem>;
 };
 
 /**
@@ -5202,6 +5265,24 @@ export type SimulationWarningResponse = {
 };
 
 /**
+ * SuspendedPrivateComparisonListItem
+ */
+export type SuspendedPrivateComparisonListItem = {
+    /**
+     * Label
+     */
+    label: 'Comparaison temporairement indisponible';
+    /**
+     * Public Id
+     */
+    public_id: string;
+    /**
+     * Status
+     */
+    status: 'suspended';
+};
+
+/**
  * SyncCredentialEnrollRequest
  */
 export type SyncCredentialEnrollRequest = {
@@ -5598,9 +5679,17 @@ export type PrivateComparisonInvitationAcceptWritable = {
      */
     acknowledge_identity_visibility: true;
     /**
+     * Actor Role
+     */
+    actor_role: 'acceptor';
+    /**
      * Consent Version
      */
     consent_version: number;
+    /**
+     * Manifest Digest
+     */
+    manifest_digest: string;
     /**
      * Token
      */
@@ -10338,9 +10427,14 @@ export type PrivateComparisonsGetPrivateComparisonsResponse = PrivateComparisons
 
 export type PrivateComparisonsGetPrivateComparisonConsentManifestData = {
     body?: never;
-    path?: never;
+    path: {
+        /**
+         * Actor Role
+         */
+        actor_role: 'creator' | 'acceptor';
+    };
     query?: never;
-    url: '/api/v1/private-comparisons/consent-manifest';
+    url: '/api/v1/private-comparisons/consent-manifest/{actor_role}';
 };
 
 export type PrivateComparisonsGetPrivateComparisonConsentManifestErrors = {

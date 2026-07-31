@@ -10,16 +10,29 @@ import type {
 } from "../generated/api/types.gen";
 import { apiData, throwOnApiError } from "./generatedApi";
 
-const consent = {
-  consent_version: 2,
+const creatorConsent = {
+  consent_version: 3,
+  actor_role: "creator",
+  manifest_digest: "a".repeat(64),
   acknowledge_identity_visibility: true,
   acknowledge_academic_scope: true,
   acknowledge_copy_risk: true,
 } as const;
+const acceptorConsent = {
+  ...creatorConsent,
+  actor_role: "acceptor",
+  manifest_digest: "b".repeat(64),
+} as const;
 const sessionBinding = `bss1_${"f".repeat(64)}`;
 
 const consentManifest: PrivateComparisonConsentManifestResponse = {
-  consent_version: 2,
+  consent_version: 3,
+  actor_role: "creator",
+  manifest_digest: creatorConsent.manifest_digest,
+  identity_disclosure: {
+    description: "L’identité du créateur est visible avant acceptation.",
+    confirmation: "J’accepte cette visibilité.",
+  },
   included_sections: [
     {
       key: "official_identity",
@@ -40,7 +53,11 @@ const consentManifest: PrivateComparisonConsentManifestResponse = {
     minimal_history: "Historique minimal.",
     private_only: "Consultation privée.",
   },
-  copy_risk: "L’autre participant peut recopier les informations visibles.",
+  academic_scope_confirmation: "J’accepte le périmètre académique décrit.",
+  copy_risk: {
+    description: "L’autre participant peut recopier les informations visibles.",
+    confirmation: "Je comprends le risque de copie.",
+  },
 };
 
 afterEach(() => {
@@ -56,7 +73,7 @@ describe("private comparison generated contract", () => {
       session_scope: `bss1_${"c".repeat(64)}`,
       expires_at: "2099-01-08T00:00:00Z",
       relationship_duration_days: 30,
-      consent_version: 2,
+      consent_version: 3,
       consent_manifest: consentManifest,
     };
     vi.stubGlobal(
@@ -71,7 +88,7 @@ describe("private comparison generated contract", () => {
 
     const created = await apiData(
       privateComparisonsCreatePrivateComparisonInvitation({
-        body: { ...consent, duration_days: 30 },
+        body: { ...creatorConsent, duration_days: 30 },
         headers: { "X-IMTEGRALE-SESSION-BINDING": sessionBinding },
         throwOnError: throwOnApiError,
       }),
@@ -105,7 +122,7 @@ describe("private comparison generated contract", () => {
 
     await apiData(
       privateComparisonsAcceptPrivateComparisonInvitation({
-        body: { ...consent, token },
+        body: { ...acceptorConsent, token },
         headers: { "X-IMTEGRALE-SESSION-BINDING": sessionBinding },
         throwOnError: throwOnApiError,
       }),

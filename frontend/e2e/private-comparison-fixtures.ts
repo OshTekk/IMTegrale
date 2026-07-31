@@ -110,7 +110,13 @@ const actors: Record<ComparisonActor, SyntheticActor> = {
 };
 
 const consentManifest = {
-  consent_version: 2,
+  consent_version: 3,
+  actor_role: "creator",
+  manifest_digest: "a".repeat(64),
+  identity_disclosure: {
+    description: "Ton identité officielle est visible par l’étudiant qui ouvre le lien.",
+    confirmation: "J’accepte que mon identité officielle soit visible avant l’acceptation.",
+  },
   included_sections: [
     {
       key: "official_identity",
@@ -188,7 +194,21 @@ const consentManifest = {
     minimal_history: "L’historique conserve seulement le statut et les dates.",
     private_only: "La comparaison reste privée aux deux participants.",
   },
-  copy_risk: "L’autre participant peut recopier ou capturer les informations visibles avant une révocation.",
+  academic_scope_confirmation: "J’accepte le partage réciproque du périmètre académique décrit.",
+  copy_risk: {
+    description: "L’autre participant peut recopier ou capturer les informations visibles avant une révocation.",
+    confirmation: "Je comprends que les copies déjà réalisées ne sont pas effacées par une révocation.",
+  },
+};
+
+const acceptorConsentManifest = {
+  ...consentManifest,
+  actor_role: "acceptor",
+  manifest_digest: "b".repeat(64),
+  identity_disclosure: {
+    description: "Ton identité officielle sera affichée au créateur après acceptation.",
+    confirmation: "J’accepte que mon identité officielle soit affichée au créateur.",
+  },
 };
 
 function opaque(prefix: "pc_" | "pci_", bytes = 18) {
@@ -356,7 +376,7 @@ function relationDetail(relation: SyntheticRelation, actor: ComparisonActor) {
   return {
     public_id: relation.publicId,
     status: "active",
-    consent_version: 2,
+    consent_version: 3,
     activated_at: relation.activatedAt,
     expires_at: relation.expiresAt,
     calculated_at: "2099-07-29T12:00:00Z",
@@ -434,7 +454,7 @@ export async function installFakePrivateComparisonApi(
     const body = request.postDataJSON() as Record<string, unknown> | null;
     if (body && typeof body.token === "string") state.tokenBodyPosts += 1;
 
-    if (url.pathname === "/api/v1/private-comparisons/consent-manifest" && request.method() === "GET") {
+    if (url.pathname === "/api/v1/private-comparisons/consent-manifest/creator" && request.method() === "GET") {
       await json(route, consentManifest);
       return;
     }
@@ -457,7 +477,7 @@ export async function installFakePrivateComparisonApi(
           public_id: invitation.publicId,
           token,
           session_scope: `bss1_${createHash("sha256").update(`synthetic-browser-session:${actor}`).digest("hex")}`,
-          consent_version: 2,
+          consent_version: 3,
           expires_at: invitation.expiresAt,
           relationship_duration_days: invitation.durationDays,
           consent_manifest: consentManifest,
@@ -509,8 +529,8 @@ export async function installFakePrivateComparisonApi(
           creator: { official_name: creator.name },
           expires_at: invitation.expiresAt,
           relationship_duration_days: invitation.durationDays,
-          consent_version: 2,
-          consent_manifest: consentManifest,
+          consent_version: 3,
+          consent_manifest: acceptorConsentManifest,
         });
         return;
       }

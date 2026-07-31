@@ -121,14 +121,22 @@ def test_private_comparison_token_is_limited_to_one_shot_and_post_bodies() -> No
     assert "token" not in schemas["PrivateComparisonInvitationCreate"]["properties"]
 
 
-def test_terminal_private_comparison_schema_is_structurally_minimal() -> None:
+def test_unavailable_private_comparison_schemas_are_structurally_minimal() -> None:
     document = app.openapi()
     schemas = document["components"]["schemas"]
     terminal = schemas["TerminalPrivateComparisonHistoryItem"]
+    suspended = schemas["SuspendedPrivateComparisonListItem"]
 
     assert set(terminal["properties"]) == {"public_id", "status", "ended_at"}
     assert set(terminal["required"]) == {"public_id", "status", "ended_at"}
     assert set(terminal["properties"]["status"]["enum"]) == {"expired", "revoked"}
+    assert set(suspended["properties"]) == {"public_id", "status", "label"}
+    assert set(suspended["required"]) == {"public_id", "status", "label"}
+    assert suspended["properties"]["status"]["const"] == "suspended"
+    assert (
+        suspended["properties"]["label"]["const"]
+        == "Comparaison temporairement indisponible"
+    )
 
     forbidden_fragments = {
         "identity",
@@ -143,8 +151,9 @@ def test_terminal_private_comparison_schema_is_structurally_minimal() -> None:
         "participant",
         "sync",
     }
-    serialized = json.dumps(terminal).casefold()
-    assert all(fragment not in serialized for fragment in forbidden_fragments)
+    for schema in (terminal, suspended):
+        serialized = json.dumps(schema).casefold()
+        assert all(fragment not in serialized for fragment in forbidden_fragments)
 
     list_items = schemas["PrivateComparisonListResponse"]["properties"]["comparisons"]["items"]
     assert list_items["discriminator"]["propertyName"] == "status"
@@ -153,6 +162,7 @@ def test_terminal_private_comparison_schema_is_structurally_minimal() -> None:
         for branch in list_items["oneOf"]
     } == {
         "ActivePrivateComparisonListItem",
+        "SuspendedPrivateComparisonListItem",
         "TerminalPrivateComparisonHistoryItem",
     }
 

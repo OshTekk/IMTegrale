@@ -123,6 +123,7 @@ def test_admin_operations_metrics_are_private_and_aggregate(client: TestClient) 
         "workers",
         "pass",
         "calendar",
+        "events",
         "private_comparisons",
     }
     assert [queue["name"] for queue in payload["queues"]] == ["sync", "calendar", "outbox"]
@@ -134,6 +135,12 @@ def test_admin_operations_metrics_are_private_and_aggregate(client: TestClient) 
         "active_relations": 0,
         "inconsistent_invitations": 0,
         "inconsistent_relations": 0,
+    }
+    assert payload["events"] == {
+        "missing_visibility_class": 0,
+        "unknown_visibility_class": 0,
+        "invalid_public_cursor": 0,
+        "visibility_partitions_over_limit": 0,
     }
     assert "account" not in response.text.casefold()
     assert '"url":' not in response.text.casefold()

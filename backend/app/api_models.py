@@ -635,12 +635,21 @@ class PrivateComparisonConsentLifecycleResponse(ApiModel):
     private_only: str
 
 
+class PrivateComparisonConsentDisclosureResponse(ApiModel):
+    description: str
+    confirmation: str
+
+
 class PrivateComparisonConsentManifestResponse(ApiModel):
-    consent_version: Literal[2]
+    consent_version: Literal[3]
+    actor_role: Literal["creator", "acceptor"]
+    manifest_digest: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    identity_disclosure: PrivateComparisonConsentDisclosureResponse
     included_sections: list[PrivateComparisonConsentSectionResponse]
     excluded_sections: list[PrivateComparisonConsentExclusionResponse]
     duration_and_revocation: PrivateComparisonConsentLifecycleResponse
-    copy_risk: str
+    academic_scope_confirmation: str
+    copy_risk: PrivateComparisonConsentDisclosureResponse
 
 
 class PrivateComparisonInvitationCreatedResponse(ApiModel):
@@ -691,6 +700,12 @@ class ActivePrivateComparisonListItem(ApiModel):
     freshness: Freshness
 
 
+class SuspendedPrivateComparisonListItem(ApiModel):
+    public_id: str
+    status: Literal["suspended"]
+    label: Literal["Comparaison temporairement indisponible"]
+
+
 class TerminalPrivateComparisonHistoryItem(ApiModel):
     public_id: str
     status: Literal["expired", "revoked"]
@@ -698,7 +713,9 @@ class TerminalPrivateComparisonHistoryItem(ApiModel):
 
 
 PrivateComparisonListItem: TypeAlias = Annotated[
-    ActivePrivateComparisonListItem | TerminalPrivateComparisonHistoryItem,
+    ActivePrivateComparisonListItem
+    | SuspendedPrivateComparisonListItem
+    | TerminalPrivateComparisonHistoryItem,
     Field(discriminator="status"),
 ]
 
@@ -1575,6 +1592,13 @@ class AdminCalendarOperationalMetricsResponse(ApiModel):
     errors_24h: int
 
 
+class AdminEventIntegrityMetricsResponse(ApiModel):
+    missing_visibility_class: int
+    unknown_visibility_class: int
+    invalid_public_cursor: int
+    visibility_partitions_over_limit: int
+
+
 class AdminPrivateComparisonMetricsResponse(ApiModel):
     enabled: bool
     invitations_total: int
@@ -1593,6 +1617,7 @@ class AdminOperationsMetricsResponse(ApiModel):
     workers: list[AdminWorkerMetricsResponse]
     pass_: AdminPassOperationalMetricsResponse = Field(alias="pass")
     calendar: AdminCalendarOperationalMetricsResponse
+    events: AdminEventIntegrityMetricsResponse
     private_comparisons: AdminPrivateComparisonMetricsResponse
 
 

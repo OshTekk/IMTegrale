@@ -68,6 +68,9 @@ from app.models import (
     ShareToken,
     WebSession,
 )
+from app.private_comparison_lifecycle import (
+    apply_private_comparison_account_mutation,
+)
 from app.schemas import PasskeyAuthenticationVerify, PasskeyRegistrationVerify
 from app.schemas_admin import (
     AdminAccountAction,
@@ -807,7 +810,7 @@ def manage_account(
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Un motif est requis")
 
     if payload.action == "disable":
-        account.is_disabled = True
+        apply_private_comparison_account_mutation(account, is_disabled=True)
         account.disabled_at = now
         account.disabled_reason = reason
         db.execute(delete(WebSession).where(WebSession.account_id == account.id))
@@ -821,7 +824,7 @@ def manage_account(
         account.auto_sync_paused_at = now
         account.auto_sync_next_at = None
     elif payload.action == "enable":
-        account.is_disabled = False
+        apply_private_comparison_account_mutation(account, is_disabled=False)
         account.disabled_at = None
         account.disabled_reason = None
     elif payload.action == "revoke_access":
@@ -1163,6 +1166,9 @@ def delete_account(
     try:
         with account_sync_lock(account.id):
             lock_private_comparison_invitations_for_account_deletion(db, account.id)
+            # Flush this semantic transition before the erasure cascade so
+            # surviving participants receive a minimal terminal purge event.
+            apply_private_comparison_account_mutation(account, is_disabled=True)
             purge_account_service_sessions(db, account.id, reason="account_deleted")
             record_admin_audit(
                 db,

@@ -109,7 +109,7 @@ export function PrivateComparisonAcceptPage() {
         if (!currentBearer.finish(request)) return;
         if (
           value.consent_version !== value.consent_manifest.consent_version ||
-          !usablePrivateComparisonConsentManifest(value.consent_manifest)
+          !usablePrivateComparisonConsentManifest(value.consent_manifest, "acceptor")
         ) {
           throw new Error("Private comparison consent manifest mismatch");
         }
@@ -134,6 +134,8 @@ export function PrivateComparisonAcceptPage() {
             body: {
               token,
               consent_version: preview.consent_manifest.consent_version,
+              actor_role: "acceptor",
+              manifest_digest: preview.consent_manifest.manifest_digest,
               acknowledge_identity_visibility: consent.identity,
               acknowledge_academic_scope: consent.academic,
               acknowledge_copy_risk: consent.copyRisk,
@@ -247,7 +249,12 @@ export function PrivateComparisonAcceptPage() {
       </div>
 
       <PrivateComparisonScope manifest={preview.consent_manifest} compact />
-      <PrivateComparisonConsent value={consent} onChange={setConsent} legend="Confirme ton accord pour accepter" />
+      <PrivateComparisonConsent
+        manifest={preview.consent_manifest}
+        value={consent}
+        onChange={setConsent}
+        legend="Confirme ton accord pour accepter"
+      />
       <div className="private-comparison-accept-actions">
         <button
           className="secondary-button"

@@ -15,6 +15,26 @@ branch_labels = None
 depends_on = None
 
 EVENT_CURSOR_BACKFILL_MAX_ATTEMPTS = 16
+EVENT_VISIBILITY_CLASSES = ("shared", "owner", "primary_owner", "simulation")
+EVENT_VISIBILITY_BY_PREFIX = (
+    ("private_comparison:", "primary_owner"),
+    ("simulation:", "simulation"),
+    ("account:", "owner"),
+    ("auth:", "owner"),
+    ("leaderboard:", "owner"),
+    ("learning:", "owner"),
+    ("telegram:", "owner"),
+    ("token:", "owner"),
+    ("calendar:", "shared"),
+    ("note:", "shared"),
+    ("pass_access:", "shared"),
+    ("pass_session:", "shared"),
+    ("passkey:", "shared"),
+    ("security_setup:", "shared"),
+    ("sync:", "shared"),
+    ("sync_credential:", "shared"),
+    ("ue:", "shared"),
+)
 
 
 def _new_public_event_cursor(used: set[str]) -> str:
@@ -25,23 +45,92 @@ def _new_public_event_cursor(used: set[str]) -> str:
     raise RuntimeError("0029 could not allocate a unique public event cursor")
 
 
-def _add_public_event_cursors() -> None:
+def _visibility_class_for_existing_event(kind: str) -> str:
+    for prefix, visibility_class in EVENT_VISIBILITY_BY_PREFIX:
+        if kind.startswith(prefix):
+            return visibility_class
+    # Unknown historical families are backfilled to the least-disclosing class.
+    return "primary_owner"
+
+
+def _create_event_visibility_immutability_trigger() -> None:
+    bind = op.get_bind()
+    if bind.dialect.name == "postgresql":
+        op.execute(
+            """
+            CREATE FUNCTION reject_event_visibility_class_update()
+            RETURNS trigger AS $$
+            BEGIN
+                IF NEW.kind IS DISTINCT FROM OLD.kind
+                   OR NEW.visibility_class IS DISTINCT FROM OLD.visibility_class THEN
+                    RAISE EXCEPTION 'event classification is immutable';
+                END IF;
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql
+            """
+        )
+        op.execute(
+            """
+            CREATE TRIGGER trg_events_visibility_class_immutable
+            BEFORE UPDATE OF kind, visibility_class ON events
+            FOR EACH ROW
+            EXECUTE FUNCTION reject_event_visibility_class_update()
+            """
+        )
+    elif bind.dialect.name == "sqlite":
+        op.execute(
+            """
+            CREATE TRIGGER trg_events_visibility_class_immutable
+            BEFORE UPDATE OF kind, visibility_class ON events
+            FOR EACH ROW
+            WHEN NEW.kind <> OLD.kind
+              OR NEW.visibility_class <> OLD.visibility_class
+            BEGIN
+                SELECT RAISE(ABORT, 'event classification is immutable');
+            END
+            """
+        )
+
+
+def _drop_event_visibility_immutability_trigger() -> None:
+    bind = op.get_bind()
+    if bind.dialect.name == "postgresql":
+        op.execute(
+            "DROP TRIGGER IF EXISTS "
+            "trg_events_visibility_class_immutable ON events"
+        )
+        op.execute("DROP FUNCTION IF EXISTS reject_event_visibility_class_update()")
+    elif bind.dialect.name == "sqlite":
+        op.execute("DROP TRIGGER IF EXISTS trg_events_visibility_class_immutable")
+
+
+def _add_public_event_cursors_and_visibility() -> None:
     op.add_column(
         "events",
         sa.Column("public_cursor", sa.String(length=37), nullable=True),
     )
+    op.add_column(
+        "events",
+        sa.Column("visibility_class", sa.String(length=16), nullable=True),
+    )
     bind = op.get_bind()
     used: set[str] = set()
-    event_ids = bind.execute(sa.text("SELECT id FROM events ORDER BY id")).scalars()
-    for event_id in event_ids:
+    events = bind.execute(sa.text("SELECT id, kind FROM events ORDER BY id"))
+    for event_id, kind in events:
         cursor = _new_public_event_cursor(used)
         used.add(cursor)
         bind.execute(
             sa.text(
-                "UPDATE events SET public_cursor = :public_cursor "
+                "UPDATE events SET public_cursor = :public_cursor, "
+                "visibility_class = :visibility_class "
                 "WHERE id = :event_id"
             ),
-            {"public_cursor": cursor, "event_id": event_id},
+            {
+                "public_cursor": cursor,
+                "visibility_class": _visibility_class_for_existing_event(kind),
+                "event_id": event_id,
+            },
         )
     with op.batch_alter_table("events") as batch:
         batch.alter_column(
@@ -54,16 +143,45 @@ def _add_public_event_cursors() -> None:
             "length(public_cursor) = 37 "
             "AND substr(public_cursor, 1, 5) = 'evc1_'",
         )
+        batch.alter_column(
+            "visibility_class",
+            existing_type=sa.String(length=16),
+            nullable=False,
+        )
+        batch.create_check_constraint(
+            "ck_events_visibility_class",
+            "visibility_class IN ('shared', 'owner', 'primary_owner', 'simulation')",
+        )
     op.create_index(
         "ix_events_public_cursor",
         "events",
         ["public_cursor"],
         unique=True,
     )
+    op.create_index(
+        "ix_events_account_visibility_id",
+        "events",
+        ["account_id", "visibility_class", "id"],
+        unique=False,
+    )
+    _create_event_visibility_immutability_trigger()
 
 
 def upgrade() -> None:
-    _add_public_event_cursors()
+    _add_public_event_cursors_and_visibility()
+    with op.batch_alter_table("accounts") as batch:
+        batch.add_column(
+            sa.Column(
+                "private_comparison_eligibility_generation",
+                sa.Integer(),
+                server_default=sa.text("1"),
+                nullable=False,
+            )
+        )
+        batch.create_check_constraint(
+            "ck_accounts_private_comparison_eligibility_generation",
+            "private_comparison_eligibility_generation >= 1",
+        )
     op.create_table(
         "private_comparison_invitations",
         sa.Column("id", sa.String(length=36), nullable=False),
@@ -72,6 +190,7 @@ def upgrade() -> None:
         sa.Column("token_digest", sa.String(length=64), nullable=False),
         sa.Column("token_version", sa.Integer(), server_default=sa.text("1"), nullable=False),
         sa.Column("consent_version", sa.Integer(), nullable=False),
+        sa.Column("creator_consent_manifest_digest", sa.String(length=64), nullable=False),
         sa.Column("validity_days", sa.Integer(), server_default=sa.text("7"), nullable=False),
         sa.Column("relationship_duration_days", sa.Integer(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
@@ -93,8 +212,12 @@ def upgrade() -> None:
             name="ck_private_comparison_invitations_token_version",
         ),
         sa.CheckConstraint(
-            "consent_version = 2",
+            "consent_version = 3",
             name="ck_private_comparison_invitations_consent_version",
+        ),
+        sa.CheckConstraint(
+            "length(creator_consent_manifest_digest) = 64",
+            name="ck_private_comparison_invitations_creator_manifest_digest",
         ),
         sa.CheckConstraint(
             "validity_days BETWEEN 1 AND 7",
@@ -177,8 +300,13 @@ def upgrade() -> None:
         sa.Column("public_id", sa.String(length=32), nullable=False),
         sa.Column("account_a_id", sa.String(length=36), nullable=False),
         sa.Column("account_b_id", sa.String(length=36), nullable=False),
+        sa.Column("creator_account_id", sa.String(length=36), nullable=False),
         sa.Column("created_from_invitation_id", sa.String(length=36), nullable=True),
         sa.Column("consent_version", sa.Integer(), nullable=False),
+        sa.Column("creator_consent_manifest_digest", sa.String(length=64), nullable=False),
+        sa.Column("acceptor_consent_manifest_digest", sa.String(length=64), nullable=False),
+        sa.Column("account_a_eligibility_generation", sa.Integer(), nullable=False),
+        sa.Column("account_b_eligibility_generation", sa.Integer(), nullable=False),
         sa.Column("account_a_consented_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("account_b_consented_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("activated_at", sa.DateTime(timezone=True), nullable=False),
@@ -198,8 +326,22 @@ def upgrade() -> None:
             name="ck_private_comparisons_canonical_pair",
         ),
         sa.CheckConstraint(
-            "consent_version = 2",
+            "consent_version = 3",
             name="ck_private_comparisons_consent_version",
+        ),
+        sa.CheckConstraint(
+            "creator_account_id IN (account_a_id, account_b_id)",
+            name="ck_private_comparisons_creator_participant",
+        ),
+        sa.CheckConstraint(
+            "length(creator_consent_manifest_digest) = 64 "
+            "AND length(acceptor_consent_manifest_digest) = 64",
+            name="ck_private_comparisons_manifest_digests",
+        ),
+        sa.CheckConstraint(
+            "account_a_eligibility_generation >= 1 "
+            "AND account_b_eligibility_generation >= 1",
+            name="ck_private_comparisons_eligibility_generations",
         ),
         sa.CheckConstraint(
             "duration_days BETWEEN 1 AND 90",
@@ -219,8 +361,9 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint(
             "(revoked_at IS NULL AND revoked_by_account_id IS NULL AND revoked_reason IS NULL) OR "
-            "(revoked_at IS NOT NULL AND revoked_by_account_id IS NOT NULL "
-            "AND revoked_reason IS NOT NULL)",
+            "(revoked_at IS NOT NULL AND revoked_reason IS NOT NULL AND "
+            "((revoked_reason = 'eligibility_changed' AND revoked_by_account_id IS NULL) OR "
+            "(revoked_reason <> 'eligibility_changed' AND revoked_by_account_id IS NOT NULL)))",
             name="ck_private_comparisons_revocation",
         ),
         sa.CheckConstraint(
@@ -228,7 +371,8 @@ def upgrade() -> None:
             name="ck_private_comparisons_revoker_participant",
         ),
         sa.CheckConstraint(
-            "revoked_reason IS NULL OR revoked_reason IN ('participant_revoked', 'operator_revoked')",
+            "revoked_reason IS NULL OR revoked_reason IN "
+            "('participant_revoked', 'operator_revoked', 'eligibility_changed')",
             name="ck_private_comparisons_revoked_reason",
         ),
         sa.CheckConstraint(
@@ -237,6 +381,7 @@ def upgrade() -> None:
         ),
         sa.ForeignKeyConstraint(["account_a_id"], ["accounts.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["account_b_id"], ["accounts.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["creator_account_id"], ["accounts.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(
             ["created_from_invitation_id"],
             ["private_comparison_invitations.id"],
@@ -297,7 +442,17 @@ def downgrade() -> None:
         table_name="private_comparison_invitations",
     )
     op.drop_table("private_comparison_invitations")
+    with op.batch_alter_table("accounts") as batch:
+        batch.drop_constraint(
+            "ck_accounts_private_comparison_eligibility_generation",
+            type_="check",
+        )
+        batch.drop_column("private_comparison_eligibility_generation")
+    _drop_event_visibility_immutability_trigger()
+    op.drop_index("ix_events_account_visibility_id", table_name="events")
     op.drop_index("ix_events_public_cursor", table_name="events")
     with op.batch_alter_table("events") as batch:
+        batch.drop_constraint("ck_events_visibility_class", type_="check")
         batch.drop_constraint("ck_events_public_cursor", type_="check")
+        batch.drop_column("visibility_class")
         batch.drop_column("public_cursor")

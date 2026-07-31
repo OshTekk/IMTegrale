@@ -6,7 +6,10 @@ import pytest
 from app.config import Settings
 from app.database import SessionLocal, engine, utcnow
 from app.models import Account, PrivateComparison, PrivateComparisonInvitation
-from app.private_comparison_contract import PRIVATE_COMPARISON_CONSENT_VERSION
+from app.private_comparison_contract import (
+    PRIVATE_COMPARISON_CONSENT_VERSION,
+    private_comparison_consent_manifest,
+)
 from app.services.operations import operational_alert_codes, operations_metrics
 from sqlalchemy import func, inspect, select, text
 from sqlalchemy.exc import IntegrityError
@@ -23,12 +26,14 @@ def _accounts() -> tuple[str, str]:
 
 def _invitation(account_id: str, *, suffix: str = "a") -> PrivateComparisonInvitation:
     now = utcnow()
+    creator_manifest = private_comparison_consent_manifest(actor_role="creator")
     return PrivateComparisonInvitation(
         public_id=f"pci_{suffix * 24}",
         creator_account_id=account_id,
         token_digest=suffix * 64,
         token_version=1,
         consent_version=PRIVATE_COMPARISON_CONSENT_VERSION,
+        creator_consent_manifest_digest=creator_manifest["manifest_digest"],
         validity_days=7,
         relationship_duration_days=30,
         created_at=now,
@@ -38,11 +43,18 @@ def _invitation(account_id: str, *, suffix: str = "a") -> PrivateComparisonInvit
 
 def _comparison(first_id: str, second_id: str, *, suffix: str = "a") -> PrivateComparison:
     now = utcnow()
+    creator_manifest = private_comparison_consent_manifest(actor_role="creator")
+    acceptor_manifest = private_comparison_consent_manifest(actor_role="acceptor")
     return PrivateComparison(
         public_id=f"pc_{suffix * 24}",
         account_a_id=first_id,
         account_b_id=second_id,
+        creator_account_id=first_id,
         consent_version=PRIVATE_COMPARISON_CONSENT_VERSION,
+        creator_consent_manifest_digest=creator_manifest["manifest_digest"],
+        acceptor_consent_manifest_digest=acceptor_manifest["manifest_digest"],
+        account_a_eligibility_generation=1,
+        account_b_eligibility_generation=1,
         account_a_consented_at=now,
         account_b_consented_at=now,
         activated_at=now,

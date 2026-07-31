@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -93,14 +95,15 @@ def _relation_view(db: Session, account_id: str, public_id: str) -> dict:
 
 
 @router.get(
-    "/consent-manifest",
+    "/consent-manifest/{actor_role}",
     response_model=PrivateComparisonConsentManifestResponse,
 )
 def get_private_comparison_consent_manifest(
+    actor_role: Literal["creator", "acceptor"],
     _auth: AuthContext = Depends(require_primary_owner),
     _settings: Settings = Depends(_feature_settings),
 ) -> dict:
-    return private_comparison_consent_manifest()
+    return private_comparison_consent_manifest(actor_role=actor_role)
 
 
 @router.post(
@@ -137,6 +140,7 @@ def create_private_comparison_invitation(
             db,
             creator_account_id=auth.account.id,
             consent_version=payload.consent_version,
+            manifest_digest=payload.manifest_digest,
             duration_days=payload.duration_days,
             settings=settings,
             before_write=final_rebind_callback(rebound, settings=settings),
@@ -163,7 +167,7 @@ def create_private_comparison_invitation(
         "expires_at": invitation.expires_at,
         "relationship_duration_days": invitation.relationship_duration_days,
         "consent_version": invitation.consent_version,
-        "consent_manifest": private_comparison_consent_manifest(),
+        "consent_manifest": private_comparison_consent_manifest(actor_role="creator"),
     }
 
 
@@ -255,6 +259,7 @@ def accept_private_comparison_invitation(
             accepter_account_id=auth.account.id,
             raw_token=payload.token.get_secret_value(),
             consent_version=payload.consent_version,
+            manifest_digest=payload.manifest_digest,
             settings=settings,
             before_write=final_rebind_callback(rebound, settings=settings),
         )

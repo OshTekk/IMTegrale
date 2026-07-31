@@ -14,6 +14,9 @@ from app.calculations import grade_for_average, grade_from_code
 from app.database import utcnow
 from app.limits import MAX_LEADERBOARD_PARTICIPANTS_PER_SEGMENT
 from app.models import Account, LeaderboardProfile, Note, UeSetting
+from app.private_comparison_lifecycle import (
+    apply_private_comparison_account_mutation,
+)
 
 LEADERBOARD_CONSENT_VERSION = "2026-07-18.4"
 LEADERBOARD_RULES_VERSION = "2026-07-18.3"
@@ -96,12 +99,16 @@ def apply_official_identity(
 ) -> None:
     normalized_first = normalize_official_name_part(first_name)
     normalized_last = normalize_official_name_part(last_name)
+    changes: dict[str, object] = {}
     if normalized_first is not None:
-        account.official_first_name = normalized_first
+        changes["official_first_name"] = normalized_first
     if normalized_last is not None:
-        account.official_last_name = normalized_last
-    if account.official_first_name and account.official_last_name:
-        account.official_identity_at = detected_at or utcnow()
+        changes["official_last_name"] = normalized_last
+    resolved_first = changes.get("official_first_name", account.official_first_name)
+    resolved_last = changes.get("official_last_name", account.official_last_name)
+    if resolved_first and resolved_last:
+        changes["official_identity_at"] = detected_at or utcnow()
+    apply_private_comparison_account_mutation(account, **changes)
 
 
 def normalize_detected_campus(value: str | None) -> str:
@@ -193,10 +200,13 @@ def apply_detected_academic_profile(
         account.classification_review_required = _classification_review(account)
         return
     if normalized_program != "unknown" and normalized_year is not None:
-        account.program = normalized_program
-        account.promotion_year = normalized_year
-        account.academic_source = "pass"
-        account.academic_verified_at = observed_at
+        apply_private_comparison_account_mutation(
+            account,
+            program=normalized_program,
+            promotion_year=normalized_year,
+            academic_source="pass",
+            academic_verified_at=observed_at,
+        )
     account.classification_review_required = _classification_review(account)
 
 
@@ -236,10 +246,13 @@ def _set_admin_academic_profile(
     normalized_year = normalize_promotion_year(promotion_year)
     if normalized_program == "unknown" or normalized_year is None:
         raise ValueError("Le cursus et la promotion doivent être renseignés")
-    account.program = normalized_program
-    account.promotion_year = normalized_year
-    account.academic_source = "admin"
-    account.academic_verified_at = utcnow()
+    apply_private_comparison_account_mutation(
+        account,
+        program=normalized_program,
+        promotion_year=normalized_year,
+        academic_source="admin",
+        academic_verified_at=utcnow(),
+    )
     account.classification_review_required = _classification_review(account)
 
 

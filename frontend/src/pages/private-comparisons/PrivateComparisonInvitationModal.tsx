@@ -58,7 +58,7 @@ export function PrivateComparisonInvitationModal({
   });
   const oneShotRef = useRef(oneShot);
   oneShotRef.current = oneShot;
-  const usableManifest = manifest && usablePrivateComparisonConsentManifest(manifest) ? manifest : null;
+  const usableManifest = manifest && usablePrivateComparisonConsentManifest(manifest, "creator") ? manifest : null;
   const scopedCreated = oneShot.value?.session_scope === sessionScope ? oneShot.value : null;
 
   useLayoutEffect(() => {
@@ -71,6 +71,7 @@ export function PrivateComparisonInvitationModal({
   const create = async () => {
     if (!usableManifest || !privateComparisonConsentComplete(consent)) return;
     const requestManifestVersion = usableManifest.consent_version;
+    const requestManifestDigest = usableManifest.manifest_digest;
     const request = oneShot.begin();
     setPending(true);
     setError(null);
@@ -81,6 +82,8 @@ export function PrivateComparisonInvitationModal({
             headers: { "X-IMTEGRALE-SESSION-BINDING": request.scope },
             body: {
               consent_version: usableManifest.consent_version,
+              actor_role: "creator",
+              manifest_digest: usableManifest.manifest_digest,
               acknowledge_identity_visibility: consent.identity,
               acknowledge_academic_scope: consent.academic,
               acknowledge_copy_risk: consent.copyRisk,
@@ -98,8 +101,9 @@ export function PrivateComparisonInvitationModal({
       if (
         response.session_scope !== request.scope ||
         response.consent_version !== requestManifestVersion ||
-        !usablePrivateComparisonConsentManifest(response.consent_manifest) ||
-        response.consent_manifest.consent_version !== requestManifestVersion
+        !usablePrivateComparisonConsentManifest(response.consent_manifest, "creator") ||
+        response.consent_manifest.consent_version !== requestManifestVersion ||
+        response.consent_manifest.manifest_digest !== requestManifestDigest
       ) {
         throw new Error("Private comparison consent manifest changed");
       }
@@ -227,7 +231,7 @@ export function PrivateComparisonInvitationModal({
             <p>La durée choisie commence uniquement après son acceptation.</p>
           </div>
           <PrivateComparisonScope manifest={usableManifest} compact />
-          <PrivateComparisonConsent value={consent} onChange={setConsent} />
+          <PrivateComparisonConsent manifest={usableManifest} value={consent} onChange={setConsent} />
           {error && (
             <p className="form-error" role="alert">
               {error}

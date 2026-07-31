@@ -18,6 +18,9 @@ from app.config import Settings, get_settings
 from app.database import get_db, utcnow
 from app.learning.access import learning_session_view
 from app.models import Account, PasskeyCredential, ShareToken, WebSession, new_id
+from app.private_comparison_lifecycle import (
+    apply_private_comparison_account_mutation,
+)
 from app.schemas import (
     ImtLoginRequest,
     PasskeyAuthenticationVerify,
@@ -228,7 +231,10 @@ async def login_imt(
 
     now = utcnow()
     account.last_login_at = now
-    account.student_status_verified_at = now
+    apply_private_comparison_account_mutation(
+        account,
+        student_status_verified_at=now,
+    )
     if is_new:
         set_login_sync_cooldown(account, now)
         apply_pass_entries(
@@ -331,7 +337,10 @@ async def reconnect_pass(
         ) from exc
 
     apply_pass_profile(auth.account, gateway.profile)
-    auth.account.student_status_verified_at = utcnow()
+    apply_private_comparison_account_mutation(
+        auth.account,
+        student_status_verified_at=utcnow(),
+    )
     try:
         stored_session = store_service_session_if_reusable(
             db,

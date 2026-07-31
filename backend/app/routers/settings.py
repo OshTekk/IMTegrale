@@ -14,6 +14,9 @@ from app.config import get_settings as get_runtime_settings
 from app.database import get_db, utcnow
 from app.imt_sync_credential_contract import ImtSyncCredentialRevocationReason
 from app.models import Account, PasskeyCredential
+from app.private_comparison_lifecycle import (
+    apply_private_comparison_account_mutation,
+)
 from app.schemas import (
     AccountUpdate,
     AutoSyncUpdate,
@@ -564,7 +567,10 @@ async def enroll_sync_credential(
                 actor=auth.actor,
             )
             apply_pass_profile(locked_account, gateway.profile)
-            locked_account.student_status_verified_at = utcnow()
+            apply_private_comparison_account_mutation(
+                locked_account,
+                student_status_verified_at=utcnow(),
+            )
             stored_session = store_service_session_if_reusable(
                 db,
                 locked_account,

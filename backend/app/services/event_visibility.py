@@ -3,25 +3,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from sqlalchemy import or_
 from sqlalchemy.sql.elements import ColumnElement
 
+from app.event_contract import (
+    EventVisibilityClass,
+    conservative_event_visibility_class_for_kind,
+)
 from app.models import Event
 
 if TYPE_CHECKING:
     from app.security import AuthContext
-
-OWNER_ONLY_EVENT_PREFIXES = (
-    "account:",
-    "auth:",
-    "leaderboard:",
-    "simulation:",
-    "telegram:",
-    "token:",
-)
-PRIMARY_OWNER_ONLY_EVENT_PREFIXES = ("private_comparison:",)
-SIMULATION_EVENT_PREFIXES = ("simulation:",)
-
 
 @dataclass(frozen=True, slots=True)
 class EventVisibilityContext:
@@ -40,23 +31,21 @@ def event_visibility_for(auth: AuthContext) -> EventVisibilityContext:
     )
 
 
-def hidden_event_prefixes(context: EventVisibilityContext) -> tuple[str, ...]:
-    prefixes: list[str] = []
-    if context.role != "owner":
-        prefixes.extend(OWNER_ONLY_EVENT_PREFIXES)
-    if not context.primary_owner:
-        prefixes.extend(PRIMARY_OWNER_ONLY_EVENT_PREFIXES)
-    if not context.include_simulations:
-        prefixes.extend(SIMULATION_EVENT_PREFIXES)
-    return tuple(dict.fromkeys(prefixes))
+def visible_event_classes(context: EventVisibilityContext) -> tuple[str, ...]:
+    classes = [EventVisibilityClass.SHARED.value]
+    if context.role == "owner":
+        classes.append(EventVisibilityClass.OWNER.value)
+    if context.primary_owner:
+        classes.append(EventVisibilityClass.PRIMARY_OWNER.value)
+    if context.primary_owner and context.include_simulations:
+        classes.append(EventVisibilityClass.SIMULATION.value)
+    return tuple(classes)
 
 
 def event_is_visible(kind: str, context: EventVisibilityContext) -> bool:
-    return not kind.startswith(hidden_event_prefixes(context))
+    visibility_class = conservative_event_visibility_class_for_kind(kind).value
+    return visibility_class in visible_event_classes(context)
 
 
 def event_visibility_filters(context: EventVisibilityContext) -> tuple[ColumnElement[bool], ...]:
-    hidden = hidden_event_prefixes(context)
-    if not hidden:
-        return ()
-    return (~or_(*(Event.kind.startswith(prefix) for prefix in hidden)),)
+    return (Event.visibility_class.in_(visible_event_classes(context)),)

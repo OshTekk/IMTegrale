@@ -22,6 +22,7 @@ from sqlalchemy.ext.mutable import MutableList
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from app.database import Base, utcnow
+from app.event_contract import EVENT_VISIBILITY_CLASSES
 from app.event_cursor import EVENT_CURSOR_LENGTH, generate_event_cursor
 from app.imt_sync_credential_contract import (
     IMT_SYNC_CREDENTIAL_ENVELOPE_BYTES,
@@ -72,10 +73,19 @@ class Account(Base):
             + ")",
             name="ck_accounts_auto_sync_paused_reason",
         ),
+        CheckConstraint(
+            "private_comparison_eligibility_generation >= 1",
+            name="ck_accounts_private_comparison_eligibility_generation",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     access_generation: Mapped[int] = mapped_column(Integer, default=1)
+    private_comparison_eligibility_generation: Mapped[int] = mapped_column(
+        Integer,
+        default=1,
+        server_default=text("1"),
+    )
     imt_username: Mapped[str] = mapped_column(String(160))
     display_name: Mapped[str] = mapped_column(String(120))
     encrypted_telegram_token: Mapped[str | None] = mapped_column(Text)
@@ -595,10 +605,22 @@ class Event(Base):
     __tablename__ = "events"
     __table_args__ = (
         Index("ix_events_account_id_id", "account_id", "id"),
+        Index(
+            "ix_events_account_visibility_id",
+            "account_id",
+            "visibility_class",
+            "id",
+        ),
         Index("ix_events_public_cursor", "public_cursor", unique=True),
         CheckConstraint(
             "length(public_cursor) = 37 AND substr(public_cursor, 1, 5) = 'evc1_'",
             name="ck_events_public_cursor",
+        ),
+        CheckConstraint(
+            "visibility_class IN ("
+            + ", ".join(repr(value) for value in EVENT_VISIBILITY_CLASSES)
+            + ")",
+            name="ck_events_visibility_class",
         ),
     )
 
@@ -609,9 +631,26 @@ class Event(Base):
     )
     account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), index=True)
     kind: Mapped[str] = mapped_column(String(64))
+    visibility_class: Mapped[str] = mapped_column(String(16))
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
     actor: Mapped[str] = mapped_column(String(64), default="system")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    @validates("kind")
+    def validate_kind(self, _key: str, value: str) -> str:
+        existing = self.__dict__.get("kind")
+        if existing is not None and existing != value:
+            raise ValueError("Event classification is immutable")
+        return value
+
+    @validates("visibility_class")
+    def validate_visibility_class(self, _key: str, value: str) -> str:
+        if value not in EVENT_VISIBILITY_CLASSES:
+            raise ValueError("Unsupported event visibility class")
+        existing = self.__dict__.get("visibility_class")
+        if existing is not None and existing != value:
+            raise ValueError("Event classification is immutable")
+        return value
 
 
 class SyncRequest(Base):
@@ -1089,6 +1128,10 @@ class PrivateComparisonInvitation(Base):
             name="ck_private_comparison_invitations_consent_version",
         ),
         CheckConstraint(
+            "length(creator_consent_manifest_digest) = 64",
+            name="ck_private_comparison_invitations_creator_manifest_digest",
+        ),
+        CheckConstraint(
             "validity_days BETWEEN 1 AND 7",
             name="ck_private_comparison_invitations_validity_days",
         ),
@@ -1151,6 +1194,7 @@ class PrivateComparisonInvitation(Base):
         server_default=str(PRIVATE_COMPARISON_TOKEN_VERSION),
     )
     consent_version: Mapped[int] = mapped_column(Integer)
+    creator_consent_manifest_digest: Mapped[str] = mapped_column(String(64))
     validity_days: Mapped[int] = mapped_column(Integer, default=7, server_default="7")
     relationship_duration_days: Mapped[int] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -1193,6 +1237,20 @@ class PrivateComparison(Base):
             name="ck_private_comparisons_consent_version",
         ),
         CheckConstraint(
+            "creator_account_id IN (account_a_id, account_b_id)",
+            name="ck_private_comparisons_creator_participant",
+        ),
+        CheckConstraint(
+            "length(creator_consent_manifest_digest) = 64 "
+            "AND length(acceptor_consent_manifest_digest) = 64",
+            name="ck_private_comparisons_manifest_digests",
+        ),
+        CheckConstraint(
+            "account_a_eligibility_generation >= 1 "
+            "AND account_b_eligibility_generation >= 1",
+            name="ck_private_comparisons_eligibility_generations",
+        ),
+        CheckConstraint(
             f"duration_days BETWEEN 1 AND {PRIVATE_COMPARISON_MAX_DURATION_DAYS}",
             name="ck_private_comparisons_duration",
         ),
@@ -1211,8 +1269,9 @@ class PrivateComparison(Base):
         ),
         CheckConstraint(
             "(revoked_at IS NULL AND revoked_by_account_id IS NULL AND revoked_reason IS NULL) OR "
-            "(revoked_at IS NOT NULL AND revoked_by_account_id IS NOT NULL "
-            "AND revoked_reason IS NOT NULL)",
+            "(revoked_at IS NOT NULL AND revoked_reason IS NOT NULL AND "
+            "((revoked_reason = 'eligibility_changed' AND revoked_by_account_id IS NULL) OR "
+            "(revoked_reason <> 'eligibility_changed' AND revoked_by_account_id IS NOT NULL)))",
             name="ck_private_comparisons_revocation",
         ),
         CheckConstraint(
@@ -1239,10 +1298,17 @@ class PrivateComparison(Base):
     public_id: Mapped[str] = mapped_column(String(32))
     account_a_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"))
     account_b_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"))
+    creator_account_id: Mapped[str] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE")
+    )
     created_from_invitation_id: Mapped[str | None] = mapped_column(
         ForeignKey("private_comparison_invitations.id", ondelete="SET NULL")
     )
     consent_version: Mapped[int] = mapped_column(Integer)
+    creator_consent_manifest_digest: Mapped[str] = mapped_column(String(64))
+    acceptor_consent_manifest_digest: Mapped[str] = mapped_column(String(64))
+    account_a_eligibility_generation: Mapped[int] = mapped_column(Integer)
+    account_b_eligibility_generation: Mapped[int] = mapped_column(Integer)
     account_a_consented_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     account_b_consented_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     activated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
@@ -1540,3 +1606,12 @@ class LearningAttempt(Base):
     attempted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     account: Mapped[Account] = relationship(back_populates="learning_attempts")
+
+
+# Register only after every mapped class exists; the hooks import these models
+# lazily to avoid a database/model initialization cycle.
+from app.private_comparison_lifecycle import (  # noqa: E402
+    install_private_comparison_lifecycle_hooks,
+)
+
+install_private_comparison_lifecycle_hooks()

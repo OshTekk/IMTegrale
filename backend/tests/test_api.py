@@ -540,15 +540,33 @@ def test_share_token_sessions_are_bounded(client: TestClient, monkeypatch) -> No
         assert len(sessions) == 2
 
 
-def test_event_history_is_bounded(client: TestClient, monkeypatch) -> None:
+def test_event_history_is_bounded_per_visibility_class(
+    client: TestClient,
+    monkeypatch,
+) -> None:
     monkeypatch.setattr(ImtPassClient, "fetch_entries", fake_notes)
     monkeypatch.setattr("app.services.events.MAX_EVENTS_PER_ACCOUNT", 3)
     session = login_owner(client)
     with SessionLocal() as db:
         for index in range(5):
-            record_event(db, account_id=session["account"]["id"], kind=f"test:{index}")
+            record_event(
+                db,
+                account_id=session["account"]["id"],
+                kind=f"sync:test:{index}",
+            )
         db.commit()
         events = list(
-            db.scalars(select(Event).where(Event.account_id == session["account"]["id"]).order_by(Event.id))
+            db.scalars(
+                select(Event)
+                .where(
+                    Event.account_id == session["account"]["id"],
+                    Event.visibility_class == "shared",
+                )
+                .order_by(Event.id)
+            )
         )
-    assert [event.kind for event in events] == ["test:2", "test:3", "test:4"]
+    assert [event.kind for event in events] == [
+        "sync:test:2",
+        "sync:test:3",
+        "sync:test:4",
+    ]

@@ -1,4 +1,5 @@
 import { useId } from "react";
+import type { PrivateComparisonConsentManifestResponse } from "../../generated/api/types.gen";
 
 export interface PrivateComparisonConsentState {
   identity: boolean;
@@ -25,10 +26,12 @@ export function privateComparisonConsentComplete(
 }
 
 export function PrivateComparisonConsent({
+  manifest,
   value,
   onChange,
   legend = "Ton consentement",
 }: {
+  manifest: PrivateComparisonConsentManifestResponse;
   value: PrivateComparisonConsentState;
   onChange: (value: PrivateComparisonConsentState) => void;
   legend?: string;
@@ -37,15 +40,15 @@ export function PrivateComparisonConsent({
   const items = [
     {
       key: "identity" as const,
-      label: "J’accepte que mon identité officielle soit visible par l’étudiant qui acceptera ce lien.",
+      label: manifest.identity_disclosure.confirmation,
     },
     {
       key: "academic" as const,
-      label: "J’accepte de partager mon résumé académique et mes UE communes dans le périmètre indiqué.",
+      label: manifest.academic_scope_confirmation,
     },
     {
       key: "copyRisk" as const,
-      label: "Je comprends que l’autre participant pourra recopier ou capturer ce qu’il voit.",
+      label: manifest.copy_risk.confirmation,
     },
   ];
 

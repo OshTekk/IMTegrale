@@ -18,6 +18,7 @@ export function PrivateComparisonScope({
         <div>
           <h2>Un partage volontaire et limité</h2>
           <p>Les deux étudiants donnent leur accord et peuvent mettre fin à la comparaison.</p>
+          <p>{manifest.identity_disclosure.description}</p>
         </div>
       </header>
       <div className="private-comparison-scope-columns">
@@ -52,7 +53,7 @@ export function PrivateComparisonScope({
             {Object.entries(manifest.duration_and_revocation).map(([key, label]) => (
               <li key={key}>{label}</li>
             ))}
-            <li>{manifest.copy_risk}</li>
+            <li>{manifest.copy_risk.description}</li>
           </ul>
         </div>
       </div>

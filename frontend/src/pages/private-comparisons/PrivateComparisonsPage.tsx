@@ -6,6 +6,7 @@ import { Link } from "react-router-dom";
 import type {
   ActivePrivateComparisonListItem,
   PrivateComparisonInvitationResponse,
+  SuspendedPrivateComparisonListItem,
   TerminalPrivateComparisonHistoryItem,
 } from "../../generated/api/types.gen";
 import {
@@ -80,10 +81,12 @@ function ComparisonItem({
   comparison,
   onRevoke,
 }: {
-  comparison: ActivePrivateComparisonListItem | TerminalPrivateComparisonHistoryItem;
+  comparison:
+    ActivePrivateComparisonListItem | SuspendedPrivateComparisonListItem | TerminalPrivateComparisonHistoryItem;
   onRevoke?: (comparison: ActivePrivateComparisonListItem) => void;
 }) {
   const active = comparison.status === "active";
+  const suspended = comparison.status === "suspended";
   return (
     <article className="private-comparison-list-item">
       <div className="private-comparison-item-icon" aria-hidden="true">
@@ -91,7 +94,13 @@ function ComparisonItem({
       </div>
       <div className="private-comparison-item-copy">
         <div className="private-comparison-item-title">
-          <h3>{active ? comparison.other_participant.official_name : "Comparaison terminée"}</h3>
+          <h3>
+            {active
+              ? comparison.other_participant.official_name
+              : suspended
+                ? comparison.label
+                : "Comparaison terminée"}
+          </h3>
           <span className={`status-pill ${active ? "success" : "neutral"}`}>
             {privateComparisonStatusLabel(comparison.status)}
           </span>
@@ -100,6 +109,8 @@ function ComparisonItem({
           <p>
             Disponible jusqu’au {formatDate(comparison.expires_at, false)} · {freshnessLabel(comparison.freshness)}
           </p>
+        ) : suspended ? (
+          <p>Aucun résultat n’est affiché tant que les conditions de vérification ne sont pas réunies.</p>
         ) : (
           <p>
             {comparison.status === "revoked" ? "Révoquée" : "Expirée"} le {formatDate(comparison.ended_at, false)}
@@ -132,7 +143,9 @@ export function PrivateComparisonsPage() {
   const comparisons = usePrivateComparisons();
   const consentManifest = usePrivateComparisonConsentManifest();
   const usableConsentManifest =
-    consentManifest.data && usablePrivateComparisonConsentManifest(consentManifest.data) ? consentManifest.data : null;
+    consentManifest.data && usablePrivateComparisonConsentManifest(consentManifest.data, "creator")
+      ? consentManifest.data
+      : null;
   const [creationOpen, setCreationOpen] = useState(false);
   const [invitationToRevoke, setInvitationToRevoke] = useState<PrivateComparisonInvitationResponse | null>(null);
   const [comparisonToRevoke, setComparisonToRevoke] = useState<ActivePrivateComparisonListItem | null>(null);
@@ -148,7 +161,15 @@ export function PrivateComparisonsPage() {
   const comparisonHistory = useMemo(
     () =>
       comparisons.data?.comparisons.filter(
-        (value): value is TerminalPrivateComparisonHistoryItem => value.status !== "active",
+        (value): value is TerminalPrivateComparisonHistoryItem =>
+          value.status === "expired" || value.status === "revoked",
+      ) ?? [],
+    [comparisons.data?.comparisons],
+  );
+  const suspendedComparisons = useMemo(
+    () =>
+      comparisons.data?.comparisons.filter(
+        (value): value is SuspendedPrivateComparisonListItem => value.status === "suspended",
       ) ?? [],
     [comparisons.data?.comparisons],
   );
@@ -273,6 +294,26 @@ export function PrivateComparisonsPage() {
           />
         )}
       </section>
+
+      {suspendedComparisons.length > 0 && (
+        <section className="private-comparison-list-section" aria-labelledby="suspended-comparisons-title">
+          <header className="private-comparison-section-heading">
+            <CalendarClock size={22} aria-hidden="true" />
+            <div>
+              <h2 id="suspended-comparisons-title">Comparaisons suspendues</h2>
+              <p>
+                Aucune identité ni donnée académique de l’autre participant n’est affichée pendant cette
+                indisponibilité.
+              </p>
+            </div>
+          </header>
+          <div className="private-comparison-list">
+            {suspendedComparisons.map((comparison) => (
+              <ComparisonItem key={comparison.public_id} comparison={comparison} />
+            ))}
+          </div>
+        </section>
+      )}
 
       <section className="private-comparison-list-section" aria-labelledby="invitations-title">
         <header className="private-comparison-section-heading">

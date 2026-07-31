@@ -1155,6 +1155,35 @@
         "title": "AdminDurationMetricsResponse",
         "type": "object"
       },
+      "AdminEventIntegrityMetricsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "invalid_public_cursor": {
+            "title": "Invalid Public Cursor",
+            "type": "integer"
+          },
+          "missing_visibility_class": {
+            "title": "Missing Visibility Class",
+            "type": "integer"
+          },
+          "unknown_visibility_class": {
+            "title": "Unknown Visibility Class",
+            "type": "integer"
+          },
+          "visibility_partitions_over_limit": {
+            "title": "Visibility Partitions Over Limit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "missing_visibility_class",
+          "unknown_visibility_class",
+          "invalid_public_cursor",
+          "visibility_partitions_over_limit"
+        ],
+        "title": "AdminEventIntegrityMetricsResponse",
+        "type": "object"
+      },
       "AdminHttpRuntimeMetricsResponse": {
         "additionalProperties": false,
         "properties": {
@@ -1618,6 +1647,9 @@
           "calendar": {
             "$ref": "#/components/schemas/AdminCalendarOperationalMetricsResponse"
           },
+          "events": {
+            "$ref": "#/components/schemas/AdminEventIntegrityMetricsResponse"
+          },
           "generated_at": {
             "format": "date-time",
             "title": "Generated At",
@@ -1658,6 +1690,7 @@
           "workers",
           "pass",
           "calendar",
+          "events",
           "private_comparisons"
         ],
         "title": "AdminOperationsMetricsResponse",
@@ -8150,6 +8183,25 @@
         "title": "PrivateComparisonCommonUeResponse",
         "type": "object"
       },
+      "PrivateComparisonConsentDisclosureResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "confirmation": {
+            "title": "Confirmation",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          }
+        },
+        "required": [
+          "description",
+          "confirmation"
+        ],
+        "title": "PrivateComparisonConsentDisclosureResponse",
+        "type": "object"
+      },
       "PrivateComparisonConsentExclusionResponse": {
         "additionalProperties": false,
         "properties": {
@@ -8240,14 +8292,25 @@
       "PrivateComparisonConsentManifestResponse": {
         "additionalProperties": false,
         "properties": {
+          "academic_scope_confirmation": {
+            "title": "Academic Scope Confirmation",
+            "type": "string"
+          },
+          "actor_role": {
+            "enum": [
+              "creator",
+              "acceptor"
+            ],
+            "title": "Actor Role",
+            "type": "string"
+          },
           "consent_version": {
-            "const": 2,
+            "const": 3,
             "title": "Consent Version",
             "type": "integer"
           },
           "copy_risk": {
-            "title": "Copy Risk",
-            "type": "string"
+            "$ref": "#/components/schemas/PrivateComparisonConsentDisclosureResponse"
           },
           "duration_and_revocation": {
             "$ref": "#/components/schemas/PrivateComparisonConsentLifecycleResponse"
@@ -8259,19 +8322,31 @@
             "title": "Excluded Sections",
             "type": "array"
           },
+          "identity_disclosure": {
+            "$ref": "#/components/schemas/PrivateComparisonConsentDisclosureResponse"
+          },
           "included_sections": {
             "items": {
               "$ref": "#/components/schemas/PrivateComparisonConsentSectionResponse"
             },
             "title": "Included Sections",
             "type": "array"
+          },
+          "manifest_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Manifest Digest",
+            "type": "string"
           }
         },
         "required": [
           "consent_version",
+          "actor_role",
+          "manifest_digest",
+          "identity_disclosure",
           "included_sections",
           "excluded_sections",
           "duration_and_revocation",
+          "academic_scope_confirmation",
           "copy_risk"
         ],
         "title": "PrivateComparisonConsentManifestResponse",
@@ -8387,9 +8462,19 @@
             "title": "Acknowledge Identity Visibility",
             "type": "boolean"
           },
+          "actor_role": {
+            "const": "acceptor",
+            "title": "Actor Role",
+            "type": "string"
+          },
           "consent_version": {
             "title": "Consent Version",
             "type": "integer"
+          },
+          "manifest_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Manifest Digest",
+            "type": "string"
           },
           "token": {
             "format": "password",
@@ -8403,6 +8488,8 @@
         },
         "required": [
           "consent_version",
+          "actor_role",
+          "manifest_digest",
           "acknowledge_identity_visibility",
           "acknowledge_academic_scope",
           "acknowledge_copy_risk",
@@ -8429,6 +8516,11 @@
             "title": "Acknowledge Identity Visibility",
             "type": "boolean"
           },
+          "actor_role": {
+            "const": "creator",
+            "title": "Actor Role",
+            "type": "string"
+          },
           "consent_version": {
             "title": "Consent Version",
             "type": "integer"
@@ -8439,10 +8531,17 @@
             "minimum": 1.0,
             "title": "Duration Days",
             "type": "integer"
+          },
+          "manifest_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Manifest Digest",
+            "type": "string"
           }
         },
         "required": [
           "consent_version",
+          "actor_role",
+          "manifest_digest",
           "acknowledge_identity_visibility",
           "acknowledge_academic_scope",
           "acknowledge_copy_risk"
@@ -8618,13 +8717,17 @@
                 "mapping": {
                   "active": "#/components/schemas/ActivePrivateComparisonListItem",
                   "expired": "#/components/schemas/TerminalPrivateComparisonHistoryItem",
-                  "revoked": "#/components/schemas/TerminalPrivateComparisonHistoryItem"
+                  "revoked": "#/components/schemas/TerminalPrivateComparisonHistoryItem",
+                  "suspended": "#/components/schemas/SuspendedPrivateComparisonListItem"
                 },
                 "propertyName": "status"
               },
               "oneOf": [
                 {
                   "$ref": "#/components/schemas/ActivePrivateComparisonListItem"
+                },
+                {
+                  "$ref": "#/components/schemas/SuspendedPrivateComparisonListItem"
                 },
                 {
                   "$ref": "#/components/schemas/TerminalPrivateComparisonHistoryItem"
@@ -10332,6 +10435,32 @@
           "message"
         ],
         "title": "SimulationWarningResponse",
+        "type": "object"
+      },
+      "SuspendedPrivateComparisonListItem": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "const": "Comparaison temporairement indisponible",
+            "title": "Label",
+            "type": "string"
+          },
+          "public_id": {
+            "title": "Public Id",
+            "type": "string"
+          },
+          "status": {
+            "const": "suspended",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "public_id",
+          "status",
+          "label"
+        ],
+        "title": "SuspendedPrivateComparisonListItem",
         "type": "object"
       },
       "SyncCredentialEnrollRequest": {
@@ -20627,9 +20756,24 @@
         ]
       }
     },
-    "/api/v1/private-comparisons/consent-manifest": {
+    "/api/v1/private-comparisons/consent-manifest/{actor_role}": {
       "get": {
         "operationId": "private_comparisons_get_private_comparison_consent_manifest",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "actor_role",
+            "required": true,
+            "schema": {
+              "enum": [
+                "creator",
+                "acceptor"
+              ],
+              "title": "Actor Role",
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {

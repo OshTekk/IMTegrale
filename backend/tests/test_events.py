@@ -106,17 +106,24 @@ def test_sse_response_uses_private_no_store_security_headers() -> None:
 
 def test_event_visibility_keeps_existing_role_policy_and_adds_primary_assurance() -> None:
     primary = EventVisibilityContext(role="owner", primary_owner=True, include_simulations=True)
+    primary_report = EventVisibilityContext(
+        role="owner",
+        primary_owner=True,
+        include_simulations=False,
+    )
     delegated_owner = EventVisibilityContext(role="owner", primary_owner=False, include_simulations=False)
     delegated_viewer = EventVisibilityContext(role="viewer", primary_owner=False, include_simulations=False)
     delegated_editor = EventVisibilityContext(role="editor", primary_owner=False, include_simulations=False)
 
     assert event_is_visible("private_comparison:activated", primary) is True
+    assert event_is_visible("private_comparison:activated", primary_report) is True
     assert event_is_visible("private_comparison:activated", delegated_owner) is False
     assert event_is_visible("private_comparison:activated", delegated_viewer) is False
     assert event_is_visible("private_comparison:activated", delegated_editor) is False
     assert event_is_visible("token:created", delegated_owner) is True
     assert event_is_visible("token:created", delegated_viewer) is False
     assert event_is_visible("simulation:saved", delegated_owner) is False
+    assert event_is_visible("simulation:saved", primary_report) is False
     assert event_is_visible("note:new", delegated_viewer) is True
     assert event_is_visible("sync:completed", delegated_editor) is True
 

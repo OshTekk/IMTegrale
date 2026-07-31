@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 from app.imt_sync_credential_contract import (
     IMT_SYNC_CREDENTIAL_CONSENT_VERSION,
@@ -14,6 +14,7 @@ from app.imt_sync_credential_contract import (
 from app.private_comparison_contract import (
     PRIVATE_COMPARISON_CONSENT_VERSION,
     PRIVATE_COMPARISON_MAX_DURATION_DAYS,
+    valid_private_comparison_consent,
     valid_private_comparison_token,
 )
 from app.sync_modes import SyncMode
@@ -154,6 +155,8 @@ class PrivateComparisonConsentRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     consent_version: int
+    actor_role: Literal["creator", "acceptor"]
+    manifest_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     acknowledge_identity_visibility: Literal[True]
     acknowledge_academic_scope: Literal[True]
     acknowledge_copy_risk: Literal[True]
@@ -165,8 +168,19 @@ class PrivateComparisonConsentRequest(BaseModel):
             raise ValueError("Version de consentement non prise en charge")
         return value
 
+    @model_validator(mode="after")
+    def validate_manifest_binding(self) -> PrivateComparisonConsentRequest:
+        if not valid_private_comparison_consent(
+            actor_role=self.actor_role,
+            consent_version=self.consent_version,
+            manifest_digest=self.manifest_digest,
+        ):
+            raise ValueError("Manifeste de consentement non pris en charge")
+        return self
+
 
 class PrivateComparisonInvitationCreate(PrivateComparisonConsentRequest):
+    actor_role: Literal["creator"]
     duration_days: int = Field(default=30, ge=1, le=PRIVATE_COMPARISON_MAX_DURATION_DAYS)
 
 
@@ -191,6 +205,7 @@ class PrivateComparisonInvitationTokenRequest(BaseModel):
 
 
 class PrivateComparisonInvitationAccept(PrivateComparisonConsentRequest):
+    actor_role: Literal["acceptor"]
     token: SecretStr = Field(
         json_schema_extra={
             "writeOnly": True,

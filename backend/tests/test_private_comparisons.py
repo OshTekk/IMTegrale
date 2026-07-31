@@ -45,8 +45,20 @@ from sqlalchemy import func, select
 
 from .conftest import csrf_headers
 
+_CREATOR_MANIFEST = private_comparison_consent_manifest(actor_role="creator")
+_ACCEPTOR_MANIFEST = private_comparison_consent_manifest(actor_role="acceptor")
 CONSENT = {
-    "consent_version": PRIVATE_COMPARISON_CONSENT_VERSION,
+    "consent_version": _CREATOR_MANIFEST["consent_version"],
+    "actor_role": _CREATOR_MANIFEST["actor_role"],
+    "manifest_digest": _CREATOR_MANIFEST["manifest_digest"],
+    "acknowledge_identity_visibility": True,
+    "acknowledge_academic_scope": True,
+    "acknowledge_copy_risk": True,
+}
+ACCEPT_CONSENT = {
+    "consent_version": _ACCEPTOR_MANIFEST["consent_version"],
+    "actor_role": _ACCEPTOR_MANIFEST["actor_role"],
+    "manifest_digest": _ACCEPTOR_MANIFEST["manifest_digest"],
     "acknowledge_identity_visibility": True,
     "acknowledge_academic_scope": True,
     "acknowledge_copy_risk": True,
@@ -279,7 +291,7 @@ def _create_invitation(client: TestClient, *, duration_days: int = 30) -> dict:
 def _accept(client: TestClient, token: str) -> dict:
     response = client.post(
         "/api/v1/private-comparisons/invitations/accept",
-        json={**CONSENT, "token": token},
+        json={**ACCEPT_CONSENT, "token": token},
         headers=comparison_headers(client),
     )
     assert response.status_code == 201, response.text
@@ -354,7 +366,7 @@ def test_feature_flag_hides_surface_before_body_parsing() -> None:
         content=b"not-json-private-marker",
         headers={"Content-Type": "application/json"},
     )
-    manifest = client.get("/api/v1/private-comparisons/consent-manifest")
+    manifest = client.get("/api/v1/private-comparisons/consent-manifest/creator")
 
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "ROUTE_NOT_FOUND"
@@ -368,19 +380,21 @@ def test_feature_flag_hides_surface_before_body_parsing() -> None:
         assert db.scalar(select(func.count(PrivateComparison.id))) == 0
 
 
-def test_consent_manifest_v2_is_complete_private_and_read_only(
+def test_consent_manifest_v3_is_complete_private_and_read_only(
     comparisons_enabled,
 ) -> None:  # noqa: ANN001
     owner, _owner_id = _seed_owner("manifest-owner@example.test", "Ariane")
 
-    response = owner.get("/api/v1/private-comparisons/consent-manifest")
+    response = owner.get("/api/v1/private-comparisons/consent-manifest/creator")
 
     assert response.status_code == 200
     assert response.headers["Cache-Control"] == "private, no-store"
     assert response.headers["Vary"] == "Cookie"
     assert response.headers["X-Content-Type-Options"] == "nosniff"
     manifest = response.json()
-    assert manifest["consent_version"] == 2
+    assert manifest["consent_version"] == 3
+    assert manifest["actor_role"] == "creator"
+    assert len(manifest["manifest_digest"]) == 64
     included_paths = {
         field["response_path"] for section in manifest["included_sections"] for field in section["fields"]
     }
@@ -428,10 +442,10 @@ def test_consent_manifest_v2_is_complete_private_and_read_only(
         assert db.scalar(select(func.count(PrivateComparison.id))) == 0
 
 
-def test_only_consent_v2_can_create_an_invitation(comparisons_enabled) -> None:  # noqa: ANN001
+def test_only_consent_v3_can_create_an_invitation(comparisons_enabled) -> None:  # noqa: ANN001
     owner, _owner_id = _seed_owner("manifest-version@example.test", "Basile")
 
-    for unsupported_version in (1, 3):
+    for unsupported_version in (1, 2, 4):
         rejected = owner.post(
             "/api/v1/private-comparisons/invitations",
             json={**CONSENT, "consent_version": unsupported_version, "duration_days": 30},
@@ -440,17 +454,19 @@ def test_only_consent_v2_can_create_an_invitation(comparisons_enabled) -> None: 
         assert rejected.status_code == 422
     accepted = owner.post(
         "/api/v1/private-comparisons/invitations",
-        json={**CONSENT, "consent_version": 2, "duration_days": 30},
+        json={**CONSENT, "consent_version": 3, "duration_days": 30},
         headers=comparison_headers(owner),
     )
     assert accepted.status_code == 201
-    assert accepted.json()["consent_version"] == 2
+    assert accepted.json()["consent_version"] == 3
 
 
 def test_consent_manifest_covers_every_private_detail_response_field() -> None:
     declared_paths = {
         field["response_path"]
-        for section in private_comparison_consent_manifest()["included_sections"]
+        for section in private_comparison_consent_manifest(
+            actor_role="creator"
+        )["included_sections"]
         for field in section["fields"]
     }
     response_paths = {
@@ -486,7 +502,9 @@ def test_owner_flow_is_one_shot_private_and_limited_to_common_ues(
     created = _create_invitation(creator, duration_days=45)
     token = created["token"]
     assert token.startswith("pcinv1_")
-    assert created["consent_manifest"] == private_comparison_consent_manifest()
+    assert created["consent_manifest"] == private_comparison_consent_manifest(
+        actor_role="creator"
+    )
     with SessionLocal() as db:
         stored = db.scalar(
             select(PrivateComparisonInvitation).where(
@@ -509,13 +527,15 @@ def test_owner_flow_is_one_shot_private_and_limited_to_common_ues(
     )
     assert preview.status_code == 200
     assert preview.json()["creator"] == {"official_name": "Alice FIXTURE"}
-    assert preview.json()["consent_manifest"] == created["consent_manifest"]
+    assert preview.json()["consent_manifest"] == private_comparison_consent_manifest(
+        actor_role="acceptor"
+    )
     relation = _accept(recipient, token)
     assert relation["other_participant"] == {"official_name": "Alice FIXTURE"}
 
     replay = recipient.post(
         "/api/v1/private-comparisons/invitations/accept",
-        json={**CONSENT, "token": token},
+        json={**ACCEPT_CONSENT, "token": token},
         headers=comparison_headers(recipient),
     )
     assert replay.status_code == 404
@@ -551,7 +571,7 @@ def test_owner_flow_is_one_shot_private_and_limited_to_common_ues(
         private_events = list(db.scalars(select(Event).where(Event.kind.startswith("private_comparison:"))))
         rendered_events = " ".join(str(event.payload) for event in private_events)
         for event in private_events:
-            assert set(event.payload) <= {"consent_version"}
+            assert set(event.payload) <= {"consent_version", "public_id"}
             if "consent_version" in event.payload:
                 assert event.payload["consent_version"] == PRIVATE_COMPARISON_CONSENT_VERSION
     assert token not in rendered_events
@@ -696,7 +716,7 @@ def test_delegated_sessions_cannot_use_any_private_comparison_surface(
     action_headers = comparison_headers(delegated)
 
     responses = [
-        delegated.get("/api/v1/private-comparisons/consent-manifest"),
+        delegated.get("/api/v1/private-comparisons/consent-manifest/creator"),
         delegated.get("/api/v1/private-comparisons/invitations"),
         delegated.post(
             "/api/v1/private-comparisons/invitations/preview",
@@ -705,7 +725,7 @@ def test_delegated_sessions_cannot_use_any_private_comparison_surface(
         ),
         delegated.post(
             "/api/v1/private-comparisons/invitations/accept",
-            json={**CONSENT, "token": pending["token"]},
+            json={**ACCEPT_CONSENT, "token": pending["token"]},
             headers=action_headers,
         ),
         delegated.post(
@@ -845,7 +865,7 @@ def test_every_sensitive_comparison_operation_requires_the_binding(
         ),
         recipient.post(
             "/api/v1/private-comparisons/invitations/accept",
-            json={**CONSENT, "token": accept_invitation["token"]},
+            json={**ACCEPT_CONSENT, "token": accept_invitation["token"]},
             headers=csrf_headers(recipient),
         ),
         recipient.post(
@@ -999,7 +1019,7 @@ def test_invalid_expired_revoked_and_self_invitations_are_generic(
 
     invalid = recipient.post(
         "/api/v1/private-comparisons/invitations/accept",
-        json={**CONSENT, "token": "pcinv1_" + "a" * 43},
+        json={**ACCEPT_CONSENT, "token": "pcinv1_" + "a" * 43},
         headers=comparison_headers(recipient),
     )
     assert invalid.status_code == 404
@@ -1007,7 +1027,7 @@ def test_invalid_expired_revoked_and_self_invitations_are_generic(
     assert (
         creator.post(
             "/api/v1/private-comparisons/invitations/accept",
-            json={**CONSENT, "token": self_invitation["token"]},
+            json={**ACCEPT_CONSENT, "token": self_invitation["token"]},
             headers=comparison_headers(creator),
         ).status_code
         == 404
@@ -1026,7 +1046,7 @@ def test_invalid_expired_revoked_and_self_invitations_are_generic(
     assert (
         recipient.post(
             "/api/v1/private-comparisons/invitations/accept",
-            json={**CONSENT, "token": expired["token"]},
+            json={**ACCEPT_CONSENT, "token": expired["token"]},
             headers=comparison_headers(recipient),
         ).status_code
         == 404
@@ -1042,7 +1062,7 @@ def test_invalid_expired_revoked_and_self_invitations_are_generic(
     assert (
         recipient.post(
             "/api/v1/private-comparisons/invitations/accept",
-            json={**CONSENT, "token": revoked["token"]},
+            json={**ACCEPT_CONSENT, "token": revoked["token"]},
             headers=comparison_headers(recipient),
         ).status_code
         == 404
@@ -1071,7 +1091,7 @@ def test_incompatible_academic_profiles_fail_without_revealing_which_condition(
     token = _create_invitation(creator)["token"]
     response = recipient.post(
         "/api/v1/private-comparisons/invitations/accept",
-        json={**CONSENT, "token": token},
+        json={**ACCEPT_CONSENT, "token": token},
         headers=comparison_headers(recipient),
     )
     assert response.status_code == 409
@@ -1260,7 +1280,7 @@ def test_stale_invitation_cannot_reactivate_revoked_relation(
 
     response = recipient.post(
         "/api/v1/private-comparisons/invitations/accept",
-        json={**CONSENT, "token": stale_invitation["token"]},
+        json={**ACCEPT_CONSENT, "token": stale_invitation["token"]},
         headers=comparison_headers(recipient),
     )
 
@@ -1299,7 +1319,7 @@ def test_active_pair_probe_does_not_preserve_stale_invitation_for_reactivation(
 
     probe = recipient.post(
         "/api/v1/private-comparisons/invitations/accept",
-        json={**CONSENT, "token": stale_invitation["token"]},
+        json={**ACCEPT_CONSENT, "token": stale_invitation["token"]},
         headers=comparison_headers(recipient),
     )
     assert probe.status_code == 404
@@ -1314,7 +1334,7 @@ def test_active_pair_probe_does_not_preserve_stale_invitation_for_reactivation(
 
     replay = recipient.post(
         "/api/v1/private-comparisons/invitations/accept",
-        json={**CONSENT, "token": stale_invitation["token"]},
+        json={**ACCEPT_CONSENT, "token": stale_invitation["token"]},
         headers=comparison_headers(recipient),
     )
 
@@ -1361,7 +1381,7 @@ def test_pre_expiry_invitation_cannot_reactivate_expired_relation(
 
     replay = recipient.post(
         "/api/v1/private-comparisons/invitations/accept",
-        json={**CONSENT, "token": stale_invitation["token"]},
+        json={**ACCEPT_CONSENT, "token": stale_invitation["token"]},
         headers=comparison_headers(recipient),
     )
 
@@ -1410,7 +1430,7 @@ def test_invitation_at_terminal_boundary_is_rejected(
 
     replay = recipient.post(
         "/api/v1/private-comparisons/invitations/accept",
-        json={**CONSENT, "token": stale_invitation["token"]},
+        json={**ACCEPT_CONSENT, "token": stale_invitation["token"]},
         headers=comparison_headers(recipient),
     )
 
@@ -1605,7 +1625,7 @@ def test_invalid_token_is_not_echoed_in_response_or_logs(
 
     response = recipient.post(
         "/api/v1/private-comparisons/invitations/accept",
-        json={**CONSENT, "token": synthetic_token},
+        json={**ACCEPT_CONSENT, "token": synthetic_token},
         headers=comparison_headers(recipient),
     )
 
@@ -1625,6 +1645,7 @@ def test_operations_alert_when_private_data_exists_while_flag_is_disabled() -> N
                 token_digest="o" * 64,
                 token_version=1,
                 consent_version=PRIVATE_COMPARISON_CONSENT_VERSION,
+                creator_consent_manifest_digest=_CREATOR_MANIFEST["manifest_digest"],
                 validity_days=7,
                 relationship_duration_days=30,
                 created_at=now,

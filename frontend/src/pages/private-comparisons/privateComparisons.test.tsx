@@ -40,9 +40,17 @@ const TOKEN = `pcinv1_${"A".repeat(43)}`;
 const RELATION_ID = `pc_${"b".repeat(24)}`;
 const INVITATION_ID = `pci_${"c".repeat(24)}`;
 const OTHER_RELATION_ID = `pc_${"d".repeat(24)}`;
+const SUSPENDED_RELATION_ID = `pc_${"h".repeat(24)}`;
+const SUSPENDED_PEER_SENTINEL = "Identité suspendue à ne jamais afficher";
 
 const consentManifest: PrivateComparisonConsentManifestResponse = {
-  consent_version: 2,
+  consent_version: 3,
+  actor_role: "creator",
+  manifest_digest: "a".repeat(64),
+  identity_disclosure: {
+    description: "Ton identité officielle est visible par l’étudiant qui ouvre le lien.",
+    confirmation: "J’accepte que mon identité officielle soit visible avant l’acceptation.",
+  },
   included_sections: [
     {
       key: "official_identity",
@@ -123,7 +131,21 @@ const consentManifest: PrivateComparisonConsentManifestResponse = {
     minimal_history: "L’historique conserve seulement le statut et les dates, sans résultat académique.",
     private_only: "La comparaison reste privée aux deux participants.",
   },
-  copy_risk: "L’autre participant peut recopier ou capturer les informations visibles avant une révocation.",
+  academic_scope_confirmation: "J’accepte le partage réciproque du périmètre académique décrit.",
+  copy_risk: {
+    description: "L’autre participant peut recopier ou capturer les informations visibles avant une révocation.",
+    confirmation: "Je comprends que les copies déjà réalisées ne sont pas effacées par une révocation.",
+  },
+};
+
+const acceptorConsentManifest: PrivateComparisonConsentManifestResponse = {
+  ...consentManifest,
+  actor_role: "acceptor",
+  manifest_digest: "b".repeat(64),
+  identity_disclosure: {
+    description: "Ton identité officielle sera affichée au créateur après acceptation.",
+    confirmation: "J’accepte que mon identité officielle soit affichée au créateur.",
+  },
 };
 
 const ownerSession: Session = {
@@ -158,7 +180,7 @@ const invitationCreated: PrivateComparisonInvitationCreatedResponse = {
   public_id: INVITATION_ID,
   token: TOKEN,
   session_scope: ownerSession.session_scope!,
-  consent_version: 2,
+  consent_version: 3,
   expires_at: "2099-08-05T12:00:00Z",
   relationship_duration_days: 30,
   consent_manifest: consentManifest,
@@ -168,8 +190,8 @@ const invitationPreview: PrivateComparisonInvitationPreviewResponse = {
   creator: { official_name: "Camille Exemple" },
   expires_at: "2099-08-05T12:00:00Z",
   relationship_duration_days: 30,
-  consent_version: 2,
-  consent_manifest: consentManifest,
+  consent_version: 3,
+  consent_manifest: acceptorConsentManifest,
 };
 
 const relations: PrivateComparisonListResponse = {
@@ -187,6 +209,15 @@ const relations: PrivateComparisonListResponse = {
       public_id: OTHER_RELATION_ID,
       status: "revoked",
       ended_at: "2099-06-20T12:00:00Z",
+    },
+    {
+      public_id: SUSPENDED_RELATION_ID,
+      status: "suspended",
+      label: "Comparaison temporairement indisponible",
+      ...({
+        other_participant: { official_name: SUSPENDED_PEER_SENTINEL },
+        result: "Résultat suspendu à ne jamais afficher",
+      } as Record<string, unknown>),
     },
   ],
 };
@@ -227,7 +258,7 @@ const invitations: PrivateComparisonInvitationListResponse = {
 const detail: PrivateComparisonDetailResponse = {
   public_id: RELATION_ID,
   status: "active",
-  consent_version: 2,
+  consent_version: 3,
   activated_at: "2099-07-29T12:00:00Z",
   expires_at: "2099-08-28T12:00:00Z",
   calculated_at: "2099-07-29T12:30:00Z",
@@ -357,7 +388,7 @@ function renderRoute(element: ReactNode, initialEntry: string, client = testClie
 
 function installEmptyPrivateComparisonLists() {
   apiMockServer.use(
-    http.get("*/api/v1/private-comparisons/consent-manifest", () => HttpResponse.json(consentManifest)),
+    http.get("*/api/v1/private-comparisons/consent-manifest/creator", () => HttpResponse.json(consentManifest)),
     http.get("*/api/v1/private-comparisons", () => HttpResponse.json({ comparisons: [] })),
     http.get("*/api/v1/private-comparisons/invitations", () => HttpResponse.json({ invitations: [] })),
   );
@@ -429,9 +460,60 @@ describe("présentation et validation locales", () => {
 });
 
 describe("invitation one-shot", () => {
+  it("ignore un manifeste arrivé après un changement de portée de session", async () => {
+    let manifestCalls = 0;
+    let firstRequestStarted = false;
+    let releaseFirstResponse: (() => void) | undefined;
+    const firstResponseGate = new Promise<void>((resolve) => {
+      releaseFirstResponse = resolve;
+    });
+    const renewedManifest: PrivateComparisonConsentManifestResponse = {
+      ...consentManifest,
+      manifest_digest: "d".repeat(64),
+      identity_disclosure: {
+        description: "Description liée uniquement à la portée renouvelée.",
+        confirmation: "Je confirme la portée renouvelée.",
+      },
+    };
+    apiMockServer.use(
+      http.get("*/api/v1/private-comparisons/consent-manifest/creator", async () => {
+        manifestCalls += 1;
+        if (manifestCalls === 1) {
+          firstRequestStarted = true;
+          await firstResponseGate;
+          return HttpResponse.json(consentManifest);
+        }
+        return HttpResponse.json(renewedManifest);
+      }),
+      http.get("*/api/v1/private-comparisons", () => HttpResponse.json({ comparisons: [] })),
+      http.get("*/api/v1/private-comparisons/invitations", () => HttpResponse.json({ invitations: [] })),
+    );
+    const client = testClient();
+    render(
+      <Providers client={client}>
+        <MemoryRouter>
+          <PrivateComparisonsPage />
+        </MemoryRouter>
+      </Providers>,
+    );
+    await waitFor(() => expect(firstRequestStarted).toBe(true));
+
+    act(() =>
+      installTestSession(client, {
+        ...ownerSession,
+        session_scope: `bss1_${"9".repeat(64)}`,
+      }),
+    );
+
+    expect(await screen.findByText(renewedManifest.identity_disclosure.description)).toBeTruthy();
+    expect(manifestCalls).toBe(2);
+    act(() => releaseFirstResponse?.());
+    await waitFor(() => expect(screen.queryByText(consentManifest.identity_disclosure.description)).toBeNull());
+  });
+
   it("efface le bearer avant de rendre un remplacement direct de compte", async () => {
     apiMockServer.use(
-      http.get("*/api/v1/private-comparisons/consent-manifest", () => HttpResponse.json(consentManifest)),
+      http.get("*/api/v1/private-comparisons/consent-manifest/creator", () => HttpResponse.json(consentManifest)),
       http.get("*/api/v1/private-comparisons", () => HttpResponse.json({ comparisons: [] })),
       http.get("*/api/v1/private-comparisons/invitations", () => HttpResponse.json({ invitations: [] })),
       http.post("*/api/v1/private-comparisons/invitations", () =>
@@ -704,6 +786,9 @@ describe("invitation one-shot", () => {
     const user = userEvent.setup();
     const clipboardWrite = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
     const dialog = screen.getByRole("dialog", { name: "Créer une invitation" });
+    expect(within(dialog).getByText(consentManifest.identity_disclosure.description)).toBeTruthy();
+    expect(within(dialog).getByText(consentManifest.identity_disclosure.confirmation)).toBeTruthy();
+    expect(within(dialog).queryByText(acceptorConsentManifest.identity_disclosure.confirmation)).toBeNull();
     for (const label of [
       "Répartition des grades",
       "ECTS obtenus",
@@ -727,7 +812,9 @@ describe("invitation one-shot", () => {
     const link = await screen.findByLabelText("Lien d’invitation");
     expect((link as HTMLInputElement).value).toBe(`${window.location.origin}/comparisons/accept#invite=${TOKEN}`);
     expect(requestBody).toEqual({
-      consent_version: 2,
+      consent_version: 3,
+      actor_role: "creator",
+      manifest_digest: consentManifest.manifest_digest,
       acknowledge_identity_visibility: true,
       acknowledge_academic_scope: true,
       acknowledge_copy_risk: true,
@@ -865,7 +952,7 @@ describe("invitation one-shot", () => {
           ...invitationCreated,
           consent_manifest: {
             ...consentManifest,
-            consent_version: 3,
+            consent_version: 2,
           },
         }),
       ),
@@ -884,6 +971,40 @@ describe("invitation one-shot", () => {
     );
     const user = userEvent.setup();
     for (const checkbox of screen.getAllByRole("checkbox")) await user.click(checkbox);
+    await user.click(screen.getByRole("button", { name: "Créer le lien" }));
+
+    expect(await screen.findByText("Impossible de créer l’invitation pour le moment.")).toBeTruthy();
+    expect(screen.queryByLabelText("Lien d’invitation")).toBeNull();
+  });
+
+  it("refuse une réponse one-shot dont le digest diffère du manifeste présenté", async () => {
+    apiMockServer.use(
+      http.post("*/api/v1/private-comparisons/invitations", () =>
+        HttpResponse.json({
+          ...invitationCreated,
+          consent_manifest: {
+            ...consentManifest,
+            manifest_digest: "c".repeat(64),
+          },
+        }),
+      ),
+    );
+    render(
+      <Providers client={testClient()}>
+        <PrivateComparisonInvitationModal
+          open
+          onClose={() => undefined}
+          onCreated={() => undefined}
+          manifest={consentManifest}
+          manifestPending={false}
+          sessionScope={primarySessionScope(ownerSession)}
+        />
+      </Providers>,
+    );
+    const user = userEvent.setup();
+    for (const checkbox of screen.getAllByRole("checkbox")) {
+      await user.click(checkbox);
+    }
     await user.click(screen.getByRole("button", { name: "Créer le lien" }));
 
     expect(await screen.findByText("Impossible de créer l’invitation pour le moment.")).toBeTruthy();
@@ -917,6 +1038,9 @@ describe("acceptation depuis le fragment", () => {
     expect(new URL(previewUrl).hash).toBe("");
     expect(window.location.hash).toBe("");
     expect(screen.queryByText("15,2 / 20")).toBeNull();
+    expect(screen.getByText(acceptorConsentManifest.identity_disclosure.description)).toBeTruthy();
+    expect(screen.getByText(acceptorConsentManifest.identity_disclosure.confirmation)).toBeTruthy();
+    expect(screen.queryByText(consentManifest.identity_disclosure.confirmation)).toBeNull();
     for (const label of [
       "Répartition des grades",
       "ECTS obtenus",
@@ -936,7 +1060,9 @@ describe("acceptation depuis le fragment", () => {
     expect(await screen.findByTestId("comparison-detail-destination")).toBeTruthy();
     expect(acceptBody).toEqual({
       token: TOKEN,
-      consent_version: 2,
+      consent_version: 3,
+      actor_role: "acceptor",
+      manifest_digest: acceptorConsentManifest.manifest_digest,
       acknowledge_identity_visibility: true,
       acknowledge_academic_scope: true,
       acknowledge_copy_risk: true,
@@ -949,7 +1075,7 @@ describe("acceptation depuis le fragment", () => {
     apiMockServer.use(
       http.post("*/api/v1/private-comparisons/invitations/preview", () => {
         const { consent_manifest: omittedManifest, ...response } = invitationPreview;
-        expect(omittedManifest).toBe(consentManifest);
+        expect(omittedManifest).toBe(acceptorConsentManifest);
         return HttpResponse.json(response);
       }),
     );
@@ -958,6 +1084,25 @@ describe("acceptation depuis le fragment", () => {
     renderRoute(<PrivateComparisonAcceptPage />, "/comparisons/accept");
 
     expect(await screen.findByText("Cette invitation n’est plus disponible")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Accepter la comparaison" })).toBeNull();
+    expect(document.body.textContent).not.toContain(TOKEN);
+  });
+
+  it("rejette un manifeste créateur présenté à l’accepteur", async () => {
+    apiMockServer.use(
+      http.post("*/api/v1/private-comparisons/invitations/preview", () =>
+        HttpResponse.json({
+          ...invitationPreview,
+          consent_manifest: consentManifest,
+        }),
+      ),
+    );
+    window.history.replaceState(null, "", `/comparisons/accept#invite=${TOKEN}`);
+
+    renderRoute(<PrivateComparisonAcceptPage />, "/comparisons/accept");
+
+    expect(await screen.findByText("Cette invitation n’est plus disponible")).toBeTruthy();
+    expect(screen.queryByText(consentManifest.identity_disclosure.confirmation)).toBeNull();
     expect(screen.queryByRole("button", { name: "Accepter la comparaison" })).toBeNull();
     expect(document.body.textContent).not.toContain(TOKEN);
   });
@@ -1109,7 +1254,7 @@ describe("listes et révocation", () => {
   it("sépare les relations actives, l’historique et tous les statuts d’invitation", async () => {
     let deletedInvitation = 0;
     apiMockServer.use(
-      http.get("*/api/v1/private-comparisons/consent-manifest", () => HttpResponse.json(consentManifest)),
+      http.get("*/api/v1/private-comparisons/consent-manifest/creator", () => HttpResponse.json(consentManifest)),
       http.get("*/api/v1/private-comparisons", () => HttpResponse.json(relations)),
       http.get("*/api/v1/private-comparisons/invitations", () => HttpResponse.json(invitations)),
       http.delete(`*/api/v1/private-comparisons/invitations/${INVITATION_ID}`, () => {
@@ -1128,6 +1273,18 @@ describe("listes et révocation", () => {
     expect(await screen.findByText("Camille Exemple")).toBeTruthy();
     expect(screen.getByText("Comparaison terminée")).toBeTruthy();
     expect(screen.queryByText("Morgan Exemple")).toBeNull();
+    const suspendedSection = screen.getByRole("heading", { name: "Comparaisons suspendues" }).closest("section")!;
+    expect(within(suspendedSection).getByText("Comparaison temporairement indisponible")).toBeTruthy();
+    expect(within(suspendedSection).getByText("Suspendue")).toBeTruthy();
+    expect(
+      within(suspendedSection).getByText(
+        "Aucun résultat n’est affiché tant que les conditions de vérification ne sont pas réunies.",
+      ),
+    ).toBeTruthy();
+    expect(within(suspendedSection).queryByRole("link")).toBeNull();
+    expect(within(suspendedSection).queryByRole("button")).toBeNull();
+    expect(document.body.textContent).not.toContain(SUSPENDED_PEER_SENTINEL);
+    expect(document.body.textContent).not.toContain("Résultat suspendu à ne jamais afficher");
     expect(screen.getByText(/Révoquée le/)).toBeTruthy();
     expect(
       screen.getByText(

@@ -1,6 +1,6 @@
 # Modèle de menace — Comparaisons privées V1
 
-État : juillet 2026, backend Lot A, frontend Lot B et remédiation C6A non
+État : juillet 2026, backend Lot A, frontend Lot B et remédiations C6A/C6B non
 publiés, migration non déployée et feature flag fermé. Ce document complète le
 [modèle général](threat-model.md) sans modifier le consentement ni les
 autorisations du leaderboard.
@@ -11,12 +11,13 @@ autorisations du leaderboard.
 | ------------------------- | ------------------------------------------------------------------ |
 | Secret d'invitation       | 256 bits, retourné une fois, jamais stocké ou journalisé           |
 | Digest d'invitation       | HMAC avec séparation de domaine, jamais exposé par l'API           |
-| Consentements             | Bilatéraux, versionnés, explicites et liés à une durée             |
-| Manifeste de consentement | Canonique, exhaustif et identique pour les deux participants       |
-| Relation                  | Limitée à deux comptes distincts, révocable et expirante           |
+| Consentements             | Bilatéraux, V3, actor-specific, liés au digest exact et à une durée |
+| Manifeste de consentement | Canonique par rôle ; périmètre commun, direction d'identité exacte |
+| Génération d'éligibilité  | Monotone, transactionnelle, capturée pour chaque participant       |
+| Relation                  | Deux comptes, quatre états explicites, terminaison irréversible     |
 | Résultats académiques     | Calculés à la demande, jamais copiés dans les nouvelles tables     |
 | Identité officielle       | Visible uniquement aux deux participants actifs                    |
-| Événements et métriques   | Métadonnées minimales, aucun résultat, token ou paire identifiable |
+| Événements et métriques   | Classe immuable, rétention isolée, aucun résultat, token ou paire  |
 | Autorité navigateur       | Document-scoped, monotone, writer unique de la session              |
 | Binding de mutation       | Opaque, lié à la WebSession fraîche, jamais une authentification    |
 
@@ -69,17 +70,21 @@ session fraîche.
 | Accès direct par `public_id` / IDOR                  | Lecture d'une autre paire                               | ID opaque et filtre participant côté serveur ; erreur identique absent/non autorisé                                                                  | Bug futur si une route omet le filtre                                             |
 | Révocation pendant une lecture                       | Réponse après retrait                                   | Verrou partagé de la relation pendant le calcul ; révocation exclusive ; aucune lecture commencée après commit                                       | Une réponse déjà reçue ne peut pas être rappelée                                  |
 | Expiration pendant une lecture                       | Données après échéance                                  | Vérification sous verrou au début ; expiration à chaque nouvelle lecture                                                                             | Une réponse commencée juste avant l'échéance peut finir                           |
-| Compte désactivé ou supprimé                         | Accès persistant                                        | Auth refuse le compte désactivé ; paire revalidée ; FK cascade à la suppression                                                                      | Les copies réalisées avant suppression subsistent chez l'autre participant        |
-| Changement de cursus/promotion                       | Ancienne relation devenue incompatible                  | Éligibilité revalidée à chaque détail et statut non actif dans la liste                                                                              | Fenêtre jusqu'à la mise à jour locale des attributs officiels                     |
+| Compte désactivé ou supprimé                         | Accès persistant                                        | Génération avancée et relation terminalisée ; suppression sous verrous canoniques, puis cascade avec seul événement minimal conservé chez le pair      | Les copies réalisées avant suppression subsistent chez l'autre participant        |
+| Changement de cursus, promotion, identité ou source  | Réactivation d'un ancien consentement                    | Génération monotone par compte, valeurs capturées à l'activation, mismatch persisté en `eligibility_changed`, nouvel aller-retour = nouvelle génération | Fenêtre jusqu'à la mise à jour locale des attributs officiels                     |
+| Indisponibilité technique temporaire                 | Fausse révocation ou fuite de la cause                   | État `suspended` distinct, réponse minimale sans identité/résultat/cause ; reprise seulement si générations et consentements sont inchangés            | Le participant apprend seulement qu'une lecture est temporairement indisponible   |
 | Ancien lien après révocation                         | Réactivation involontaire                               | Consentement créateur strictement postérieur à la borne terminale sous verrou ; invitation obsolète terminalisée ; nouveau `public_id`               | Restauration d'une sauvegarde exige une procédure de révocation                   |
 | Relation existante et nouvelle invitation            | Relations parallèles                                    | Une paire canonique unique ; invitation obsolète terminalisée ; seule une invitation postérieure au cycle peut réactiver                             | Une invitation transférée reste une capacité jusqu'à son usage ou sa terminaison  |
 | Fuite dans événements/métriques                      | Données académiques secondaires                         | Événements sans score, UE, token, digest ou autre compte ; métriques agrégées                                                                        | Un volume très faible peut révéler une utilisation générale à l'opérateur         |
-| Token `owner` observant les événements privés        | Déduction d'une invitation ou relation                  | Préfixe `private_comparison:` réservé au propriétaire primaire ; politique unique appliquée aux requêtes dashboard/SSE, au dernier ID visible et au rendu | L'opérateur conserve les seuls agrégats opérationnels explicitement autorisés     |
+| Token `owner` observant les événements privés        | Déduction d'une invitation ou relation                  | `private_comparison:` classé `primary_owner`; filtre SQL commun au dashboard/polling/SSE, au dernier curseur visible et au rendu                      | L'opérateur conserve les seuls agrégats opérationnels explicitement autorisés     |
+| Événement privé évinçant une ancre visible           | Oracle de volume par curseur, pagination ou reconnexion | Quota indépendant par `(account_id, visibility_class)`, verrou compte avant pruning, suppression bornée à la classe de l'événement                    | Une activité visible peut normalement expirer une ancre de sa propre classe       |
+| Type d'événement futur non classé                    | Divulgation accidentelle à un rôle trop large           | Classification centrale exhaustive ; write runtime refusé ; backfill historique inconnu vers `primary_owner`; classe immuable ORM et base             | Tout nouveau préfixe exige une décision explicite et des tests                    |
 | Fuite dans traces SQL                                | Secret ou résultat                                      | Paramètres liés ; aucun token brut en base ; logs SQL désactivés en production                                                                       | Un opérateur activant un tracing de bodies pourrait violer la politique           |
 | Cache navigateur/proxy                               | Réponse servie après révocation                         | `private, no-store`, `Pragma: no-cache`, `Vary: Cookie`, aucun service worker                                                                        | Le navigateur peut garder une page déjà affichée en mémoire                       |
 | Cache React après révocation ou changement de compte | Affichage croisé devenu non autorisé                    | QueryClient par époque, lease explicite, blocage synchrone, observer désactivé avant purge, `gcTime=0`, signal terminal aux deux participants          | Une donnée déjà lue reste mémorisable par le participant                          |
 | Ordres de verrous divergents                         | Deadlock ou écriture partielle                           | Plan total `WebSession → comptes triés → invitation → relation`, y compris transitions de compte et tests PostgreSQL concurrents                     | Attente bornée possible sous contention légitime                                 |
-| Copy de consentement incomplète                      | Divulgation non comprise par un participant             | Manifeste V2 backend unique, champs inclus et catégories exclues explicites, création et acceptation bloquées si le manifeste manque ou diverge      | Un participant peut ne pas lire intégralement un texte pourtant accessible        |
+| Copy de consentement dans le mauvais sens            | Divulgation non comprise par un participant             | Manifestes V3 backend distincts `creator`/`acceptor`, direction et moment explicites, frontend sans copy parallèle, tests DOM/labels par rôle          | Un participant peut ne pas lire intégralement un texte pourtant accessible        |
+| Manifeste affiché différent du consentement stocké   | Preuve de consentement ambiguë                           | SHA-256 JSON canonique lié à la version, au rôle et à tous les textes ; comparaison constant-time ; deux digests et compte créateur persistés          | Une revue humaine reste nécessaire pour juger la clarté du texte                  |
 | Nouveau champ sans nouveau consentement              | Extension silencieuse du périmètre                      | Test structurel entre le modèle de détail et les chemins du manifeste ; changement de périmètre soumis à une nouvelle version de consentement        | Une revue humaine reste nécessaire pour vérifier la qualité de la formulation     |
 | Token dans trace, vidéo ou capture                   | Secret durable dans un artefact de test                 | Fixtures synthétiques aléatoires, trace/vidéo/capture désactivées pour les flux E2E one-shot                                                         | Une capture manuelle explicite du lien reste hors contrôle du produit             |
 | Capture volontaire                                   | Diffusion hors produit                                  | Copy de consentement explicite et périmètre minimal                                                                                                  | Impossible à empêcher : un participant autorisé peut recopier ou capturer l'écran |
@@ -112,11 +117,13 @@ commit concurrent n'est jamais une preuve d'autorisation.
 Scénarios testés : double acceptation du même secret, invitations obsolète et
 fraîche concurrentes, deux invitations fraîches concurrentes, acceptation et
 révocation simultanées, liste/détail contre révocation, session révoquée contre
-acceptation, compte désactivé, ordre inverse artificiel, rollback, révocation
-immédiate, lecture tierce, relation expirée, invitation
-révoquée/expirée/consommée, auto-invitation, suppression en cascade et
-changement de promotion. PostgreSQL vérifie les vrais verrous, timeouts et
-contraintes ; SQLite vérifie migration et invariants de schéma.
+acceptation, changement sémantique contre acceptation, deux changements
+sémantiques simultanés sans lost update, compte désactivé, ordre inverse
+artificiel, rollback, révocation immédiate, lecture tierce, relation expirée,
+invitation révoquée/expirée/consommée, trois cycles, suspension/récupération,
+suppression en cascade et pruning concurrent par classe. PostgreSQL vérifie les
+vrais verrous, triggers, timeouts et contraintes ; SQLite vérifie migration et
+invariants de schéma.
 
 ## Données autorisées et minimisation
 
@@ -132,12 +139,13 @@ données du leaderboard sont absents du contrat V1. Une ambiguïté de code
 officiel du même côté retire l'UE de l'intersection au lieu d'effectuer un
 rapprochement flou.
 
-Le manifeste de consentement V2 décrit chaque champ sérialisable du détail et
-les catégories explicitement exclues. Il est construit une seule fois dans le
-contrat backend, exposé par une route `no-store`, repris à l'identique dans la
-création et la preview, puis rendu dynamiquement dans les deux parcours. La
-version V1 est refusée par Pydantic, le service et les contraintes de la
-migration `0029`.
+Les deux manifestes de consentement V3 décrivent chaque champ sérialisable du
+détail et les catégories explicitement exclues. Ils sont construits dans le
+contrat backend, exposés par une route `no-store` actor-specific, puis rendus
+dynamiquement dans le parcours correspondant. Leur SHA-256 canonique est soumis
+avec la mutation et conservé comme preuve minimale. Les versions 1, 2 et futures
+sont refusées par Pydantic, le service et les contraintes de la migration
+`0029`.
 
 Le client n'utilise la capacité de session que pour la visibilité et le
 routage. Une route masquée n'est jamais considérée comme autorisée : chaque
@@ -173,13 +181,27 @@ terminal et la date de fin ; il ne conserve ni identité, ni fraîcheur, ni
 résultat, ni snapshot personnel.
 
 Les événements de cycle de vie sont soumis à une assurance distincte des
-événements historiquement visibles par un rôle `owner`. Le serveur dérive
-`primary_owner` depuis le contexte d'authentification autoritatif, puis applique
-une seule politique à la sélection SQL, au `latest_event_cursor`, au dashboard
-et au flux SSE. Les IDs ordonnés ne quittent pas le serveur ; un curseur
-aléatoire de 192 bits est résolu avec le compte et cette même politique. Un
-token délégué ne peut donc ni lire ces événements ni observer un trou de
-séquence causé par eux.
+événements historiquement visibles par un rôle `owner`. Une fonction centrale
+classe chaque famille en `shared`, `owner`, `primary_owner` ou `simulation`
+avant l'écriture,
+et la classe stockée est immuable. Le serveur applique une seule politique SQL
+à la sélection, au `latest_event_cursor`, au dashboard, au polling et au SSE.
+Les IDs ordonnés ne quittent pas le serveur ; un curseur aléatoire de 192 bits
+est résolu avec le compte et cette même politique.
+
+La rétention conserve 2 000 événements par compte **et par classe**. Le pruning
+ne peut supprimer que des lignes de la classe courante. Un token délégué ne
+peut donc ni lire un événement Comparaisons, ni observer un trou de séquence,
+une ancre disparue ou une pagination modifiée par son volume. Les classes sont :
+
+- `shared` : calendrier, notes, UE, sync, accès/session PASS, passkeys,
+  configuration de sécurité et credentials de sync ;
+- `owner` : compte, authentification, leaderboard, Learning, Telegram et
+  tokens ;
+- `primary_owner` : Comparaisons et tout événement historique inconnu ;
+- `simulation` : simulations, isolées pour préserver les exports qui les
+  excluent sans partager leur quota avec Comparaisons. Un write futur inconnu
+  reste refusé.
 
 ## Hypothèses et risques acceptés
 
@@ -194,16 +216,19 @@ séquence causé par eux.
 - une compromission root ou applicative complète dépasse la séparation logique
   entre deux comptes et doit être traitée comme incident d'instance.
 
-Une V2 exposant des évaluations détaillées est hors périmètre. Elle exige une
+Une future version exposant des évaluations détaillées est hors périmètre. Elle exige une
 nouvelle version de consentement, une analyse de minimisation et une revue de ce
 modèle avant tout code.
 
-## Périmètre restant après C6A
+## Périmètre restant après C6B
 
 C6A ferme l'autorité de session, le fragment, les réponses hors ordre, la
-deadline, le binding/rebind, l'ordre des verrous et la purge terminale. Il ne
-ferme pas la pseudo-révocation réversible liée à l'éligibilité, l'oracle de
-rétention des événements ni la copy de consentement propre à chaque acteur :
-ces sujets appartiennent à C6B. Les constats ZIP, binaires, Telegram et snapshot
-de release appartiennent à C6C. Le feature flag reste faux, `0029` reste non
-déployée et aucun nouveau scan indépendant n'est requis avant ces deux lots.
+deadline, le binding/rebind, l'ordre des verrous et la purge terminale. C6B
+ajoute la génération d'éligibilité, les états
+`active`/`suspended`/`revoked`/`expired`, le consentement V3 actor-specific lié
+au digest exact et la rétention événementielle par classe sans oracle.
+
+Les constats ZIP, formats binaires reconnus par magic, exemption Telegram
+contextuelle et snapshot de release mutable appartiennent exclusivement à C6C.
+Le feature flag reste faux, `0029` reste non déployée et aucun nouveau scan
+indépendant n'est requis avant la fin de C6C.

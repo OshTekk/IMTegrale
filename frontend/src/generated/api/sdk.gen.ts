@@ -614,7 +614,7 @@ export const privateComparisonsGetPrivateComparisons = <ThrowOnError extends boo
 /**
  * Get Private Comparison Consent Manifest
  */
-export const privateComparisonsGetPrivateComparisonConsentManifest = <ThrowOnError extends boolean = false>(options?: Options<PrivateComparisonsGetPrivateComparisonConsentManifestData, ThrowOnError>): RequestResult<PrivateComparisonsGetPrivateComparisonConsentManifestResponses, PrivateComparisonsGetPrivateComparisonConsentManifestErrors, ThrowOnError> => (options?.client ?? client).get<PrivateComparisonsGetPrivateComparisonConsentManifestResponses, PrivateComparisonsGetPrivateComparisonConsentManifestErrors, ThrowOnError>({ url: '/api/v1/private-comparisons/consent-manifest', ...options });
+export const privateComparisonsGetPrivateComparisonConsentManifest = <ThrowOnError extends boolean = false>(options: Options<PrivateComparisonsGetPrivateComparisonConsentManifestData, ThrowOnError>): RequestResult<PrivateComparisonsGetPrivateComparisonConsentManifestResponses, PrivateComparisonsGetPrivateComparisonConsentManifestErrors, ThrowOnError> => (options.client ?? client).get<PrivateComparisonsGetPrivateComparisonConsentManifestResponses, PrivateComparisonsGetPrivateComparisonConsentManifestErrors, ThrowOnError>({ url: '/api/v1/private-comparisons/consent-manifest/{actor_role}', ...options });
 
 /**
  * Get Private Comparison Invitations

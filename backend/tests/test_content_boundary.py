@@ -110,6 +110,7 @@ def test_index_path_bypasses_are_rejected(tmp_path: Path, relative_path: str, ex
     "relative_path",
     [
         "backend/app/private_comparison_contract.py",
+        "backend/app/private_comparison_lifecycle.py",
         "backend/app/private_comparison_security.py",
         "backend/app/routers/private_comparisons.py",
         "backend/app/services/private_comparisons.py",
@@ -132,6 +133,7 @@ def test_index_path_bypasses_are_rejected(tmp_path: Path, relative_path: str, ex
         "frontend/src/pages/private-comparisons/privateComparisonPresentation.ts",
         "frontend/src/pages/private-comparisons/privateComparisons.css",
         "frontend/src/pages/private-comparisons/privateComparisons.test.tsx",
+        "backend/tests/test_private_comparisons_c6b.py",
     ],
 )
 def test_public_private_comparison_paths_are_narrowly_allowlisted(
@@ -151,6 +153,7 @@ def test_public_private_comparison_paths_are_narrowly_allowlisted(
     [
         "backend/app/services/Private_Comparisons.py",
         "backend/app/services/private_comparisons.py.bak",
+        "backend/app/private_comparison_lifecycle.py.bak",
         "backend/app/services/private_comparisons/notes.py",
         "docs/private-comparisons/notes.md",
         "frontend/e2e/private-comparisons.spec.ts.bak",
@@ -743,6 +746,7 @@ def test_public_private_comparison_wheel_modules_are_narrowly_allowlisted(tmp_pa
     wheel = tmp_path / "package.whl"
     with zipfile.ZipFile(wheel, "w") as archive:
         archive.writestr("app/private_comparison_contract.py", b"SYNTHETIC = True\n")
+        archive.writestr("app/private_comparison_lifecycle.py", b"SYNTHETIC = True\n")
         archive.writestr("app/private_comparison_security.py", b"SYNTHETIC = True\n")
         archive.writestr("app/routers/private_comparisons.py", b"SYNTHETIC = True\n")
         archive.writestr("app/services/private_comparisons.py", b"SYNTHETIC = True\n")
@@ -751,4 +755,4 @@ def test_public_private_comparison_wheel_modules_are_narrowly_allowlisted(tmp_pa
     result = scan_wheel(wheel)
 
     assert result.violations["PRIVATE_PATH_TRACKED"] == 1
-    assert result.artifact_files == 5
+    assert result.artifact_files == 6
