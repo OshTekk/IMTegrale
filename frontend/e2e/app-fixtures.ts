@@ -96,6 +96,10 @@ const passAccess = {
   service_session: serviceSession,
 };
 
+export const CALENDAR_E2E_REFERENCE_DATE = "2026-07-27";
+export const CALENDAR_E2E_REFERENCE_NOW = `${CALENDAR_E2E_REFERENCE_DATE}T12:00:00+02:00`;
+export const CALENDAR_E2E_TIME_ZONE = "Europe/Zurich";
+
 export const syntheticCalendarStatus = {
   configured: true,
   refresh_interval_minutes: 60,
@@ -110,15 +114,17 @@ export const syntheticCalendarStatus = {
   promotion_year: 2028,
 };
 
+export const syntheticCalendarReferenceEvent = {
+  id: "event-calendar-fictif-1",
+  title: "Atelier de conception entièrement fictif avec un intitulé volontairement long",
+  location: "Salle fictive A-101, bâtiment de démonstration",
+  start: "2026-07-27T08:00:00+02:00",
+  end: "2026-07-27T10:00:00+02:00",
+  all_day: false,
+};
+
 export const syntheticCalendarEvents = [
-  {
-    id: "event-calendar-fictif-1",
-    title: "Atelier de conception entièrement fictif avec un intitulé volontairement long",
-    location: "Salle fictive A-101, bâtiment de démonstration",
-    start: "2026-07-27T08:00:00+02:00",
-    end: "2026-07-27T10:00:00+02:00",
-    all_day: false,
-  },
+  syntheticCalendarReferenceEvent,
   {
     id: "event-calendar-fictif-2",
     title: "Travaux dirigés synthétiques",
