@@ -1,6 +1,16 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { installFakeAppApi, installFakeEventSource } from "./app-fixtures";
+import {
+  CALENDAR_E2E_REFERENCE_DATE,
+  CALENDAR_E2E_REFERENCE_NOW,
+  CALENDAR_E2E_TIME_ZONE,
+  installFakeAppApi,
+  installFakeEventSource,
+  syntheticCalendarEvents,
+  syntheticCalendarReferenceEvent,
+} from "./app-fixtures";
+
+test.use({ timezoneId: CALENDAR_E2E_TIME_ZONE });
 
 const viewports = [
   { width: 320, height: 780 },
@@ -122,7 +132,33 @@ async function expectNoSeriousA11yViolations(page: Page) {
   ).toEqual([]);
 }
 
+function calendarReferenceEvent() {
+  const referenceInstant = new Date(CALENDAR_E2E_REFERENCE_NOW);
+  expect(Number.isNaN(referenceInstant.getTime()), "la date de référence Agenda doit être une ISO valide").toBe(false);
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("fr-CH", {
+      day: "2-digit",
+      month: "2-digit",
+      timeZone: CALENDAR_E2E_TIME_ZONE,
+      year: "numeric",
+    })
+      .formatToParts(referenceInstant)
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value]),
+  );
+  expect(`${parts.year}-${parts.month}-${parts.day}`).toBe(CALENDAR_E2E_REFERENCE_DATE);
+  expect(syntheticCalendarEvents).toContain(syntheticCalendarReferenceEvent);
+  expect(syntheticCalendarReferenceEvent.start.slice(0, 10)).toBe(CALENDAR_E2E_REFERENCE_DATE);
+  return syntheticCalendarReferenceEvent;
+}
+
+async function installCalendarClockBeforeBoot(page: Page) {
+  expect(page.url(), "l’horloge Agenda doit être installée avant toute navigation").toBe("about:blank");
+  await page.clock.install({ time: CALENDAR_E2E_REFERENCE_NOW });
+}
+
 async function openSyntheticCalendar(page: Page, width = 390, height = 844) {
+  await installCalendarClockBeforeBoot(page);
   const state = await installFakeAppApi(page, "imt");
   await installFakeEventSource(page);
   await page.setViewportSize({ width, height });
@@ -314,10 +350,28 @@ test("la topbar compacte garde la reconnexion et le nom complet accessibles", as
 });
 
 test("l’Agenda mobile conserve le contexte, le focus et les informations disponibles", async ({ page }) => {
+  const referenceEvent = calendarReferenceEvent();
+  const consoleErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") consoleErrors.push(message.text());
+  });
   const state = await openSyntheticCalendar(page);
   await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
   await page.reload();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  const browserClock = await page.evaluate((timeZone) => {
+    const parts = Object.fromEntries(
+      new Intl.DateTimeFormat("fr-CH", { day: "2-digit", month: "2-digit", timeZone, year: "numeric" })
+        .formatToParts(new Date())
+        .filter((part) => part.type !== "literal")
+        .map((part) => [part.type, part.value]),
+    );
+    return {
+      date: `${parts.year}-${parts.month}-${parts.day}`,
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    };
+  }, CALENDAR_E2E_TIME_ZONE);
+  expect(browserClock).toEqual({ date: CALENDAR_E2E_REFERENCE_DATE, timeZone: CALENDAR_E2E_TIME_ZONE });
 
   const listView = page.getByRole("button", { name: "Afficher la vue Liste" });
   await expect(listView).toHaveAttribute("aria-pressed", "true");
@@ -328,13 +382,18 @@ test("l’Agenda mobile conserve le contexte, le focus et les informations dispo
   await listView.focus();
   await listView.press("Space");
   await expect(listView).toHaveAttribute("aria-pressed", "true");
-  const currentPeriod = await page.locator(".calendar-toolbar h2").textContent();
+  const currentPeriod = page.locator(".calendar-toolbar h2");
+  await expect(currentPeriod).toHaveText("juillet 2026");
   await page.getByRole("button", { name: "Période suivante" }).click();
-  await expect(page.locator(".calendar-toolbar h2")).not.toHaveText(currentPeriod ?? "");
-  await page.getByRole("button", { name: "Aujourd'hui" }).click();
-  await expect(page.locator(".calendar-toolbar h2")).toHaveText(currentPeriod ?? "");
+  await expect(currentPeriod).toHaveText("août 2026");
+  const today = page.getByRole("button", { exact: true, name: "Aujourd'hui" });
+  await expect(today).toHaveCount(1);
+  await today.click();
+  await expect(currentPeriod).toHaveText("juillet 2026");
+  await expect(page.getByText("Aucun évènement à afficher")).toHaveCount(0);
 
-  const event = page.getByRole("button", { name: /Atelier de conception entièrement fictif/ });
+  const event = page.getByRole("button", { name: referenceEvent.title });
+  await expect(event).toBeVisible();
   await event.click();
   const eventDialog = page.getByRole("dialog", { name: /Atelier de conception entièrement fictif/ });
   await expect(eventDialog).toContainText("Salle fictive A-101");
@@ -371,6 +430,7 @@ test("l’Agenda mobile conserve le contexte, le focus et les informations dispo
   expect(state.calendarConnectRequests).toEqual([]);
   expect(state.calendarDisconnects).toBe(0);
   expect(state.externalRequests).toEqual([]);
+  expect(consoleErrors).toEqual([]);
 });
 
 test("les états non configuré, vide et erreur de l’Agenda restent actionnables", async ({ page }) => {
