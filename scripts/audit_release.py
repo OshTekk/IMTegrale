@@ -6,10 +6,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import sys
 import zipfile
 from pathlib import Path
 
 from check_secrets import scan_paths_report
+from release_snapshot import SnapshotError, verified_snapshot
 
 FORBIDDEN_WHEEL_PARTS = frozenset({"tests", "private", "releases", "content"})
 
@@ -65,16 +67,43 @@ def audit(wheel: Path, dist: Path, sbom: Path, output: Path) -> dict[str, object
     return manifest
 
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--wheel", type=Path, required=True)
-    parser.add_argument("--dist", type=Path, required=True)
-    parser.add_argument("--sbom", type=Path, required=True)
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--snapshot", type=Path)
+    parser.add_argument("--expected-sha256")
+    parser.add_argument("--non-release-directory", action="store_true")
+    parser.add_argument("--wheel", type=Path)
+    parser.add_argument("--dist", type=Path)
+    parser.add_argument("--sbom", type=Path)
+    parser.add_argument("--output", type=Path)
     args = parser.parse_args()
-    manifest = audit(args.wheel, args.dist, args.sbom, args.output)
-    print(f"release-audit: ok ({len(manifest['frontend'])} frontend files)")
+    try:
+        if args.snapshot is not None:
+            if (
+                not args.expected_sha256
+                or args.non_release_directory
+                or any(value is not None for value in (args.wheel, args.dist, args.sbom, args.output))
+            ):
+                parser.error("snapshot mode accepts only --snapshot and --expected-sha256")
+            with verified_snapshot(args.snapshot, args.expected_sha256) as snapshot:
+                print(
+                    "release-audit: ok "
+                    f"snapshot_files={snapshot.files_total} snapshot_files_unverified=0"
+                )
+            return 0
+        if (
+            not args.non_release_directory
+            or args.expected_sha256 is not None
+            or any(value is None for value in (args.wheel, args.dist, args.sbom, args.output))
+        ):
+            parser.error("legacy directory audit requires --non-release-directory and all inputs")
+        manifest = audit(args.wheel, args.dist, args.sbom, args.output)
+    except SnapshotError as exc:
+        print(f"release-audit: denied code={exc.code}", file=sys.stderr)
+        return 1
+    print(f"release-audit: ok non_release_directory=true frontend_files={len(manifest['frontend'])}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

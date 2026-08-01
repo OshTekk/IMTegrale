@@ -9,10 +9,13 @@ import base64
 import json
 import os
 import secrets
+import stat
 import sys
 import tempfile
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+
+from release_snapshot import SnapshotError, verified_snapshot
 
 
 async def _asgi_get(app, path: str) -> tuple[int, bytes]:  # noqa: ANN001
@@ -137,11 +140,56 @@ def _isolated_sync_credentials_roundtrip() -> None:
         del credentials, credential_private, credential_public, session_private, session_public
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--wheel", type=Path, required=True)
-    parser.add_argument("--dist", type=Path, required=True)
-    args = parser.parse_args()
+def _safe_extract_wheel(wheel: Path, destination: Path) -> None:
+    with zipfile.ZipFile(wheel) as archive:
+        forbidden_key_names = {
+            "imt-sync-credential-v1.private.raw",
+            "imt-sync-credential-v1.public.raw",
+            "pass-service-session-v1.private.raw",
+            "pass-service-session-v1.public.raw",
+            "keyset.json",
+        }
+        seen: set[str] = set()
+        for entry in archive.infolist():
+            name = entry.filename.rstrip("/")
+            parsed = PurePosixPath(name)
+            mode = entry.external_attr >> 16
+            if (
+                not name
+                or parsed.is_absolute()
+                or any(part in {"", ".", ".."} for part in parsed.parts)
+                or "\\" in name
+                or "\x00" in name
+                or name in seen
+                or stat.S_ISLNK(mode)
+                or Path(name).name in forbidden_key_names
+            ):
+                raise SystemExit("release-smoke: wheel structure rejected")
+            seen.add(name)
+            target = destination / name
+            if entry.is_dir():
+                target.mkdir(mode=0o700, parents=True, exist_ok=True)
+                continue
+            target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            descriptor = os.open(
+                target,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0),
+                0o400,
+            )
+            try:
+                with archive.open(entry) as source:
+                    while chunk := source.read(1024 * 1024):
+                        view = memoryview(chunk)
+                        while view:
+                            written = os.write(descriptor, view)
+                            if written <= 0:
+                                raise SystemExit("release-smoke: wheel extraction failed")
+                            view = view[written:]
+            finally:
+                os.close(descriptor)
+
+
+def smoke(wheel: Path, dist: Path) -> None:
     os.environ.update(
         {
             "BOTNOTE_ENVIRONMENT": "test",
@@ -150,21 +198,11 @@ def main() -> None:
             "BOTNOTE_TOKEN_PEPPER": "synthetic-release-pepper-value-32",
             "BOTNOTE_PUBLIC_ORIGIN": "https://release.example.test",
             "BOTNOTE_ALLOWED_HOSTS": '["release.example.test"]',
-            "BOTNOTE_FRONTEND_DIST": str(args.dist.resolve()),
+            "BOTNOTE_FRONTEND_DIST": str(dist.resolve()),
         }
     )
     with tempfile.TemporaryDirectory(prefix="imtegrale-wheel-") as temporary:
-        with zipfile.ZipFile(args.wheel) as archive:
-            forbidden_key_names = {
-                "imt-sync-credential-v1.private.raw",
-                "imt-sync-credential-v1.public.raw",
-                "pass-service-session-v1.private.raw",
-                "pass-service-session-v1.public.raw",
-                "keyset.json",
-            }
-            if any(Path(name).name in forbidden_key_names for name in archive.namelist()):
-                raise SystemExit("release-smoke: operational key material is forbidden")
-            archive.extractall(temporary)
+        _safe_extract_wheel(wheel, Path(temporary))
         sys.path.insert(0, temporary)
         from app.main import app
 
@@ -179,5 +217,39 @@ def main() -> None:
     print("release-smoke: ok")
 
 
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--snapshot", type=Path)
+    parser.add_argument("--expected-sha256")
+    parser.add_argument("--non-release-directory", action="store_true")
+    parser.add_argument("--wheel", type=Path)
+    parser.add_argument("--dist", type=Path)
+    args = parser.parse_args()
+    try:
+        if args.snapshot is not None:
+            if (
+                not args.expected_sha256
+                or args.non_release_directory
+                or args.wheel is not None
+                or args.dist is not None
+            ):
+                parser.error("snapshot smoke requires only --snapshot and --expected-sha256")
+            with verified_snapshot(args.snapshot, args.expected_sha256) as snapshot:
+                smoke(snapshot.wheel, snapshot.frontend)
+            return 0
+        if (
+            not args.non_release_directory
+            or args.expected_sha256 is not None
+            or args.wheel is None
+            or args.dist is None
+        ):
+            parser.error("legacy smoke requires --non-release-directory, --wheel and --dist")
+        smoke(args.wheel, args.dist)
+        return 0
+    except SnapshotError as exc:
+        print(f"release-smoke: denied code={exc.code}", file=sys.stderr)
+        return 1
+
+
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

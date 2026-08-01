@@ -15,6 +15,7 @@ from pathlib import Path, PurePosixPath
 
 from check_content_boundary import ScanResult, scan_directory, scan_wheel
 from check_secrets import scan_paths_report
+from release_snapshot import SnapshotError, verified_snapshot
 
 RELEASE_MANIFEST = "release-manifest.json"
 VITE_MANIFEST = "frontend/.vite/manifest.json"
@@ -67,6 +68,14 @@ class VerificationResult:
     frontend: Path
     files: int
     frontend_files: int
+
+
+@dataclass(frozen=True, slots=True)
+class SnapshotVerificationResult:
+    files: int
+    frontend_files: int
+    snapshot_sha256: str
+    snapshot_files_unverified: int
 
 
 def _fail(code: str) -> None:
@@ -327,7 +336,7 @@ def _run_scans(root: Path, files: dict[str, Path], wheel: Path, frontend: Path) 
 
 
 def verify(root: Path) -> VerificationResult:
-    """Verify one extracted artifact without modifying it."""
+    """Verify one extracted non-release fixture without modifying it."""
 
     root = root.absolute()
     files = _inventory(root)
@@ -365,19 +374,72 @@ def verify(root: Path) -> VerificationResult:
     )
 
 
+def verify_snapshot(path: Path, expected_sha256: str) -> SnapshotVerificationResult:
+    """Verify the canonical snapshot and run all release controls on its exact bytes."""
+
+    report = scan_paths_report(
+        [path],
+        root=path.parent,
+        policy_scope="release",
+        enforce_unused=True,
+        expected_sha256=expected_sha256,
+    )
+    if not report.ok or report.files_unscanned != 0:
+        _fail("SECRET_SCAN_FAILED")
+    with verified_snapshot(path, expected_sha256) as snapshot:
+        boundary = ScanResult()
+        boundary.merge(scan_wheel(snapshot.wheel))
+        boundary.merge(scan_directory(snapshot.frontend))
+        if not boundary.ok:
+            _fail("CONTENT_BOUNDARY_FAILED")
+        frontend_files = sum(
+            record.get("role") == "frontend"
+            for record in snapshot.manifest["files"]
+            if isinstance(record, dict)
+        )
+        return SnapshotVerificationResult(
+            files=snapshot.files_total,
+            frontend_files=frontend_files,
+            snapshot_sha256=snapshot.sha256,
+            snapshot_files_unverified=snapshot.snapshot_files_unverified,
+        )
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Verify an extracted IMTégrale release artifact")
-    parser.add_argument("artifact_root", type=Path)
+    parser = argparse.ArgumentParser(description="Verify an IMTégrale release snapshot")
+    parser.add_argument("--snapshot", type=Path)
+    parser.add_argument("--expected-sha256")
+    parser.add_argument("--non-release-directory", type=Path)
     args = parser.parse_args()
     try:
-        result = verify(args.artifact_root)
+        if args.snapshot is not None:
+            if not args.expected_sha256 or args.non_release_directory is not None:
+                parser.error("snapshot mode requires only --snapshot and --expected-sha256")
+            snapshot_result = verify_snapshot(args.snapshot, args.expected_sha256)
+            print(
+                "release-artifact: ok "
+                f"files={snapshot_result.files} "
+                f"frontend_files={snapshot_result.frontend_files} "
+                f"snapshot_sha256={snapshot_result.snapshot_sha256} "
+                "snapshot_files_unverified=0"
+            )
+            return 0
+        if args.non_release_directory is None or args.expected_sha256 is not None:
+            parser.error("use --snapshot for release or --non-release-directory for fixtures")
+        result = verify(args.non_release_directory)
     except ReleaseArtifactError as exc:
+        print(f"release-artifact: denied code={exc.code}", file=sys.stderr)
+        return 1
+    except SnapshotError as exc:
         print(f"release-artifact: denied code={exc.code}", file=sys.stderr)
         return 1
     except Exception:
         print("release-artifact: denied code=VERIFIER_INTERNAL_ERROR", file=sys.stderr)
         return 1
-    print(f"release-artifact: ok files={result.files} frontend_files={result.frontend_files} hidden_files=1")
+    print(
+        "release-artifact: ok non_release_directory=true "
+        f"files={result.files} frontend_files={result.frontend_files} hidden_files=1"
+    )
     return 0
 
 

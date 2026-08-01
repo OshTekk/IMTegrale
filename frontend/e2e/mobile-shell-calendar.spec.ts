@@ -314,6 +314,7 @@ test("la topbar compacte garde la reconnexion et le nom complet accessibles", as
 });
 
 test("l’Agenda mobile conserve le contexte, le focus et les informations disponibles", async ({ page }) => {
+  await page.clock.setFixedTime(new Date("2026-07-28T12:00:00+02:00"));
   const state = await openSyntheticCalendar(page);
   await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
   await page.reload();

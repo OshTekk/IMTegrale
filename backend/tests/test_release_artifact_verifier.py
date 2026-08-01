@@ -371,15 +371,31 @@ def test_fictional_forbidden_learning_marker_is_refused(
 def test_ci_roundtrip_downloads_without_rebuilding_or_repairing() -> None:
     root = Path(__file__).resolve().parents[2]
     workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    release = workflow.split("\n  release-artifact:\n", maxsplit=1)[1].split(
+        "\n  release-artifact-roundtrip:\n",
+        maxsplit=1,
+    )[0]
     roundtrip = workflow.split("\n  release-artifact-roundtrip:\n", maxsplit=1)[1]
 
-    assert workflow.count("include-hidden-files: true") == 1
-    assert "python scripts/verify_release_artifact.py artifacts" in workflow
+    assert "path: ${{ steps.snapshot.outputs.snapshot_path }}" in release
+    assert "path: artifacts/" not in release
+    assert "python scripts/build_release_snapshot.py" in release
+    assert "python scripts/verify_release_artifact.py" in release
+    assert "--snapshot \"$SNAPSHOT_PATH\"" in release
+    assert "--expected-sha256 \"$SNAPSHOT_SHA256\"" in release
     assert "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1" in roundtrip
     assert "name: imtegrale-${{ github.sha }}" in roundtrip
     assert "digest-mismatch: error" in roundtrip
-    assert "python scripts/verify_release_artifact.py downloaded-artifact" in roundtrip
-    assert "downloaded-artifact/frontend/.vite/manifest.json" in roundtrip
+    assert "python scripts/verify_release_download.py" in roundtrip
+    assert "--artifact-dir downloaded-artifact" in roundtrip
+    assert "python scripts/verify_release_artifact.py" in roundtrip
+    assert "--snapshot \"$SNAPSHOT_PATH\"" in roundtrip
     assert "python scripts/smoke_release.py" in roundtrip
-    for forbidden in ("pnpm build", "pip wheel", "cp ", "manifest.json artifacts"):
+    for forbidden in (
+        "pnpm build",
+        "pip wheel",
+        "cp ",
+        "frontend/dist",
+        "--non-release-directory",
+    ):
         assert forbidden not in roundtrip

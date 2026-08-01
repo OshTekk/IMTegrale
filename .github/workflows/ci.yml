@@ -24,7 +24,9 @@ jobs:
         with:
           python-version: "3.12"
       - name: Verify public content boundary
-        run: python scripts/check_content_boundary.py
+        run: |
+          python scripts/check_content_boundary.py
+          python scripts/validate_release_workflow.py .github/workflows/ci.yml
 
   backend:
     needs: content-boundary
@@ -39,7 +41,9 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install
-        run: python -m pip install --disable-pip-version-check -e '.[dev]'
+        run: |
+          python -m pip install --disable-pip-version-check --upgrade pip==26.1.2
+          python -m pip install --disable-pip-version-check -e '.[dev]'
       - name: Lint
         run: ruff check backend scripts
       - name: Security static analysis
@@ -63,7 +67,9 @@ jobs:
           python -m pip wheel --no-deps --wheel-dir "$wheel_out" .
           mapfile -t wheels < <(find "$wheel_out" -maxdepth 1 -type f -name '*.whl' -print)
           test "${#wheels[@]}" -eq 1
-          python scripts/check_content_boundary.py --wheel "${wheels[0]}"
+          python scripts/check_content_boundary.py \
+            --non-release-directory \
+            --wheel "${wheels[0]}"
       - name: Dependency audit
         run: pip-audit
 
@@ -160,7 +166,11 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - name: Verify built content boundary
-        run: python ../scripts/check_content_boundary.py --repo-root .. --dist frontend/dist
+        run: >-
+          python ../scripts/check_content_boundary.py
+          --repo-root ..
+          --non-release-directory
+          --dist frontend/dist
       - name: Dependency audit
         run: pnpm audit --prod
 
@@ -168,6 +178,9 @@ jobs:
     needs: [backend, postgres-backend, frontend]
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    outputs:
+      snapshot_name: ${{ steps.snapshot.outputs.snapshot_name }}
+      snapshot_sha256: ${{ steps.snapshot.outputs.snapshot_sha256 }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
@@ -191,33 +204,52 @@ jobs:
           pnpm --dir frontend install --frozen-lockfile
       - name: Build exact release artifacts
         run: |
-          mkdir -p artifacts/wheel
-          python -m pip wheel --no-deps --wheel-dir artifacts/wheel .
+          mkdir -p build-inputs/wheel
+          python -m pip wheel --no-deps --wheel-dir build-inputs/wheel .
           pnpm --dir frontend build
-          python scripts/generate_sbom.py --output artifacts/imtegrale.cdx.json
-      - name: Audit manifest and smoke-test built artifacts
+          python scripts/generate_sbom.py --output build-inputs/imtegrale.cdx.json
+      - name: Create the single immutable release snapshot
+        id: snapshot
         shell: bash
         run: |
-          mapfile -t wheels < <(find artifacts/wheel -maxdepth 1 -type f -name '*.whl' -print)
+          mapfile -t wheels < <(find build-inputs/wheel -maxdepth 1 -type f -name '*.whl' -print)
           test "${#wheels[@]}" -eq 1
-          python scripts/check_content_boundary.py --wheel "${wheels[0]}" --dist frontend/dist
-          python scripts/audit_release.py \
+          python scripts/build_release_snapshot.py \
             --wheel "${wheels[0]}" \
             --dist frontend/dist \
-            --sbom artifacts/imtegrale.cdx.json \
-            --output artifacts/release-manifest.json
-          python scripts/smoke_release.py --wheel "${wheels[0]}" --dist frontend/dist
-          cp -R frontend/dist artifacts/frontend
-          python scripts/verify_release_artifact.py artifacts
-          sha256sum "${wheels[0]}" artifacts/imtegrale.cdx.json artifacts/release-manifest.json
-      - name: Retain audited release bundle
+            --sbom build-inputs/imtegrale.cdx.json \
+            --output-dir release-snapshot \
+            --source-commit "${{ github.sha }}"
+      - name: Run every release control on the exact snapshot bytes
+        env:
+          SNAPSHOT_PATH: ${{ steps.snapshot.outputs.snapshot_path }}
+          SNAPSHOT_SHA256: ${{ steps.snapshot.outputs.snapshot_sha256 }}
+        run: |
+          python scripts/check_secrets.py \
+            --snapshot "$SNAPSHOT_PATH" \
+            --expected-sha256 "$SNAPSHOT_SHA256"
+          python scripts/check_content_boundary.py \
+            --snapshot "$SNAPSHOT_PATH" \
+            --expected-sha256 "$SNAPSHOT_SHA256"
+          python scripts/audit_release.py \
+            --snapshot "$SNAPSHOT_PATH" \
+            --expected-sha256 "$SNAPSHOT_SHA256"
+          python scripts/verify_release_artifact.py \
+            --snapshot "$SNAPSHOT_PATH" \
+            --expected-sha256 "$SNAPSHOT_SHA256"
+          python scripts/smoke_release.py \
+            --snapshot "$SNAPSHOT_PATH" \
+            --expected-sha256 "$SNAPSHOT_SHA256"
+          python scripts/prepare_release_upload.py \
+            --snapshot "$SNAPSHOT_PATH" \
+            --expected-sha256 "$SNAPSHOT_SHA256"
+      - name: Upload only the previously verified snapshot file
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: imtegrale-${{ github.sha }}
-          path: artifacts/
+          path: ${{ steps.snapshot.outputs.snapshot_path }}
           if-no-files-found: error
           retention-days: 30
-          include-hidden-files: true
 
   release-artifact-roundtrip:
     needs: release-artifact
@@ -239,27 +271,29 @@ jobs:
           name: imtegrale-${{ github.sha }}
           path: downloaded-artifact
           digest-mismatch: error
-      - name: Verify the downloaded release bundle
+      - name: Require exactly the pre-upload content-addressed snapshot
+        id: downloaded
+        run: >-
+          python scripts/verify_release_download.py
+          --artifact-dir downloaded-artifact
+          --expected-sha256 "${{ needs.release-artifact.outputs.snapshot_sha256 }}"
+      - name: Re-run every release control on the downloaded snapshot bytes
+        env:
+          SNAPSHOT_PATH: ${{ steps.downloaded.outputs.snapshot_path }}
+          SNAPSHOT_SHA256: ${{ needs.release-artifact.outputs.snapshot_sha256 }}
         run: |
-          test -f downloaded-artifact/frontend/.vite/manifest.json
-          python scripts/verify_release_artifact.py downloaded-artifact
-      - name: Re-run release boundaries on the download
-        shell: bash
-        run: |
-          mapfile -t wheels < <(find downloaded-artifact/wheel -maxdepth 1 -type f -name '*.whl' -print)
-          test "${#wheels[@]}" -eq 1
-          python scripts/check_content_boundary.py \
-            --wheel "${wheels[0]}" \
-            --dist downloaded-artifact/frontend
-          mapfile -d '' artifact_files < <(find downloaded-artifact -type f -print0)
           python scripts/check_secrets.py \
-            --repo-root downloaded-artifact \
-            "${artifact_files[@]}"
-      - name: Smoke-test the downloaded release bundle
-        shell: bash
-        run: |
-          mapfile -t wheels < <(find downloaded-artifact/wheel -maxdepth 1 -type f -name '*.whl' -print)
-          test "${#wheels[@]}" -eq 1
+            --snapshot "$SNAPSHOT_PATH" \
+            --expected-sha256 "$SNAPSHOT_SHA256"
+          python scripts/check_content_boundary.py \
+            --snapshot "$SNAPSHOT_PATH" \
+            --expected-sha256 "$SNAPSHOT_SHA256"
+          python scripts/audit_release.py \
+            --snapshot "$SNAPSHOT_PATH" \
+            --expected-sha256 "$SNAPSHOT_SHA256"
+          python scripts/verify_release_artifact.py \
+            --snapshot "$SNAPSHOT_PATH" \
+            --expected-sha256 "$SNAPSHOT_SHA256"
           python scripts/smoke_release.py \
-            --wheel "${wheels[0]}" \
-            --dist downloaded-artifact/frontend
+            --snapshot "$SNAPSHOT_PATH" \
+            --expected-sha256 "$SNAPSHOT_SHA256"

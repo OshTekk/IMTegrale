@@ -587,7 +587,15 @@ def test_cli_artifact_errors_do_not_disclose_argument_paths(
     _stage(repo, "safe.py", b"SYNTHETIC = True\n")
     private_argument = "unpublished-student-material.whl"
 
-    exit_code = main(["--repo-root", str(repo), "--wheel", private_argument])
+    exit_code = main(
+        [
+            "--repo-root",
+            str(repo),
+            "--non-release-directory",
+            "--wheel",
+            private_argument,
+        ]
+    )
     output = capsys.readouterr().out
 
     assert exit_code == 1

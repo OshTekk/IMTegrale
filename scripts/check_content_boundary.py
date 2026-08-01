@@ -17,6 +17,7 @@ import os
 import re
 import stat
 import subprocess
+import sys
 import tarfile
 import unicodedata
 import zipfile
@@ -25,6 +26,12 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import BinaryIO
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from release_snapshot import verified_snapshot  # noqa: E402
 
 MAX_INDEX_BLOB_BYTES = 32 * 1024 * 1024
 MAX_FIXTURE_BYTES = 2 * 1024 * 1024
@@ -965,7 +972,14 @@ def _resolved_from_repo(repo_root: Path, value: str) -> Path:
 def main(argv: Iterable[str] | None = None) -> int:
     parser = SafeArgumentParser(description="Enforce the public/private learning content boundary")
     parser.add_argument("--repo-root", default=os.fspath(Path(__file__).resolve().parents[1]))
-    parser.add_argument("--dist", help="optional built frontend directory, relative to the repository")
+    parser.add_argument("--snapshot", help="canonical release snapshot")
+    parser.add_argument("--expected-sha256", help="expected canonical snapshot digest")
+    parser.add_argument(
+        "--non-release-directory",
+        action="store_true",
+        help="explicitly permit legacy wheel/dist checks outside release publication",
+    )
+    parser.add_argument("--dist", help="non-release built frontend directory")
     parser.add_argument(
         "--wheel",
         action="append",
@@ -977,11 +991,31 @@ def main(argv: Iterable[str] | None = None) -> int:
         if unknown:
             raise ValueError
         repo_root = Path(arguments.repo_root).resolve()
-        result = scan_repository(repo_root)
-        if arguments.dist:
-            result.merge(scan_directory(_resolved_from_repo(repo_root, arguments.dist)))
-        for wheel in arguments.wheel:
-            result.merge(scan_wheel(_resolved_from_repo(repo_root, wheel)))
+        if arguments.snapshot:
+            if (
+                not arguments.expected_sha256
+                or arguments.non_release_directory
+                or arguments.dist
+                or arguments.wheel
+            ):
+                raise ValueError
+            result = ScanResult()
+            with verified_snapshot(
+                _resolved_from_repo(repo_root, arguments.snapshot),
+                arguments.expected_sha256,
+            ) as snapshot:
+                result.merge(scan_wheel(snapshot.wheel))
+                result.merge(scan_directory(snapshot.frontend))
+        else:
+            if arguments.expected_sha256:
+                raise ValueError
+            if (arguments.dist or arguments.wheel) and not arguments.non_release_directory:
+                raise ValueError
+            result = scan_repository(repo_root)
+            if arguments.dist:
+                result.merge(scan_directory(_resolved_from_repo(repo_root, arguments.dist)))
+            for wheel in arguments.wheel:
+                result.merge(scan_wheel(_resolved_from_repo(repo_root, wheel)))
     # A traceback can disclose a caller-supplied artifact path.  The CLI therefore
     # collapses every operational failure to one path-free rule; KeyboardInterrupt
     # and SystemExit retain their normal process semantics.

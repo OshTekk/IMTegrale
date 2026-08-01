@@ -180,7 +180,9 @@ def test_ci_builds_and_scans_one_backend_wheel_outside_dist() -> None:
 
     assert 'wheel_out="$(mktemp -d)"' in workflow
     assert '--wheel-dir "$wheel_out"' in workflow
-    assert "python scripts/check_content_boundary.py --wheel" in workflow
+    assert "python scripts/check_content_boundary.py" in workflow
+    assert "--non-release-directory" in workflow
+    assert '--wheel "${wheels[0]}"' in workflow
     assert "--wheel-dir dist" not in workflow
 
 
@@ -188,10 +190,10 @@ def test_frontend_ci_scans_dist_from_its_working_directory() -> None:
     workflow = read(".github/workflows/ci.yml")
 
     assert "working-directory: frontend" in workflow
-    assert (
-        "python ../scripts/check_content_boundary.py --repo-root .. --dist frontend/dist"
-        in workflow
-    )
+    assert "python ../scripts/check_content_boundary.py" in workflow
+    assert "--repo-root .." in workflow
+    assert "--non-release-directory" in workflow
+    assert "--dist frontend/dist" in workflow
     assert "python ../scripts/check_content_boundary.py --repo-root .. --dist dist" not in workflow
 
 
