@@ -98,17 +98,22 @@ sont jamais sérialisés : chaque reprise utilise un curseur aléatoire opaque d
 192 bits, résolu dans le compte et la visibilité courants, afin qu'un token
 `owner` ne puisse pas déduire une activité privée par un trou de séquence.
 
-La remédiation C6A ne couvre pas la pseudo-révocation réversible liée à
-l'éligibilité, l'oracle de rétention d'événements et la copy de consentement
-propre à chaque acteur (C6B), ni les constats ZIP, binaires, Telegram et
-snapshot de release (C6C). Le flag reste faux et la migration `0029` non
-déployée ; aucun scan indépendant supplémentaire n'est demandé avant ces lots.
+C6A et C6B ferment les frontières applicatives identifiées pour les
+Comparaisons. C6C ferme les quatre frontières supply-chain restantes sans
+modifier la fonctionnalité : métadonnées ZIP, binaires opaques, exemption
+Telegram et snapshot mutable. Le flag reste faux, la migration `0029` reste
+non déployée et un unique re-scan indépendant C7 demeure obligatoire avant
+toute décision d'activation.
 
-Le scanner de secrets de publication traite les fichiers en streaming sans
-seuil silencieux de cinq Mio. Il inspecte les membres ZIP/wheel avec limites
-anti-décompression, refuse les chemins, liens et binaires inattendus qu'il ne
-peut pas analyser, et n'autorise un succès que lorsque `files_unscanned` vaut
-zéro. Les diagnostics identifient la règle sans reproduire le secret.
+La [chaîne de release immuable](docs/security/release-supply-chain.md) publie
+uniquement une capsule content-addressed. Le scanner couvre en streaming les
+textes, toutes les régions ZIP brutes et sémantiques, les contenus décompressés
+et les archives imbriquées. Les binaires sont parsés, liés à un SHA-256 exact
+ou refusés ; un magic n'autorise jamais. Les exemptions sont liées au digest
+de la valeur synthétique complète, à la règle et au chemin exact. Un succès
+exige `files_unscanned=0`, `archive_regions_unscanned=0` et
+`binary_regions_unscanned=0`. Les diagnostics identifient la règle sans
+reproduire le secret.
 
 ## Niveaux d'assurance propriétaire
 

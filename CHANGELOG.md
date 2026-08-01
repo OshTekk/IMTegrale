@@ -51,6 +51,23 @@
 - C6A laisse explicitement à C6B la pseudo-révocation d'éligibilité, l'oracle
   de rétention et la copy actor-specific, et à C6C les constats ZIP, binaires,
   Telegram et snapshot ; flag toujours faux et migration `0029` non déployée.
+- remédiation supply-chain C6C : parser ZIP brut et sémantique couvrant EOCD,
+  ZIP64, headers locaux/centraux, descriptors, noms, extras, commentaires,
+  contenus compressés/décompressés et archives imbriquées, avec comptabilité
+  `archive_regions_unscanned=0` ;
+- politique binaire fail-closed : dix PNG suivis et 59 fontes KaTeX liés à
+  SHA-256, taille, type, provenance et chemins exacts ; aucun format autorisé
+  uniquement par extension ou magic, aucune entrée active inutilisée ;
+- exemptions Telegram liées au digest de la valeur synthétique complète, à la
+  règle, au chemin de test, au purpose et au nombre d'occurrences, sans
+  suppression contextuelle ;
+- capsule de release v1 déterministe et content-addressed, construite depuis
+  des descripteurs stables ; tous les contrôles, l'upload et le round-trip
+  consomment le même fichier avec son SHA-256 attendu, sans reparcours du build ;
+- harness de mutation C6C tuant les dix régressions supply-chain exigées dans
+  des copies temporaires, benchmark scanner documenté et bootstrap CI de
+  `pip 26.1.2` audité ; l'horloge de la fixture Agenda est figée pour supprimer
+  sa dépendance à la date réelle, sans changement fonctionnel.
 
 ## 4.8.0 - 23 juillet 2026
 

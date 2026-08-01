@@ -84,6 +84,7 @@ L'interface est alors disponible sur `http://127.0.0.1:5173`. Utilisez uniquemen
 .venv/bin/ruff check backend
 .venv/bin/ruff check --select S backend/app
 .venv/bin/python scripts/check_secrets.py
+.venv/bin/python scripts/validate_release_workflow.py .github/workflows/ci.yml
 .venv/bin/pytest
 .venv/bin/pip-audit
 
@@ -111,6 +112,8 @@ pnpm audit --prod
 - [modes de synchronisation](docs/product/sync-modes.md), [architecture de la synchronisation autonome](docs/security/autonomous-sync-architecture.md), [rollout](docs/security/autonomous-sync-rollout.md), [isolation du worker sync](docs/security/sync-worker-isolation.md) et [modèle de menace dédié](docs/security/autonomous-sync-threat-model.md) ;
 - [exploitation et observabilité](docs/operations.md) et [politique d'arrondi académique](docs/academic-rounding.md) ;
 - [déploiement et rollback](deploy/README.md) ;
+- [chaîne de release immuable](docs/security/release-supply-chain.md) et
+  [contrat du scanner de secrets](docs/security/secret-scanner.md) ;
 - [politique de sécurité](SECURITY.md), [modèle de menace](docs/security/threat-model.md), [rotation des clés](docs/security/key-rotation.md) et [niveaux d'assurance](docs/security/authentication-assurance.md) ;
 - [historique des versions](CHANGELOG.md) et [guide de contribution](CONTRIBUTING.md).
 

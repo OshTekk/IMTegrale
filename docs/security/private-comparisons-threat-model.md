@@ -220,7 +220,7 @@ Une future version exposant des évaluations détaillées est hors périmètre. 
 nouvelle version de consentement, une analyse de minimisation et une revue de ce
 modèle avant tout code.
 
-## Périmètre restant après C6B
+## Dépendance de release après C6C
 
 C6A ferme l'autorité de session, le fragment, les réponses hors ordre, la
 deadline, le binding/rebind, l'ordre des verrous et la purge terminale. C6B
@@ -228,7 +228,13 @@ ajoute la génération d'éligibilité, les états
 `active`/`suspended`/`revoked`/`expired`, le consentement V3 actor-specific lié
 au digest exact et la rétention événementielle par classe sans oracle.
 
-Les constats ZIP, formats binaires reconnus par magic, exemption Telegram
-contextuelle et snapshot de release mutable appartiennent exclusivement à C6C.
-Le feature flag reste faux, `0029` reste non déployée et aucun nouveau scan
-indépendant n'est requis avant la fin de C6C.
+La PR dépend désormais d'une capsule de release canonique content-addressed.
+Le scanner couvre toutes les régions ZIP conservées, les binaires opaques sont
+liés à leur digest exact, et les exemptions Telegram ne dépendent plus d'un
+contexte de fixture. Scanner, manifest, verifier, smoke-test, uploader et
+round-trip consomment les mêmes octets avec un SHA-256 attendu ; aucun chemin
+de build mutable ne redevient une source de publication.
+
+Cette assurance supply-chain ne change aucun calcul, consentement, modèle,
+session ou événement Comparaisons. Le feature flag reste faux, `0029` reste
+non déployée et le re-scan indépendant C7 demeure requis avant toute activation.

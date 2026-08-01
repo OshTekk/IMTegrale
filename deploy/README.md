@@ -7,22 +7,33 @@ La production utilise deux liens atomiques :
 
 ## Préparation
 
-1. Exécuter les tests backend, les tests frontend, le typecheck, le build, le scan de secrets, les audits de dépendances et l'audit de l'artefact. La CI construit le wheel et le frontend depuis les locks, génère un SBOM CycloneDX, contrôle leurs frontières, produit un manifeste SHA-256 puis exécute le smoke-test sur le wheel installé.
+1. Exécuter les tests backend, les tests frontend, le typecheck, les audits de
+   dépendances et le scanner. La CI construit wheel, frontend et SBOM depuis
+   les locks, puis crée une seule capsule
+   `imtegrale-release-<sha256>.zip`. Scanner, boundary, audit, verifier,
+   smoke-test, uploader et round-trip consomment exclusivement cette capsule
+   avec le même SHA-256 attendu.
 2. Copier `deploy/network.env.example` vers `/etc/default/botnote-network` sur le PVE, remplacer toutes les valeurs d'exemple, puis installer ce fichier en `root:root 0600`. Les configurations Nginx, dnsmasq, Proxmox et nftables du dépôt décrivent le même réseau d'exemple : les rendre avec ces valeurs avant installation et contrôler le diff produit.
 3. Créer un dump PostgreSQL chiffré et un `vzdump` du conteneur, puis tester l'archive Zstandard. Pour un lancement manuel depuis une session administrative durcie, exécuter `umask 022; vzdump ...` dans un sous-shell : le `umask 027` interactif empêcherait sinon l'utilisateur mappé du conteneur non privilégié de traverser le répertoire temporaire.
-4. Construire un wheel avec `pip wheel --no-deps` dans l'environnement de build isolé et fixé par `pyproject.toml`, depuis un arbre sans ancien dossier `build/`, puis exécuter `scripts/audit_release.py` sur le wheel, le frontend et le SBOM. `setuptools` peut sinon conserver dans le wheel un module supprimé mais encore présent dans `build/lib`.
-5. Créer l'archive avec `COPYFILE_DISABLE=1` et `tar --no-xattrs`; exclure `build`, `dist`, `*.egg-info`, `__pycache__`, `*.pyc`, les tests, `node_modules` et les caches.
-6. Vérifier les SHA-256 après chaque transfert.
+4. Ne jamais reconstruire une release destinée au déploiement depuis le
+   worktree. Le job CI isolé est l'unique constructeur ; il copie les sources
+   depuis des descripteurs stables, vérifie inode/taille/mtime/ctime/nlink,
+   normalise le ZIP et publie son unique snapshot content-addressed.
+5. Télécharger uniquement l'artefact d'un workflow entièrement vert, dans un
+   staging vide. Exiger exactement une capsule, sans manifest, SBOM, wheel ou
+   frontend adjacent.
+6. Vérifier le SHA-256 interne contre l'output pré-upload de la CI avant toute
+   extraction et répéter cette vérification après chaque transfert.
 
 ### Artefact GitHub vérifié
 
-Le seul bundle déployable est l'artefact `imtegrale-<sha>` produit par le job
-`release-artifact`, puis retéléchargé et accepté par
-`release-artifact-roundtrip`. L'upload inclut explicitement les fichiers cachés,
-mais le vérificateur n'en autorise qu'un :
-`frontend/.vite/manifest.json`. Tout autre fichier caché, lien, hardlink, fichier
-spécial, permission dangereuse, fichier supplémentaire ou digest incohérent fait
-échouer la CI.
+Le seul payload déployable est la capsule interne de l'artefact
+`imtegrale-<sha>` produit par `release-artifact`, puis retéléchargée et acceptée
+par `release-artifact-roundtrip`. Le wrapper GitHub contient exactement ce
+fichier. À l'intérieur, seul `frontend/.vite/manifest.json` peut emprunter un
+chemin caché. Tout autre fichier caché, lien, hardlink, fichier spécial,
+permission dangereuse, membre supplémentaire, métadonnée ZIP ambiguë ou digest
+incohérent fait échouer la CI.
 
 Le manifest Vite n'est actuellement pas chargé par FastAPI en production. Il est
 néanmoins généré volontairement par Vite, utilisé pendant le contrôle des budgets
@@ -36,26 +47,42 @@ répertoire de staging vide, puis exécuter avant toute installation :
 gh run download <run-id> \
   --name "imtegrale-<sha>" \
   --dir /var/tmp/imtegrale-<sha>
-python scripts/verify_release_artifact.py /var/tmp/imtegrale-<sha>
+python scripts/verify_release_download.py \
+  --artifact-dir /var/tmp/imtegrale-<sha> \
+  --expected-sha256 <snapshot-sha256>
+python scripts/verify_release_artifact.py \
+  --snapshot /var/tmp/imtegrale-<sha>/imtegrale-release-<snapshot-sha256>.zip \
+  --expected-sha256 <snapshot-sha256>
+python scripts/smoke_release.py \
+  --snapshot /var/tmp/imtegrale-<sha>/imtegrale-release-<snapshot-sha256>.zip \
+  --expected-sha256 <snapshot-sha256>
 ```
 
-Le vérificateur relit `release-manifest.json`, contrôle le wheel unique, le SBOM,
-chaque fichier frontend, le manifest Vite, les SHA-256, les tailles, les secrets
-et la frontière pédagogique. Il refuse aussi tout fichier non inventorié. Le
-smoke-test doit ensuite utiliser directement le wheel et le dossier `frontend`
-de ce même répertoire.
+Le vérificateur ouvre la capsule avec `O_NOFOLLOW`, vérifie le digest depuis le
+descripteur, relit `release-manifest.json`, contrôle le wheel unique, le SBOM,
+chaque fichier frontend, le manifest Vite, les SHA-256, tailles, modes, secrets
+et la frontière pédagogique. Il refuse tout membre non inventorié. Le
+smoke-test réouvre et revérifie la même capsule avant son extraction privée ;
+il ne reçoit jamais un wheel ou un dossier frontend séparé.
 
 Il est interdit de reconstruire le frontend ou le wheel après téléchargement,
-de restaurer manuellement `.vite/manifest.json`, ou de remplacer un fichier par
-une copie locale portant seulement le même SHA Git. Un manifest absent implique
-un échec fermé avant la bascule. Conserver la release active comme cible de
-rollback jusqu'à la fin des vérifications.
+de restaurer manuellement `.vite/manifest.json`, de régénérer le manifest ou de
+remplacer la capsule par une copie locale portant seulement le même SHA Git. Un
+manifest absent implique un échec fermé avant la bascule. L'outil de déploiement
+futur doit utiliser `release_snapshot.verified_snapshot`, copier son extraction
+vérifiée vers un nouveau dossier immuable, `fsync`, installer, puis basculer le
+lien atomiquement. Il ne lit jamais le worktree. Conserver la release active
+comme cible de rollback jusqu'à la fin des vérifications.
 
 La révision `0017` supprime physiquement les anciennes colonnes de mot de passe IMT. Si l'opérateur choisit l'exception facultative pour son unique compte propriétaire, il doit créer **avant** la migration `/etc/botnote/owner-imt-password`, sans passer le secret dans l'historique du shell, puis l'installer en `botnote:botnote 0400`. Définir ensuite `BOTNOTE_OWNER_IMT_USERNAME` et `BOTNOTE_OWNER_IMT_PASSWORD_FILE` dans l'environnement privé. Aucun autre compte ne doit disposer d'un secret local.
 
 ## Installation LXC
 
-1. Extraire dans `/opt/botnote/releases/<release>` avec `--no-same-owner`.
+1. Après vérification de la capsule et de son manifeste interne, copier son
+   extraction privée vérifiée dans un nouveau
+   `/opt/botnote/releases/<snapshot-sha256>`, sans réutiliser ni compléter un
+   dossier existant. Normaliser propriétaire/modes, `fsync` le nouvel arbre et
+   conserver la capsule source en lecture seule pour l'audit et le rollback.
 2. Installer `age`, déposer uniquement la clé publique de sauvegarde dans `/etc/botnote/backup-age-recipient` en `root:botnote 0640`, et conserver la clé privée de restauration hors du PVE et du LXC. Installer `deploy/backup.sh` en `/usr/local/libexec/botnote-backup`, propriétaire `root:root` et mode `0755` ; l'unité ne dépend ainsi jamais du contenu d'une release applicative. Un dump n'est valide qu'après restauration testée depuis son fichier `.dump.age` sur une base isolée.
 3. Créer un environnement neuf avec `python3 -m venv /opt/botnote/venvs/<release>` ; ne jamais recopier un ancien venv, car ses scripts contiennent des chemins absolus. Installer `deploy/requirements.lock`, puis le wheel IMTégrale avec `python -m pip install --no-deps`. Vérifier que les shebangs de `bin/botnote` et `bin/alembic` pointent vers le nouveau chemin, puis appliquer `chown -R root:botnote-runtime` et `chmod -R g+rX,o-rwx` à la release et au venv. Les utilisateurs `botnote` et `botnote-sync` appartiennent au groupe de lecture borné `botnote-runtime`. Ne pas compter sur l'`umask` seul : une archive tar conserve ses propres modes.
 4. Installer une copie adaptée de `botnote-runtime.env` en `root:botnote 0640`; `BOTNOTE_BIND_HOST` doit être l'adresse privée du conteneur et `BOTNOTE_TRUSTED_PROXY_IPS` ne doit contenir que le frontal. Les secrets et surcharges privées du web, scheduler, calendar et outbox restent dans `botnote.env`. Le worker sync charge à la place `botnote-sync.env`, installé `root:root 0600`, et ne reçoit ni secrets Telegram, ni mTLS, ni configuration Parcours. En production, les clés de chiffrement doivent être des valeurs base64 URL-safe de 32 octets, les peppers doivent contenir au moins 32 octets et toutes ces valeurs doivent être distinctes. `BOTNOTE_PASS_SESSION_MAX_DAYS` ne doit jamais dépasser 30. Pour Parcours, conserver `BOTNOTE_LEARNING_CONTENT_ROOT=/opt/botnote-learning` et `BOTNOTE_LEARNING_STUDENT_STATUS_MAX_AGE_DAYS=30`, ou réduire cette dernière durée après analyse d'impact. Cette fraîcheur est indépendante de la session : seule une authentification IMT réussie la renouvelle, jamais une passkey, un token ou une consultation. Le mode `cohort` conserve le comportement FIP 2028 existant. Une release personnelle doit sélectionner explicitement `BOTNOTE_LEARNING_ACCESS_MODE=personal` dans le fichier privé et renseigner une audience distincte préfixée `personal:`, l'allowlist de logins IMT et l'allowlist réseau exactes décrites plus bas ; une liste absente ou vide, ou l'audience générale `fip:2028`, fait échouer la configuration.
