@@ -167,6 +167,7 @@ class GatewayResult:
     hub_attempted: bool
     hub_succeeded: bool
     autonomous_credential_used: bool = False
+    authenticated_username: str | None = None
 
 
 def _system_state(db: Session, *, for_update: bool = False) -> PassSystemState:
@@ -733,6 +734,7 @@ def perform_login_operation(
             session_snapshot=session_snapshot,
             hub_attempted=hub_attempted,
             hub_succeeded=hub_succeeded,
+            authenticated_username=username.strip().lower(),
         )
     except Exception as exc:
         outcome = "invalid" if isinstance(exc, ImtAuthenticationError) else "upstream"

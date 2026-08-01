@@ -181,6 +181,10 @@ def test_admin_portal_has_separate_session_and_immediate_account_controls(
     )
     assert disabled.status_code == 200
     assert disabled.json()["is_disabled"] is True
+    with SessionLocal() as db:
+        account = db.get(Account, account_id)
+        assert account is not None
+        assert account.access_generation == 2
     assert client.get("/api/v1/dashboard").status_code == 401
 
     enabled = admin.post(
@@ -190,6 +194,10 @@ def test_admin_portal_has_separate_session_and_immediate_account_controls(
     )
     assert enabled.status_code == 200
     assert enabled.json()["is_disabled"] is False
+    with SessionLocal() as db:
+        account = db.get(Account, account_id)
+        assert account is not None
+        assert account.access_generation == 3
 
     revoked = admin.post(
         f"/api/v1/admin/accounts/{account_id}/actions",
@@ -200,7 +208,7 @@ def test_admin_portal_has_separate_session_and_immediate_account_controls(
     with SessionLocal() as db:
         account = db.get(Account, account_id)
         assert account is not None
-        assert account.access_generation == 2
+        assert account.access_generation == 4
 
     logout = admin.post(
         "/api/v1/admin/auth/logout",

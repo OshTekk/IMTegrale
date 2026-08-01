@@ -616,7 +616,12 @@ def _get_account(db: Session, account_id: str) -> Account:
 
 
 def _get_account_for_update(db: Session, account_id: str) -> Account:
-    account = db.scalar(select(Account).where(Account.id == account_id).with_for_update())
+    account = db.scalar(
+        select(Account)
+        .where(Account.id == account_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     if account is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Compte introuvable")
     return account
@@ -802,6 +807,8 @@ def manage_account(
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Un motif est requis")
 
     if payload.action == "disable":
+        if not account.is_disabled:
+            account.access_generation += 1
         account.is_disabled = True
         account.disabled_at = now
         account.disabled_reason = reason
@@ -816,6 +823,8 @@ def manage_account(
         account.auto_sync_paused_at = now
         account.auto_sync_next_at = None
     elif payload.action == "enable":
+        if account.is_disabled:
+            account.access_generation += 1
         account.is_disabled = False
         account.disabled_at = None
         account.disabled_reason = None
@@ -1153,9 +1162,12 @@ def delete_account(
     db: Session = Depends(get_db),
 ) -> dict:
     account = _get_account(db, account_id)
-    account_snapshot = {"id": account.id, "display_name": account.display_name}
+    locked_account_id = account.id
+    db.rollback()
     try:
-        with account_sync_lock(account.id):
+        with account_sync_lock(locked_account_id):
+            account = _get_account_for_update(db, locked_account_id)
+            account_snapshot = {"id": account.id, "display_name": account.display_name}
             purge_account_service_sessions(db, account.id, reason="account_deleted")
             record_admin_audit(
                 db,
