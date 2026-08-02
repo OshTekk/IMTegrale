@@ -90,6 +90,7 @@ def _assert_isolated_builder_corepack_contract(release: str) -> None:
     assert 'test ! -w "$pnpm_shim_real"' not in preparation
     assert 'sudo -n -u "$builder_name" test ! -w "$corepack_real"' not in preparation
     assert 'sudo -n -u "$builder_name" test ! -w "$pnpm_shim_real"' not in preparation
+    assert 'sudo -n -u "$builder_name" test ! -w "$pnpm_shim_path"' not in preparation
 
     assert "printf 'M5_COREPACK_PHASE=%s\\n' \"$1\"" in preparation
     assert "printf 'M5_COREPACK_FAILURE=%s\\n' \"$1\" >&2" in preparation
@@ -400,6 +401,39 @@ def test_corepack_authority_and_phase_contract_kills_mutations(
         mutated_release = mutated_release.replace(original, mutation)
 
     mutation_copy = tmp_path / "release-artifact-authority-mutated.yml"
+    mutation_copy.write_text(mutated_release, encoding="utf-8")
+    with pytest.raises(AssertionError):
+        _assert_isolated_builder_corepack_contract(mutation_copy.read_text(encoding="utf-8"))
+    mutation_copy.unlink()
+    assert not mutation_copy.exists()
+
+
+def test_unconfined_builder_probe_cannot_replace_systemd_readonly_proof(
+    tmp_path: Path,
+) -> None:
+    writable_target = tmp_path / "permissive-toolcache/corepack/dist/pnpm.js"
+    writable_target.parent.mkdir(parents=True)
+    writable_target.write_text("synthetic tooling\n", encoding="utf-8")
+    writable_target.chmod(0o600)
+    shim = tmp_path / "tooling/bin/pnpm"
+    shim.parent.mkdir(parents=True)
+    shim.symlink_to(writable_target)
+
+    subprocess.run(
+        ["/bin/sh", "-ceu", 'test -w "$PNPM_SHIM_PATH"'],
+        env={"PNPM_SHIM_PATH": str(shim)},
+        check=True,
+    )
+
+    release = _release_job()
+    marker = "          phase validate_tooling_ok"
+    assert release.count(marker) == 1
+    outside_unit_probe = (
+        '          sudo -n -u "$builder_name" test ! -w "$pnpm_shim_path" || \\\n'
+        "            fail_phase validate_shim_builder_probe\n"
+    )
+    mutated_release = release.replace(marker, outside_unit_probe + marker)
+    mutation_copy = tmp_path / "release-artifact-unconfined-shim-probe.yml"
     mutation_copy.write_text(mutated_release, encoding="utf-8")
     with pytest.raises(AssertionError):
         _assert_isolated_builder_corepack_contract(mutation_copy.read_text(encoding="utf-8"))

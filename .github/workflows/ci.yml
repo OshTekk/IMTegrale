@@ -435,8 +435,6 @@ jobs:
             fail_phase validate_corepack_home_builder_probe
           sudo -n -u "$builder_name" test ! -w "$pnpm_shim_dir" || \
             fail_phase validate_shim_directory_builder_probe
-          sudo -n -u "$builder_name" test ! -w "$pnpm_shim_path" || \
-            fail_phase validate_shim_builder_probe
           phase validate_tooling_ok
 
           {
