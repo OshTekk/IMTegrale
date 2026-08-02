@@ -205,6 +205,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          phase() {
+            printf 'M5_COREPACK_PHASE=%s\n' "$1"
+          }
+          fail_phase() {
+            printf 'M5_COREPACK_FAILURE=%s\n' "$1" >&2
+            exit 1
+          }
           builder_name="imtegrale-build"
           sudo -n useradd \
             --system \
@@ -225,38 +232,47 @@ jobs:
             echo "BUILDER_DOCKER_AVAILABLE" >&2
             exit 1
           fi
-          node_path="$(readlink -f "$(command -v node)")"
+          phase resolve_node_start
+          node_command="$(command -v node)" || fail_phase resolve_node_command
+          node_path="$(readlink -f "$node_command")" || \
+            fail_phase resolve_node_realpath
           case "$node_path" in
             /opt/hostedtoolcache/node/22.*/*/bin/node) ;;
-            *)
-              echo "BUILDER_NODE_PATH_INVALID" >&2
-              exit 1
-              ;;
+            *) fail_phase resolve_node_path ;;
           esac
           node_bin="$(dirname "$node_path")"
           node_root="$(dirname "$node_bin")"
+          phase resolve_node_ok
+
+          phase resolve_corepack_start
           corepack_path="$node_bin/corepack"
-          test -x "$corepack_path"
-          test "$(readlink -f "$(command -v corepack)")" = \
-            "$(readlink -f "$corepack_path")"
-          corepack_real="$(readlink -f "$corepack_path")"
+          test -x "$corepack_path" || fail_phase resolve_corepack_executable
+          corepack_command="$(command -v corepack)" || \
+            fail_phase resolve_corepack_command
+          corepack_command_real="$(readlink -f "$corepack_command")" || \
+            fail_phase resolve_corepack_command_realpath
+          corepack_real="$(readlink -f "$corepack_path")" || \
+            fail_phase resolve_corepack_realpath
+          test "$corepack_command_real" = "$corepack_real" || \
+            fail_phase resolve_corepack_identity
           case "$corepack_real" in
             "$node_root"/lib/node_modules/corepack/dist/corepack.js) ;;
-            *)
-              echo "BUILDER_COREPACK_PATH_INVALID" >&2
-              exit 1
-              ;;
+            *) fail_phase resolve_corepack_path ;;
           esac
           case "$corepack_real" in
             /home/runner/* | /tmp/* | /var/tmp/* | "$GITHUB_WORKSPACE"/* | \
               /var/lib/imtegrale-build/* | \
               /var/lib/imtegrale-validated-release/*)
-              echo "BUILDER_COREPACK_AUTHORITY_INVALID" >&2
-              exit 1
+              fail_phase resolve_corepack_authority
               ;;
           esac
           corepack_dist="$(dirname "$corepack_real")"
-          corepack_digest="$(sha256sum "$corepack_real" | cut -d ' ' -f1)"
+          corepack_digest="$(sha256sum "$corepack_real" | cut -d ' ' -f1)" || \
+            fail_phase resolve_corepack_digest
+          [[ "$corepack_digest" =~ ^[0-9a-f]{64}$ ]] || \
+            fail_phase resolve_corepack_digest_format
+          phase resolve_corepack_ok
+
           builder_root="/var/lib/imtegrale-build"
           builder_source="/var/lib/imtegrale-build/source"
           builder_cache="/var/lib/imtegrale-build/cache"
@@ -264,96 +280,178 @@ jobs:
           corepack_home="/var/lib/imtegrale-build/tooling/corepack"
           pnpm_shim_dir="/var/lib/imtegrale-build/tooling/bin"
           pnpm_shim_path="$pnpm_shim_dir/pnpm"
-          sudo -n install -d -o root -g root -m 0755 "$builder_root"
+
+          phase prepare_directories_start
+          sudo -n install -d -o root -g root -m 0755 "$builder_root" || \
+            fail_phase prepare_builder_root
           sudo -n install -d \
             -o "$builder_name" \
             -g "$builder_name" \
             -m 0700 \
             "$builder_source" \
-            "$builder_cache"
-          sudo -n install -d -o root -g root -m 0755 "$tooling_root"
+            "$builder_cache" || fail_phase prepare_builder_writable_directories
+          sudo -n install -d -o root -g root -m 0755 "$tooling_root" || \
+            fail_phase prepare_tooling_root
           sudo -n install -d -o root -g root -m 0700 \
             "$corepack_home" \
-            "$pnpm_shim_dir"
+            "$pnpm_shim_dir" || fail_phase prepare_tooling_directories
           sudo -n cp -a --no-preserve=ownership \
             "$GITHUB_WORKSPACE/." \
-            "$builder_source/"
-          sudo -n chown -R "$builder_name:$builder_name" "$builder_source"
+            "$builder_source/" || fail_phase prepare_source_copy
+          sudo -n chown -R "$builder_name:$builder_name" "$builder_source" || \
+            fail_phase prepare_source_owner
+          phase prepare_directories_ok
+
+          phase install_pnpm_start
           sudo -n env -i \
             PATH="$node_bin:/usr/bin:/bin" \
             HOME=/root \
             COREPACK_HOME="$corepack_home" \
             COREPACK_DEFAULT_TO_LATEST=0 \
             COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
-            "$corepack_path" install --global pnpm@11.9.0
+            "$corepack_path" install --global pnpm@11.9.0 || \
+            fail_phase install_pnpm
+          if ! sudo -n find "$corepack_home" -mindepth 1 \
+            -print -quit | grep -q .; then
+            fail_phase install_pnpm_cache_empty
+          fi
+          pnpm_install_version="$(sudo -n env -i \
+            PATH="$node_bin:/usr/bin:/bin" \
+            HOME=/root \
+            COREPACK_HOME="$corepack_home" \
+            COREPACK_DEFAULT_TO_LATEST=0 \
+            COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+            COREPACK_ENABLE_NETWORK=0 \
+            "$corepack_path" pnpm --version)" || \
+            fail_phase install_pnpm_offline_validation
+          test "$pnpm_install_version" = "11.9.0" || \
+            fail_phase install_pnpm_version
+          printf 'M5_COREPACK_PNPM_VERSION=%s\n' "$pnpm_install_version"
+          phase install_pnpm_ok
+
+          phase enable_shim_start
           sudo -n env -i \
             PATH="$node_bin:/usr/bin:/bin" \
             HOME=/root \
             COREPACK_HOME="$corepack_home" \
-            "$corepack_path" enable --install-directory "$pnpm_shim_dir" pnpm
-          test -L "$pnpm_shim_path"
-          pnpm_shim_real="$(readlink -f "$pnpm_shim_path")"
-          test "$pnpm_shim_real" = "$corepack_dist/pnpm.js"
+            COREPACK_DEFAULT_TO_LATEST=0 \
+            COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+            COREPACK_ENABLE_NETWORK=0 \
+            "$corepack_path" enable --install-directory "$pnpm_shim_dir" pnpm || \
+            fail_phase enable_shim
+          phase enable_shim_ok
+
+          phase validate_shim_start
+          sudo -n test -L "$pnpm_shim_path" || fail_phase validate_shim_type
+          pnpm_shim_real="$(sudo -n readlink -f "$pnpm_shim_path")" || \
+            fail_phase validate_shim_realpath
+          test "$pnpm_shim_real" = "$corepack_dist/pnpm.js" || \
+            fail_phase validate_shim_target
           case "$pnpm_shim_real" in
             /home/runner/* | /tmp/* | /var/tmp/* | "$GITHUB_WORKSPACE"/* | \
               "$builder_source"/* | /var/lib/imtegrale-validated-release/*)
-              echo "BUILDER_PNPM_SHIM_AUTHORITY_INVALID" >&2
-              exit 1
+              fail_phase validate_shim_authority
               ;;
           esac
-          sudo -n chown -R root:root "$tooling_root"
-          sudo -n find "$corepack_home" -type d -exec chmod 0555 {} +
-          sudo -n find "$corepack_home" -type f -exec chmod 0444 {} +
-          sudo -n chmod 0555 "$tooling_root" "$pnpm_shim_dir"
-          test "$(stat -c '%u:%g:%a' "$tooling_root")" = "0:0:555"
-          test "$(stat -c '%u:%g:%a' "$corepack_home")" = "0:0:555"
-          test "$(stat -c '%u:%g:%a' "$pnpm_shim_dir")" = "0:0:555"
-          if find "$corepack_home" ! -user root -print -quit | grep -q .; then
-            echo "BUILDER_COREPACK_OWNER_INVALID" >&2
-            exit 1
-          fi
-          if find "$corepack_home" -perm /022 -print -quit | grep -q .; then
-            echo "BUILDER_COREPACK_MODE_INVALID" >&2
-            exit 1
-          fi
-          if find "$pnpm_shim_dir" -mindepth 1 -maxdepth 1 \
-            ! -type l -print -quit | grep -q .; then
-            echo "BUILDER_PNPM_SHIM_TYPE_INVALID" >&2
-            exit 1
-          fi
-          if find "$pnpm_shim_dir" -type f -links +1 \
-            -print -quit | grep -q .; then
-            echo "BUILDER_PNPM_SHIM_HARDLINK_INVALID" >&2
-            exit 1
-          fi
-          while IFS= read -r shim; do
-            case "$(readlink -f "$shim")" in
-              "$corepack_dist"/*.js) ;;
-              *)
-                echo "BUILDER_COREPACK_SHIM_TARGET_INVALID" >&2
-                exit 1
-                ;;
-            esac
-          done < <(find "$pnpm_shim_dir" -mindepth 1 -maxdepth 1 \
-            -type l -print)
-          pnpm_shim_digest="$(sha256sum "$pnpm_shim_real" | cut -d ' ' -f1)"
-          test ! -w "$corepack_real"
-          test ! -w "$pnpm_shim_real"
-          test ! -w "$corepack_home"
-          test ! -w "$pnpm_shim_dir"
-          sudo -n -u "$builder_name" test ! -w "$corepack_home"
-          sudo -n -u "$builder_name" test ! -w "$pnpm_shim_dir"
-          sudo -n -u "$builder_name" test ! -w "$pnpm_shim_path"
-          echo "builder-name=$builder_name" >> "$GITHUB_OUTPUT"
-          echo "builder-uid=$builder_uid" >> "$GITHUB_OUTPUT"
-          echo "builder-gid=$builder_gid" >> "$GITHUB_OUTPUT"
-          echo "node-bin=$node_bin" >> "$GITHUB_OUTPUT"
-          echo "corepack-path=$corepack_path" >> "$GITHUB_OUTPUT"
-          echo "corepack-real=$corepack_real" >> "$GITHUB_OUTPUT"
-          echo "corepack-digest=$corepack_digest" >> "$GITHUB_OUTPUT"
-          echo "pnpm-shim-path=$pnpm_shim_path" >> "$GITHUB_OUTPUT"
-          echo "pnpm-shim-real=$pnpm_shim_real" >> "$GITHUB_OUTPUT"
-          echo "pnpm-shim-digest=$pnpm_shim_digest" >> "$GITHUB_OUTPUT"
+          pnpm_shim_version="$(sudo -n env -i \
+            PATH="$pnpm_shim_dir:$node_bin:/usr/bin:/bin" \
+            HOME=/root \
+            COREPACK_HOME="$corepack_home" \
+            COREPACK_DEFAULT_TO_LATEST=0 \
+            COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+            COREPACK_ENABLE_NETWORK=0 \
+            "$pnpm_shim_path" --version)" || \
+            fail_phase validate_shim_offline_version
+          test "$pnpm_shim_version" = "11.9.0" || \
+            fail_phase validate_shim_version
+          printf 'M5_COREPACK_SHIM_VERSION=%s\n' "$pnpm_shim_version"
+          phase validate_shim_ok
+
+          phase freeze_tooling_start
+          sudo -n chown -R --no-dereference root:root "$tooling_root" || \
+            fail_phase freeze_tooling_owner
+          sudo -n find "$corepack_home" -type d -exec chmod 0555 {} + || \
+            fail_phase freeze_tooling_directories
+          sudo -n find "$corepack_home" -type f -exec chmod 0444 {} + || \
+            fail_phase freeze_tooling_files
+          sudo -n chmod 0555 "$tooling_root" "$pnpm_shim_dir" || \
+            fail_phase freeze_tooling_roots
+          phase freeze_tooling_ok
+
+          phase validate_tooling_start
+          test "$(stat -c '%u:%g:%a' "$tooling_root")" = "0:0:555" || \
+            fail_phase validate_tooling_root_mode
+          test "$(stat -c '%u:%g:%a' "$corepack_home")" = "0:0:555" || \
+            fail_phase validate_corepack_home_mode
+          test "$(stat -c '%u:%g:%a' "$pnpm_shim_dir")" = "0:0:555" || \
+            fail_phase validate_shim_directory_mode
+          test "$(stat -c '%u:%g' "$pnpm_shim_path")" = "0:0" || \
+            fail_phase validate_shim_owner
+          tooling_non_root="$(find "$tooling_root" ! -user root -print -quit)" || \
+            fail_phase validate_tooling_owner_scan
+          test -z "$tooling_non_root" || fail_phase validate_tooling_owner
+          corepack_non_root="$(find "$corepack_home" ! -user root \
+            -print -quit)" || fail_phase validate_corepack_owner_scan
+          test -z "$corepack_non_root" || fail_phase validate_corepack_owner
+          corepack_writable_mode="$(find "$corepack_home" -perm /022 \
+            -print -quit)" || fail_phase validate_corepack_mode_scan
+          test -z "$corepack_writable_mode" || fail_phase validate_corepack_mode
+          unexpected_shim_type="$(find "$pnpm_shim_dir" -mindepth 1 \
+            -maxdepth 1 ! -type l -print -quit)" || \
+            fail_phase validate_shim_inventory_type_scan
+          test -z "$unexpected_shim_type" || \
+            fail_phase validate_shim_inventory_type
+          unexpected_shim_hardlink="$(find "$pnpm_shim_dir" -type f \
+            -links +1 -print -quit)" || fail_phase validate_shim_hardlink_scan
+          test -z "$unexpected_shim_hardlink" || \
+            fail_phase validate_shim_hardlinks
+          tooling_inventory="$(find "$tooling_root" -mindepth 1 -maxdepth 1 \
+            -printf '%f\n' | LC_ALL=C sort)" || \
+            fail_phase validate_tooling_inventory
+          test "$tooling_inventory" = "$(printf 'bin\ncorepack')" || \
+            fail_phase validate_tooling_inventory
+          shim_inventory="$(find "$pnpm_shim_dir" -mindepth 1 -maxdepth 1 \
+            -printf '%f\n' | LC_ALL=C sort)" || \
+            fail_phase validate_shim_inventory
+          test "$shim_inventory" = "$(printf 'pnpm\npnpx')" || \
+            fail_phase validate_shim_inventory
+          for shim_name in pnpm pnpx; do
+            shim_real="$(readlink -f "$pnpm_shim_dir/$shim_name")" || \
+              fail_phase validate_shim_target
+            test "$shim_real" = "$corepack_dist/$shim_name.js" || \
+              fail_phase validate_shim_target
+          done
+          test "$(sha256sum "$corepack_real" | cut -d ' ' -f1)" = \
+            "$corepack_digest" || fail_phase validate_corepack_digest
+          pnpm_shim_digest="$(sha256sum "$pnpm_shim_real" | cut -d ' ' -f1)" || \
+            fail_phase validate_shim_digest
+          [[ "$pnpm_shim_digest" =~ ^[0-9a-f]{64}$ ]] || \
+            fail_phase validate_shim_digest_format
+          test ! -w "$corepack_home" || \
+            fail_phase validate_corepack_home_runner_mode
+          test ! -w "$pnpm_shim_dir" || \
+            fail_phase validate_shim_directory_runner_mode
+          sudo -n -u "$builder_name" test ! -w "$corepack_home" || \
+            fail_phase validate_corepack_home_builder_probe
+          sudo -n -u "$builder_name" test ! -w "$pnpm_shim_dir" || \
+            fail_phase validate_shim_directory_builder_probe
+          sudo -n -u "$builder_name" test ! -w "$pnpm_shim_path" || \
+            fail_phase validate_shim_builder_probe
+          phase validate_tooling_ok
+
+          {
+            echo "builder-name=$builder_name"
+            echo "builder-uid=$builder_uid"
+            echo "builder-gid=$builder_gid"
+            echo "node-bin=$node_bin"
+            echo "corepack-path=$corepack_path"
+            echo "corepack-real=$corepack_real"
+            echo "corepack-digest=$corepack_digest"
+            echo "pnpm-shim-path=$pnpm_shim_path"
+            echo "pnpm-shim-real=$pnpm_shim_real"
+            echo "pnpm-shim-digest=$pnpm_shim_digest"
+          } >> "$GITHUB_OUTPUT" || fail_phase publish_builder_outputs
+          phase builder_ready
       - name: Build exact release artifacts in isolated authority
         env:
           BUILDER_GID: ${{ steps.builder.outputs.builder-gid }}
@@ -455,6 +553,8 @@ jobs:
             --quiet \
             /bin/bash -ceu '
               test "$(id -u)" = "$BUILDER_UID"
+              test "$(id -g)" = "$BUILDER_GID"
+              test "$(id -G)" = "$BUILDER_GID"
               id
               grep -E "^Cap(Prm|Eff|Bnd):" /proc/self/status
               grep -Eq "^CapPrm:[[:space:]]+0{16}$" /proc/self/status
@@ -483,6 +583,7 @@ jobs:
               test ! -w "$PNPM_SHIM_PATH"
               test ! -w "$(dirname "$PNPM_SHIM_PATH")"
               test "$(readlink -f "$PNPM_SHIM_PATH")" = "$PNPM_SHIM_REAL"
+              test ! -w "$PNPM_SHIM_REAL"
               test "$(sha256sum "$PNPM_SHIM_REAL" | cut -d " " -f1)" = \
                 "$PNPM_SHIM_DIGEST"
               test ! -w "$COREPACK_SYSTEM_REAL"

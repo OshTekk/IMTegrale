@@ -17,6 +17,25 @@ BUILDER_ROOT = "/var/lib/imtegrale-build"
 BUILDER_TOOLING_ROOT = f"{BUILDER_ROOT}/tooling"
 BUILDER_COREPACK_HOME = "/var/lib/imtegrale-build/tooling/corepack"
 BUILDER_SHIM_DIR = "/var/lib/imtegrale-build/tooling/bin"
+COREPACK_PHASES = (
+    "resolve_node_start",
+    "resolve_node_ok",
+    "resolve_corepack_start",
+    "resolve_corepack_ok",
+    "prepare_directories_start",
+    "prepare_directories_ok",
+    "install_pnpm_start",
+    "install_pnpm_ok",
+    "enable_shim_start",
+    "enable_shim_ok",
+    "validate_shim_start",
+    "validate_shim_ok",
+    "freeze_tooling_start",
+    "freeze_tooling_ok",
+    "validate_tooling_start",
+    "validate_tooling_ok",
+    "builder_ready",
+)
 
 
 @dataclass(frozen=True)
@@ -52,6 +71,11 @@ def _assert_isolated_builder_corepack_contract(release: str) -> None:
     preparation = release[builder_start:build_start]
     isolated_build = release[build_start:seal_start]
     builder_authority = release[builder_start:seal_start]
+    unit_start = isolated_build.index("/bin/bash -ceu '")
+    unit_end = isolated_build.index("\n            '\n", unit_start)
+    before_unit = isolated_build[:unit_start]
+    unit_script = isolated_build[unit_start:unit_end]
+    normalized_preparation = " ".join(preparation.replace("\\\n", " ").split())
 
     assert "pnpm/action-setup@" not in release
     assert "cache: pnpm" not in release
@@ -62,18 +86,72 @@ def _assert_isolated_builder_corepack_contract(release: str) -> None:
     assert '--setenv="PATH=$builder_path"' in isolated_build
     assert "/opt/hostedtoolcache/node/22.*/*/bin/node" in preparation
     assert 'corepack_path="$node_bin/corepack"' in preparation
+    assert 'test ! -w "$corepack_real"' not in preparation
+    assert 'test ! -w "$pnpm_shim_real"' not in preparation
+    assert 'sudo -n -u "$builder_name" test ! -w "$corepack_real"' not in preparation
+    assert 'sudo -n -u "$builder_name" test ! -w "$pnpm_shim_real"' not in preparation
+
+    assert "printf 'M5_COREPACK_PHASE=%s\\n' \"$1\"" in preparation
+    assert "printf 'M5_COREPACK_FAILURE=%s\\n' \"$1\" >&2" in preparation
+    phase_positions = []
+    for phase in COREPACK_PHASES:
+        marker = f"phase {phase}"
+        assert preparation.count(marker) == 1
+        phase_positions.append(preparation.index(marker))
+    assert phase_positions == sorted(phase_positions)
+    assert "set -x" not in preparation
+    assert "printenv" not in preparation
+    assert "declare -p" not in preparation
+    assert "export -p" not in preparation
+    assert "env |" not in preparation
+
+    for failure_id in (
+        "resolve_node_command",
+        "resolve_corepack_identity",
+        "resolve_corepack_digest",
+        "prepare_tooling_directories",
+        "install_pnpm",
+        "install_pnpm_offline_validation",
+        "enable_shim",
+        "validate_shim_realpath",
+        "validate_shim_target",
+        "freeze_tooling_owner",
+        "freeze_tooling_directories",
+        "freeze_tooling_files",
+        "validate_tooling_owner",
+        "validate_tooling_inventory",
+        "validate_shim_inventory",
+        "validate_corepack_digest",
+        "validate_shim_digest",
+    ):
+        assert f"fail_phase {failure_id}" in preparation
+    assert (
+        '"$corepack_path" install --global pnpm@11.9.0 || fail_phase install_pnpm' in normalized_preparation
+    )
+    assert (
+        '"$corepack_path" enable --install-directory "$pnpm_shim_dir" pnpm || '
+        "fail_phase enable_shim" in normalized_preparation
+    )
+
     assert 'pnpm_shim_dir="/var/lib/imtegrale-build/tooling/bin"' in preparation
     assert 'pnpm_shim_path="$pnpm_shim_dir/pnpm"' in preparation
     assert 'enable --install-directory "$pnpm_shim_dir" pnpm' in preparation
-    assert 'test -L "$pnpm_shim_path"' in preparation
-    assert 'pnpm_shim_real="$(readlink -f "$pnpm_shim_path")"' in preparation
+    assert 'sudo -n test -L "$pnpm_shim_path"' in preparation
+    assert 'pnpm_shim_real="$(sudo -n readlink -f "$pnpm_shim_path")"' in preparation
     assert 'test "$pnpm_shim_real" = "$corepack_dist/pnpm.js"' in preparation
+    assert 'pnpm_install_version="$(sudo -n env -i' in preparation
+    assert 'test "$pnpm_install_version" = "11.9.0"' in preparation
+    assert 'pnpm_shim_version="$(sudo -n env -i' in preparation
+    assert 'test "$pnpm_shim_version" = "11.9.0"' in preparation
+    assert preparation.count("COREPACK_ENABLE_NETWORK=0") >= 2
     assert "stat -c '%u:%g:%a' \"$pnpm_shim_dir\"" in preparation
     assert '"0:0:555"' in preparation
     assert 'chmod 0555 "$tooling_root" "$pnpm_shim_dir"' in preparation
-    assert 'find "$pnpm_shim_dir" -mindepth 1 -maxdepth 1 \\' in preparation
-    assert "! -type l -print -quit" in preparation
-    assert 'find "$pnpm_shim_dir" -type f -links +1' in preparation
+    assert 'chown -R --no-dereference root:root "$tooling_root"' in preparation
+    assert 'find "$pnpm_shim_dir" -mindepth 1 -maxdepth 1 ! -type l -print -quit' in normalized_preparation
+    assert 'find "$pnpm_shim_dir" -type f -links +1' in normalized_preparation
+    assert 'test "$tooling_inventory" = "$(printf \'bin\\ncorepack\')"' in preparation
+    assert 'test "$shim_inventory" = "$(printf \'pnpm\\npnpx\')"' in preparation
     assert "install --global pnpm@11.9.0" in preparation
     assert "COREPACK_ENABLE_NETWORK=0" in builder_authority
     assert 'builder_path="$pnpm_shim_dir:$node_bin:' in isolated_build
@@ -107,14 +185,40 @@ def _assert_isolated_builder_corepack_contract(release: str) -> None:
     assert "test ! -x /home/runner" in isolated_build
     assert "--property=NoNewPrivileges=true" in isolated_build
     assert "--property=RestrictNamespaces=true" in isolated_build
-    assert 'grep -Eq "^CapPrm:' in isolated_build
-    assert 'grep -Eq "^CapEff:' in isolated_build
-    assert "if sudo -n true" in isolated_build
-    assert "if docker info" in isolated_build
-    assert "if unshare -Ur true" in isolated_build
-    assert 'test ! -w "$COREPACK_SYSTEM_REAL"' in isolated_build
+    assert 'test "$(id -nG "$builder_name")" = "$builder_name"' in preparation
+
+    for builder_control in (
+        'test "$(id -u)" = "$BUILDER_UID"',
+        'test "$(id -g)" = "$BUILDER_GID"',
+        'test "$(id -G)" = "$BUILDER_GID"',
+        'grep -Eq "^CapPrm:[[:space:]]+0{16}$"',
+        'grep -Eq "^CapEff:[[:space:]]+0{16}$"',
+        'grep -Eq "^NoNewPrivs:[[:space:]]+1$"',
+        "test ! -w /opt",
+        "test ! -w /home/runner",
+        "test ! -x /home/runner",
+        "if sudo -n true",
+        "if docker info",
+        "if unshare -Ur true",
+        'test ! -w "$COREPACK_HOME"',
+        'test ! -w "$PNPM_SHIM_PATH"',
+        'test ! -w "$(dirname "$PNPM_SHIM_PATH")"',
+        'test ! -w "$PNPM_SHIM_REAL"',
+        'test ! -w "$COREPACK_SYSTEM_REAL"',
+    ):
+        assert builder_control in unit_script
+    assert 'test ! -w "$COREPACK_SYSTEM_REAL"' not in before_unit
+    assert 'test ! -w "$PNPM_SHIM_REAL"' not in before_unit
+    assert unit_script.count('test ! -w "$COREPACK_SYSTEM_REAL"') == 1
+    assert unit_script.count('test ! -w "$PNPM_SHIM_REAL"') == 1
     assert isolated_build.count('sha256sum "$COREPACK_SYSTEM_REAL"') == 4
     assert isolated_build.count('sha256sum "$PNPM_SHIM_REAL"') == 4
+    build_execution = unit_script.index("python -m venv")
+    build_complete = unit_script.index("cp -R frontend/dist artifacts/frontend")
+    assert unit_script.index('sha256sum "$COREPACK_SYSTEM_REAL"') < build_execution
+    assert unit_script.rindex('sha256sum "$COREPACK_SYSTEM_REAL"') > build_complete
+    assert unit_script.index('sha256sum "$PNPM_SHIM_REAL"') < build_execution
+    assert unit_script.rindex('sha256sum "$PNPM_SHIM_REAL"') > build_complete
 
     after_seal = release[seal_start:]
     assert BUILDER_COREPACK_HOME not in after_seal
@@ -251,6 +355,56 @@ def test_isolated_builder_corepack_contract_kills_path_mutations(
     with pytest.raises(AssertionError):
         _assert_isolated_builder_corepack_contract(mutation_copy.read_text(encoding="utf-8"))
     mutation_copy.unlink()
+    assert not mutation_copy.exists()
+
+
+@pytest.mark.parametrize(
+    "replacements",
+    (
+        (
+            (
+                "          phase validate_tooling_ok",
+                '          test ! -w "$corepack_real"\n          phase validate_tooling_ok',
+            ),
+        ),
+        (('              test ! -w "$COREPACK_SYSTEM_REAL"\n', ""),),
+        (("            --property=ProtectSystem=strict \\\n", ""),),
+        (("          phase install_pnpm_ok\n", ""),),
+        (("          phase enable_shim_ok\n", ""),),
+        (("            fail_phase install_pnpm\n", "            true\n"),),
+        (
+            ('              test ! -w "$COREPACK_SYSTEM_REAL"\n', ""),
+            (
+                "          sudo -n systemd-run \\\n",
+                '          test ! -w "$COREPACK_SYSTEM_REAL"\n          sudo -n systemd-run \\\n',
+            ),
+        ),
+    ),
+    ids=(
+        "runner-corepack-nonwrite",
+        "builder-corepack-nonwrite-removed",
+        "protect-system-removed",
+        "install-marker-removed",
+        "enable-marker-removed",
+        "corepack-failure-ignored",
+        "builder-check-moved-outside-unit",
+    ),
+)
+def test_corepack_authority_and_phase_contract_kills_mutations(
+    replacements: tuple[tuple[str, str], ...],
+    tmp_path: Path,
+) -> None:
+    mutated_release = _release_job()
+    for original, mutation in replacements:
+        assert mutated_release.count(original) >= 1
+        mutated_release = mutated_release.replace(original, mutation)
+
+    mutation_copy = tmp_path / "release-artifact-authority-mutated.yml"
+    mutation_copy.write_text(mutated_release, encoding="utf-8")
+    with pytest.raises(AssertionError):
+        _assert_isolated_builder_corepack_contract(mutation_copy.read_text(encoding="utf-8"))
+    mutation_copy.unlink()
+    assert not mutation_copy.exists()
 
 
 def test_frontend_build_script_remains_a_single_unchanged_lifecycle() -> None:
