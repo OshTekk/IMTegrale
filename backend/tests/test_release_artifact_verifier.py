@@ -374,11 +374,15 @@ def test_ci_roundtrip_downloads_without_rebuilding_or_repairing() -> None:
     roundtrip = workflow.split("\n  release-artifact-roundtrip:\n", maxsplit=1)[1]
 
     assert workflow.count("include-hidden-files: true") == 1
-    assert "python scripts/verify_release_artifact.py artifacts" in workflow
+    assert (
+        "python scripts/verify_release_artifact.py\n"
+        "          /var/lib/imtegrale-validated-release/artifact"
+    ) in workflow
     assert "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1" in roundtrip
-    assert "name: imtegrale-${{ github.sha }}" in roundtrip
+    assert "name: imtegrale-${{ github.sha }}-${{ needs.release-artifact.outputs.seal-digest }}" in roundtrip
     assert "digest-mismatch: error" in roundtrip
     assert "python scripts/verify_release_artifact.py downloaded-artifact" in roundtrip
+    assert "--expected-seal-digest \"$SEAL_DIGEST\"" in roundtrip
     assert "downloaded-artifact/frontend/.vite/manifest.json" in roundtrip
     assert "python scripts/smoke_release.py" in roundtrip
     for forbidden in ("pnpm build", "pip wheel", "cp ", "manifest.json artifacts"):

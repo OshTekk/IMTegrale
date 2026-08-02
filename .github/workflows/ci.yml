@@ -168,6 +168,8 @@ jobs:
     needs: [backend, postgres-backend, frontend]
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    outputs:
+      seal-digest: ${{ steps.seal.outputs.seal-digest }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
@@ -185,36 +187,278 @@ jobs:
           node-version: "22"
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
-      - name: Install production locks
-        run: |
-          python -m pip install --disable-pip-version-check -r deploy/requirements.lock
-          pnpm --dir frontend install --frozen-lockfile
-      - name: Build exact release artifacts
-        run: |
-          mkdir -p artifacts/wheel
-          python -m pip wheel --no-deps --wheel-dir artifacts/wheel .
-          pnpm --dir frontend build
-          python scripts/generate_sbom.py --output artifacts/imtegrale.cdx.json
-      - name: Audit manifest and smoke-test built artifacts
+      - name: Install root-owned release seal helper
         shell: bash
         run: |
-          mapfile -t wheels < <(find artifacts/wheel -maxdepth 1 -type f -name '*.whl' -print)
+          set -euo pipefail
+          test "$(id -u)" -ne 0
+          id
+          grep -E '^Cap(Prm|Eff|Bnd):' /proc/self/status
+          sudo -n -l
+          sudo -n true
+          helper_digest="$(sha256sum scripts/seal_release_artifact.py | cut -d ' ' -f1)"
+          sudo -n install -d -o root -g root -m 0755 /usr/local/libexec
+          sudo -n install -o root -g root -m 0500 \
+            scripts/seal_release_artifact.py \
+            /usr/local/libexec/imtegrale-seal-release
+          installed_digest="$(sudo -n sha256sum \
+            /usr/local/libexec/imtegrale-seal-release | cut -d ' ' -f1)"
+          test "$helper_digest" = "$installed_digest"
+          test "$(sudo -n stat -c '%u:%g:%a' \
+            /usr/local/libexec/imtegrale-seal-release)" = "0:0:500"
+      - name: Create separated release builder
+        id: builder
+        shell: bash
+        run: |
+          set -euo pipefail
+          builder_name="imtegrale-build"
+          sudo -n useradd \
+            --system \
+            --user-group \
+            --create-home \
+            --home-dir /var/lib/imtegrale-build \
+            --shell /usr/sbin/nologin \
+            "$builder_name"
+          builder_uid="$(id -u "$builder_name")"
+          builder_gid="$(id -g "$builder_name")"
+          test "$builder_uid" != "$(id -u)"
+          test "$(id -nG "$builder_name")" = "$builder_name"
+          if sudo -n -u "$builder_name" -H sudo -n true 2>/dev/null; then
+            echo "BUILDER_SUDO_AVAILABLE" >&2
+            exit 1
+          fi
+          if sudo -n -u "$builder_name" -H docker info >/dev/null 2>&1; then
+            echo "BUILDER_DOCKER_AVAILABLE" >&2
+            exit 1
+          fi
+          sudo -n install -d \
+            -o "$builder_name" \
+            -g "$builder_name" \
+            -m 0700 \
+            /var/lib/imtegrale-build/source
+          sudo -n cp -a --no-preserve=ownership \
+            "$GITHUB_WORKSPACE/." \
+            /var/lib/imtegrale-build/source/
+          sudo -n chown -R "$builder_name:$builder_name" /var/lib/imtegrale-build
+          sudo -n chmod 0700 /var/lib/imtegrale-build
+          echo "builder-name=$builder_name" >> "$GITHUB_OUTPUT"
+          echo "builder-uid=$builder_uid" >> "$GITHUB_OUTPUT"
+          echo "builder-gid=$builder_gid" >> "$GITHUB_OUTPUT"
+      - name: Build exact release artifacts in isolated authority
+        env:
+          BUILDER_GID: ${{ steps.builder.outputs.builder-gid }}
+          BUILDER_UID: ${{ steps.builder.outputs.builder-uid }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -n systemd-run \
+            --unit=imtegrale-release-build \
+            --service-type=exec \
+            --uid="$BUILDER_UID" \
+            --gid="$BUILDER_GID" \
+            --working-directory=/var/lib/imtegrale-build/source \
+            --setenv="PATH=$PATH" \
+            --setenv=HOME=/var/lib/imtegrale-build \
+            --setenv=XDG_CACHE_HOME=/var/lib/imtegrale-build/cache \
+            --setenv=CI=true \
+            --setenv="BUILDER_UID=$BUILDER_UID" \
+            --property=ProtectSystem=strict \
+            --property=ProtectHome=read-only \
+            --property=ReadWritePaths=/var/lib/imtegrale-build \
+            --property=PrivateTmp=true \
+            --property=PrivateDevices=true \
+            --property=ProtectProc=invisible \
+            --property=ProcSubset=pid \
+            --property=NoNewPrivileges=true \
+            --property=RestrictSUIDSGID=true \
+            --property=RestrictNamespaces=true \
+            --property=ProtectKernelTunables=true \
+            --property=ProtectKernelModules=true \
+            --property=ProtectKernelLogs=true \
+            --property=ProtectControlGroups=true \
+            --property=ProtectClock=true \
+            --property=LockPersonality=true \
+            --property=KeyringMode=private \
+            --property=RemoveIPC=true \
+            --property=RestrictRealtime=true \
+            --property=SystemCallArchitectures=native \
+            --property="RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6" \
+            --property=KillMode=control-group \
+            --property=TimeoutStopSec=5s \
+            --property=RuntimeMaxSec=15min \
+            --property=UMask=0077 \
+            --wait \
+            --pipe \
+            --collect \
+            --quiet \
+            /bin/bash -ceu '
+              test "$(id -u)" = "$BUILDER_UID"
+              id
+              grep -E "^Cap(Prm|Eff|Bnd):" /proc/self/status
+              grep -Eq "^CapPrm:[[:space:]]+0{16}$" /proc/self/status
+              grep -Eq "^CapEff:[[:space:]]+0{16}$" /proc/self/status
+              grep -Eq "^NoNewPrivs:[[:space:]]+1$" /proc/self/status
+              test ! -w /opt
+              test ! -w /usr/share
+              test ! -w /home/runner
+              test -w /var/lib/imtegrale-build
+              if sudo -n true 2>/dev/null; then exit 91; fi
+              if docker info >/dev/null 2>&1; then exit 92; fi
+              if unshare -Ur true 2>/dev/null; then exit 93; fi
+              python -m venv .venv
+              .venv/bin/python -m pip install --disable-pip-version-check \
+                -r deploy/requirements.lock
+              pnpm --dir frontend install --frozen-lockfile
+              mkdir -p artifacts/wheel
+              .venv/bin/python -m pip wheel --no-deps --wheel-dir artifacts/wheel .
+              pnpm --dir frontend build
+              .venv/bin/python scripts/generate_sbom.py \
+                --output artifacts/imtegrale.cdx.json
+              cp -R frontend/dist artifacts/frontend
+            '
+          if pgrep -u "$BUILDER_UID" >/dev/null; then
+            echo "BUILDER_PROCESS_REMAINS" >&2
+            exit 1
+          fi
+          if find /var/lib/imtegrale-build/source/artifacts \
+            ! -user "$BUILDER_UID" -print -quit | grep -q .; then
+            echo "BUILDER_OUTPUT_OWNER_INVALID" >&2
+            exit 1
+          fi
+      - name: Seal release artifact from separated builder
+        id: seal
+        env:
+          BUILDER_NAME: ${{ steps.builder.outputs.builder-name }}
+          BUILDER_UID: ${{ steps.builder.outputs.builder-uid }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          seal_digest="$(sudo -n /usr/local/libexec/imtegrale-seal-release \
+            --source /var/lib/imtegrale-build/source/artifacts \
+            --destination /var/lib/imtegrale-validated-release/artifact \
+            --source-commit "$GITHUB_SHA" \
+            --builder-uid "$BUILDER_UID")"
+          [[ "$seal_digest" =~ ^[0-9a-f]{64}$ ]]
+          test ! -w /var/lib/imtegrale-validated-release
+          test ! -w /var/lib/imtegrale-validated-release/artifact
+          if sudo -n -u "$BUILDER_NAME" -H sudo -n true 2>/dev/null; then
+            echo "BUILDER_SUDO_AVAILABLE_AFTER_SEAL" >&2
+            exit 1
+          fi
+          if sudo -n -u "$BUILDER_NAME" -H docker info >/dev/null 2>&1; then
+            echo "BUILDER_DOCKER_AVAILABLE_AFTER_SEAL" >&2
+            exit 1
+          fi
+          sudo -n true
+          echo "uploader-authority: runner passwordless-sudo=true trusted=true"
+          echo "seal-digest=$seal_digest" >> "$GITHUB_OUTPUT"
+      - name: Probe sealed release against build-UID mutations
+        env:
+          BUILDER_NAME: ${{ steps.builder.outputs.builder-name }}
+          BUILDER_GID: ${{ steps.builder.outputs.builder-gid }}
+          BUILDER_UID: ${{ steps.builder.outputs.builder-uid }}
+          SEAL_DIGEST: ${{ steps.seal.outputs.seal-digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python_path="$(command -v python)"
+          sudo -n -u "$BUILDER_NAME" -H \
+            env PYTHONDONTWRITEBYTECODE=1 \
+            "$python_path" "$GITHUB_WORKSPACE/scripts/probe_release_artifact_readonly.py" \
+            /var/lib/imtegrale-validated-release/artifact \
+            --expected-seal-digest "$SEAL_DIGEST" \
+            --expected-source-commit "$GITHUB_SHA"
+          if pgrep -u "$BUILDER_UID" >/dev/null; then
+            echo "BUILDER_PROCESS_REMAINS_AFTER_PROBE" >&2
+            exit 1
+          fi
+      - name: Audit sealed release artifact
+        env:
+          SEALED_ROOT: /var/lib/imtegrale-validated-release/artifact
+          SEAL_DIGEST: ${{ steps.seal.outputs.seal-digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t wheels < <(find "$SEALED_ROOT/wheel" -maxdepth 1 -type f -name '*.whl' -print)
           test "${#wheels[@]}" -eq 1
-          python scripts/check_content_boundary.py --wheel "${wheels[0]}" --dist frontend/dist
+          python scripts/check_content_boundary.py \
+            --wheel "${wheels[0]}" \
+            --dist "$SEALED_ROOT/frontend"
           python scripts/audit_release.py \
             --wheel "${wheels[0]}" \
-            --dist frontend/dist \
-            --sbom artifacts/imtegrale.cdx.json \
-            --output artifacts/release-manifest.json
-          python scripts/smoke_release.py --wheel "${wheels[0]}" --dist frontend/dist
-          cp -R frontend/dist artifacts/frontend
-          python scripts/verify_release_artifact.py artifacts
-          sha256sum "${wheels[0]}" artifacts/imtegrale.cdx.json artifacts/release-manifest.json
+            --dist "$SEALED_ROOT/frontend" \
+            --sbom "$SEALED_ROOT/imtegrale.cdx.json" \
+            --check-manifest "$SEALED_ROOT/release-manifest.json" \
+            --expected-seal-digest "$SEAL_DIGEST" \
+            --expected-source-commit "$GITHUB_SHA" \
+            --require-sealed
+          mapfile -d '' artifact_files < <(find "$SEALED_ROOT" -type f -print0)
+          python scripts/check_secrets.py \
+            --repo-root "$SEALED_ROOT" \
+            "${artifact_files[@]}"
+          test "$(sha256sum "$SEALED_ROOT/release-manifest.json" | cut -d ' ' -f1)" = \
+            "$SEAL_DIGEST"
+      - name: Smoke-test sealed release under non-privileged build UID
+        env:
+          BUILDER_GID: ${{ steps.builder.outputs.builder-gid }}
+          BUILDER_UID: ${{ steps.builder.outputs.builder-uid }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          smoke_python="/var/lib/imtegrale-build/source/.venv/bin/python"
+          mapfile -t wheels < <(find \
+            /var/lib/imtegrale-validated-release/artifact/wheel \
+            -maxdepth 1 -type f -name '*.whl' -print)
+          test "${#wheels[@]}" -eq 1
+          sudo -n systemd-run \
+            --unit=imtegrale-release-smoke \
+            --service-type=exec \
+            --uid="$BUILDER_UID" \
+            --gid="$BUILDER_GID" \
+            --working-directory="$GITHUB_WORKSPACE" \
+            --setenv="PATH=$PATH" \
+            --setenv=HOME=/var/lib/imtegrale-build \
+            --setenv=PYTHONDONTWRITEBYTECODE=1 \
+            --property=ProtectSystem=strict \
+            --property=ProtectHome=read-only \
+            --property=PrivateTmp=true \
+            --property=PrivateNetwork=true \
+            --property=PrivateDevices=true \
+            --property=ProtectProc=invisible \
+            --property=ProcSubset=pid \
+            --property=NoNewPrivileges=true \
+            --property=RestrictSUIDSGID=true \
+            --property=RestrictNamespaces=true \
+            --property=ProtectControlGroups=true \
+            --property=KillMode=control-group \
+            --property=TimeoutStopSec=5s \
+            --property=RuntimeMaxSec=2min \
+            --wait \
+            --pipe \
+            --collect \
+            --quiet \
+            "$smoke_python" scripts/smoke_release.py \
+            --wheel "${wheels[0]}" \
+            --dist /var/lib/imtegrale-validated-release/artifact/frontend
+          if pgrep -u "$BUILDER_UID" >/dev/null; then
+            echo "BUILDER_PROCESS_REMAINS_AFTER_SMOKE" >&2
+            exit 1
+          fi
+      - name: Verify seal immediately before upload
+        env:
+          SEAL_DIGEST: ${{ steps.seal.outputs.seal-digest }}
+        run: >-
+          python scripts/verify_release_artifact.py
+          /var/lib/imtegrale-validated-release/artifact
+          --expected-seal-digest "$SEAL_DIGEST"
+          --expected-source-commit "$GITHUB_SHA"
+          --require-sealed
       - name: Retain audited release bundle
+        id: upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: imtegrale-${{ github.sha }}
-          path: artifacts/
+          name: imtegrale-${{ github.sha }}-${{ steps.seal.outputs.seal-digest }}
+          path: /var/lib/imtegrale-validated-release/artifact/
           if-no-files-found: error
           retention-days: 30
           include-hidden-files: true
@@ -236,14 +480,22 @@ jobs:
       - name: Download the exact uploaded release bundle
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: imtegrale-${{ github.sha }}
+          name: imtegrale-${{ github.sha }}-${{ needs.release-artifact.outputs.seal-digest }}
           path: downloaded-artifact
           digest-mismatch: error
       - name: Verify the downloaded release bundle
+        env:
+          SEAL_DIGEST: ${{ needs.release-artifact.outputs.seal-digest }}
         run: |
           test -f downloaded-artifact/frontend/.vite/manifest.json
-          python scripts/verify_release_artifact.py downloaded-artifact
+          test "$(sha256sum downloaded-artifact/release-manifest.json | cut -d ' ' -f1)" = \
+            "$SEAL_DIGEST"
+          python scripts/verify_release_artifact.py downloaded-artifact \
+            --expected-seal-digest "$SEAL_DIGEST" \
+            --expected-source-commit "$GITHUB_SHA"
       - name: Re-run release boundaries on the download
+        env:
+          SEAL_DIGEST: ${{ needs.release-artifact.outputs.seal-digest }}
         shell: bash
         run: |
           mapfile -t wheels < <(find downloaded-artifact/wheel -maxdepth 1 -type f -name '*.whl' -print)
@@ -255,6 +507,13 @@ jobs:
           python scripts/check_secrets.py \
             --repo-root downloaded-artifact \
             "${artifact_files[@]}"
+          python scripts/audit_release.py \
+            --wheel "${wheels[0]}" \
+            --dist downloaded-artifact/frontend \
+            --sbom downloaded-artifact/imtegrale.cdx.json \
+            --check-manifest downloaded-artifact/release-manifest.json \
+            --expected-seal-digest "$SEAL_DIGEST" \
+            --expected-source-commit "$GITHUB_SHA"
       - name: Smoke-test the downloaded release bundle
         shell: bash
         run: |
