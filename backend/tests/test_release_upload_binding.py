@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -15,6 +17,21 @@ BUILDER_ROOT = "/var/lib/imtegrale-build"
 BUILDER_TOOLING_ROOT = f"{BUILDER_ROOT}/tooling"
 BUILDER_COREPACK_HOME = "/var/lib/imtegrale-build/tooling/corepack"
 BUILDER_SHIM_DIR = "/var/lib/imtegrale-build/tooling/bin"
+
+
+@dataclass(frozen=True)
+class _SyntheticPnpmHarness:
+    root: Path
+    shim_dir: Path
+    system_bin: Path
+    project: Path
+    package_path: Path
+    package_bytes: bytes
+    invocation_log: Path
+    pnpm_target: Path
+    pnpm_shim: Path
+    corepack: Path
+    env: dict[str, str]
 
 
 def _release_job() -> str:
@@ -246,22 +263,32 @@ def test_frontend_build_script_remains_a_single_unchanged_lifecycle() -> None:
     assert "pnpm --dir frontend check:bundle" not in release
 
 
-def test_dedicated_shim_supports_nested_pnpm_lifecycle_without_global_pnpm(
-    tmp_path: Path,
-) -> None:
-    system_bin = tmp_path / "opt/hostedtoolcache/node/22.test/x64/bin"
-    corepack_dist = tmp_path / "opt/hostedtoolcache/node/22.test/x64/corepack/dist"
-    shim_dir = tmp_path / "var/lib/imtegrale-build/tooling/bin"
-    project = tmp_path / "project/frontend"
-    invocation_log = tmp_path / "pnpm-invocations.log"
-    for directory in (system_bin, corepack_dist, shim_dir, project):
+def _create_synthetic_pnpm_harness(tmp_path: Path) -> _SyntheticPnpmHarness:
+    root = tmp_path / "isolated-pnpm"
+    home = root / "home"
+    corepack_home = root / "tooling/corepack"
+    shim_dir = root / "tooling/bin"
+    system_bin = root / "system/node/bin"
+    corepack_dist = root / "system/node/lib/node_modules/corepack/dist"
+    project = root / "project"
+    invocation_log = root / "pnpm-invocations.log"
+    for directory in (
+        home,
+        corepack_home,
+        shim_dir,
+        system_bin,
+        corepack_dist,
+        project,
+    ):
         directory.mkdir(parents=True, exist_ok=True)
 
     package = {
         "scripts": {"inner": "pnpm --version", "build": "pnpm inner"},
         "packageManager": "pnpm@11.9.0",
     }
-    (project / "package.json").write_text(json.dumps(package), encoding="utf-8")
+    package_path = project / "package.json"
+    package_bytes = json.dumps(package).encode()
+    package_path.write_bytes(package_bytes)
 
     pnpm_target = corepack_dist / "pnpm"
     pnpm_target.write_text(
@@ -276,9 +303,6 @@ def test_dedicated_shim_supports_nested_pnpm_lifecycle_without_global_pnpm(
         "    stream.write(sys.argv[0] + '\\n')\n"
         "args = sys.argv[1:]\n"
         "cwd = Path.cwd()\n"
-        "if args[:1] == ['--dir']:\n"
-        "    cwd /= args[1]\n"
-        "    args = args[2:]\n"
         "if args == ['--version']:\n"
         "    print('11.9.0')\n"
         "    raise SystemExit(0)\n"
@@ -298,50 +322,210 @@ def test_dedicated_shim_supports_nested_pnpm_lifecycle_without_global_pnpm(
     )
     corepack.chmod(0o555)
 
-    path = f"{shim_dir}:{system_bin}:/usr/bin:/bin"
     env = {
-        "HOME": str(tmp_path / "var/lib/imtegrale-build"),
-        "PATH": path,
+        "HOME": str(home),
+        "COREPACK_HOME": str(corepack_home),
+        "COREPACK_ENABLE_NETWORK": "0",
+        "PATH": os.pathsep.join((str(shim_dir), str(system_bin))),
         "PNPM_INVOCATION_LOG": str(invocation_log),
         "PNPM_SHIM_TARGET": str(pnpm_target),
     }
+    return _SyntheticPnpmHarness(
+        root=root,
+        shim_dir=shim_dir,
+        system_bin=system_bin,
+        project=project,
+        package_path=package_path,
+        package_bytes=package_bytes,
+        invocation_log=invocation_log,
+        pnpm_target=pnpm_target,
+        pnpm_shim=pnpm_shim,
+        corepack=corepack,
+        env=env,
+    )
+
+
+def _synthetic_pnpm_configuration(
+    harness: _SyntheticPnpmHarness,
+) -> dict[str, object]:
+    return {"command": "pnpm build", "environment": dict(harness.env)}
+
+
+def _assert_synthetic_pnpm_environment_contract(
+    configuration: dict[str, object],
+    harness: _SyntheticPnpmHarness,
+) -> None:
+    environment = configuration["environment"]
+    assert isinstance(environment, dict)
+    assert configuration["command"] == "pnpm build"
+    assert set(environment) == {
+        "HOME",
+        "COREPACK_HOME",
+        "COREPACK_ENABLE_NETWORK",
+        "PATH",
+        "PNPM_INVOCATION_LOG",
+        "PNPM_SHIM_TARGET",
+    }
+    assert "PNPM_HOME" not in environment
+    assert environment["COREPACK_ENABLE_NETWORK"] == "0"
+    assert environment["HOME"] == str(harness.root / "home")
+    assert environment["COREPACK_HOME"] == str(harness.root / "tooling/corepack")
+    assert environment["PNPM_INVOCATION_LOG"] == str(harness.invocation_log)
+    assert environment["PNPM_SHIM_TARGET"] == str(harness.pnpm_target)
+    assert environment["PATH"].split(os.pathsep) == [
+        str(harness.shim_dir),
+        str(harness.system_bin),
+    ]
+    assert all("/home/runner" not in value for value in environment.values())
+    for variable in (
+        "HOME",
+        "COREPACK_HOME",
+        "PNPM_INVOCATION_LOG",
+        "PNPM_SHIM_TARGET",
+    ):
+        assert Path(environment[variable]).is_relative_to(harness.root)
+    for path_entry in environment["PATH"].split(os.pathsep):
+        assert Path(path_entry).is_relative_to(harness.root)
+
+
+def test_dedicated_shim_supports_nested_pnpm_lifecycle_without_global_pnpm(
+    tmp_path: Path,
+) -> None:
+    harness = _create_synthetic_pnpm_harness(tmp_path)
+    configuration = _synthetic_pnpm_configuration(harness)
+    _assert_synthetic_pnpm_environment_contract(configuration, harness)
+
+    path_entries = [Path(entry) for entry in harness.env["PATH"].split(os.pathsep)]
+    pnpm_candidates = [entry / "pnpm" for entry in path_entries if (entry / "pnpm").exists()]
+    assert pnpm_candidates == [harness.pnpm_shim]
     resolved = subprocess.run(
         ["/bin/sh", "-ceu", "command -v pnpm"],
-        env=env,
+        env=harness.env,
         check=True,
         capture_output=True,
         text=True,
     )
-    assert resolved.stdout.strip() == str(pnpm_shim)
-    assert "PNPM_HOME" not in env
+    assert resolved.stdout.strip() == str(harness.pnpm_shim)
 
     direct = subprocess.run(
-        [str(pnpm_shim), "--version"],
-        env=env,
+        [str(harness.pnpm_shim), "--version"],
+        env=harness.env,
         check=True,
         capture_output=True,
         text=True,
     )
     explicit = subprocess.run(
-        [str(corepack), "pnpm", "--version"],
-        env=env,
+        [str(harness.corepack), "pnpm", "--version"],
+        env=harness.env,
         check=True,
         capture_output=True,
         text=True,
     )
     nested = subprocess.run(
-        ["/bin/sh", "-ceu", "test ! -x /home/runner; pnpm build"],
-        cwd=project,
-        env=env,
+        ["/bin/sh", "-ceu", str(configuration["command"])],
+        cwd=harness.project,
+        env=harness.env,
         check=True,
         capture_output=True,
         text=True,
     )
 
-    assert direct.stdout.strip() == "11.9.0"
-    assert explicit.stdout.strip() == "11.9.0"
-    assert nested.stdout.strip() == "11.9.0"
-    assert len(invocation_log.read_text(encoding="utf-8").splitlines()) == 5
+    assert direct.stdout == "11.9.0\n"
+    assert direct.stderr == ""
+    assert explicit.stdout == "11.9.0\n"
+    assert explicit.stderr == ""
+    assert nested.stdout == "11.9.0\n"
+    assert nested.stderr == ""
+    assert len(harness.invocation_log.read_text(encoding="utf-8").splitlines()) == 5
+    assert harness.package_path.read_bytes() == harness.package_bytes
+    assert [path.name for path in harness.project.iterdir()] == ["package.json"]
+
+
+def test_nested_pnpm_lifecycle_fails_when_shim_directory_is_absent_from_path(
+    tmp_path: Path,
+) -> None:
+    harness = _create_synthetic_pnpm_harness(tmp_path)
+    env_without_shim = dict(harness.env, PATH=str(harness.system_bin))
+
+    with pytest.raises(subprocess.CalledProcessError):
+        subprocess.run(
+            ["/bin/sh", "-ceu", "pnpm build"],
+            cwd=harness.project,
+            env=env_without_shim,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+
+def test_nested_pnpm_lifecycle_fails_when_shim_is_absent(tmp_path: Path) -> None:
+    harness = _create_synthetic_pnpm_harness(tmp_path)
+    harness.pnpm_shim.unlink()
+
+    with pytest.raises(subprocess.CalledProcessError):
+        subprocess.run(
+            ["/bin/sh", "-ceu", "pnpm build"],
+            cwd=harness.project,
+            env=harness.env,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+
+def test_nested_bare_pnpm_fails_when_only_outer_shim_is_addressable(
+    tmp_path: Path,
+) -> None:
+    harness = _create_synthetic_pnpm_harness(tmp_path)
+    env_without_shim = dict(harness.env, PATH=str(harness.system_bin))
+
+    with pytest.raises(subprocess.CalledProcessError):
+        subprocess.run(
+            [str(harness.pnpm_shim), "build"],
+            cwd=harness.project,
+            env=env_without_shim,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+
+@pytest.mark.parametrize(
+    "mutation_id",
+    (
+        "runner-home-traversal-probe",
+        "shim-removed-from-path",
+        "pnpm-home-variable",
+        "runner-home-pnpm",
+    ),
+)
+def test_synthetic_pnpm_contract_kills_host_environment_mutations(
+    mutation_id: str,
+    tmp_path: Path,
+) -> None:
+    harness = _create_synthetic_pnpm_harness(tmp_path)
+    configuration = _synthetic_pnpm_configuration(harness)
+    environment = configuration["environment"]
+    assert isinstance(environment, dict)
+
+    if mutation_id == "runner-home-traversal-probe":
+        configuration["command"] = "test ! -x /home/runner; pnpm build"
+    elif mutation_id == "shim-removed-from-path":
+        environment["PATH"] = str(harness.system_bin)
+    elif mutation_id == "pnpm-home-variable":
+        environment["PNPM_HOME"] = "/home/runner/setup-pnpm"
+    else:
+        environment["PATH"] = os.pathsep.join(
+            ("/home/runner/setup-pnpm", str(harness.shim_dir), str(harness.system_bin))
+        )
+
+    mutation_copy = tmp_path / f"synthetic-pnpm-{mutation_id}.json"
+    mutation_copy.write_text(json.dumps(configuration), encoding="utf-8")
+    mutated_configuration = json.loads(mutation_copy.read_text(encoding="utf-8"))
+    with pytest.raises(AssertionError):
+        _assert_synthetic_pnpm_environment_contract(mutated_configuration, harness)
+    mutation_copy.unlink()
+    assert not mutation_copy.exists()
 
 
 def test_seal_is_verified_immediately_before_upload() -> None:
