@@ -178,15 +178,9 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
-        with:
-          version: 11.9.0
-          run_install: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "22"
-          cache: pnpm
-          cache-dependency-path: frontend/pnpm-lock.yaml
       - name: Install root-owned release seal helper
         shell: bash
         run: |
@@ -236,6 +230,11 @@ jobs:
             -g "$builder_name" \
             -m 0700 \
             /var/lib/imtegrale-build/source
+          sudo -n install -d \
+            -o "$builder_name" \
+            -g "$builder_name" \
+            -m 0700 \
+            /var/lib/imtegrale-build/tooling/corepack
           sudo -n cp -a --no-preserve=ownership \
             "$GITHUB_WORKSPACE/." \
             /var/lib/imtegrale-build/source/
@@ -251,19 +250,47 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          node_path="$(readlink -f "$(command -v node)")"
+          case "$node_path" in
+            /opt/hostedtoolcache/node/22.*/*/bin/node) ;;
+            *)
+              echo "BUILDER_NODE_PATH_INVALID" >&2
+              exit 1
+              ;;
+          esac
+          node_bin="$(dirname "$node_path")"
+          corepack_path="$node_bin/corepack"
+          test -x "$corepack_path"
+          test "$(readlink -f "$(command -v corepack)")" = \
+            "$(readlink -f "$corepack_path")"
+          corepack_real="$(readlink -f "$corepack_path")"
+          corepack_digest="$(sha256sum "$corepack_real" | cut -d ' ' -f1)"
+          builder_path="$node_bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+          case "$builder_path" in
+            *home/runner* | *setup-pnpm* | *PNPM_HOME*)
+              echo "BUILDER_PATH_AUTHORITY_INVALID" >&2
+              exit 1
+              ;;
+          esac
           sudo -n systemd-run \
             --unit=imtegrale-release-build \
             --service-type=exec \
             --uid="$BUILDER_UID" \
             --gid="$BUILDER_GID" \
             --working-directory=/var/lib/imtegrale-build/source \
-            --setenv="PATH=$PATH" \
+            --setenv="PATH=$builder_path" \
             --setenv=HOME=/var/lib/imtegrale-build \
             --setenv=XDG_CACHE_HOME=/var/lib/imtegrale-build/cache \
+            --setenv=COREPACK_HOME=/var/lib/imtegrale-build/tooling/corepack \
+            --setenv="COREPACK_SYSTEM_PATH=$corepack_path" \
+            --setenv="COREPACK_SYSTEM_REAL=$corepack_real" \
+            --setenv="COREPACK_SYSTEM_DIGEST=$corepack_digest" \
             --setenv=CI=true \
             --setenv="BUILDER_UID=$BUILDER_UID" \
+            --setenv="BUILDER_GID=$BUILDER_GID" \
             --property=ProtectSystem=strict \
             --property=ProtectHome=read-only \
+            --property=InaccessiblePaths=/home/runner \
             --property=ReadWritePaths=/var/lib/imtegrale-build \
             --property=PrivateTmp=true \
             --property=PrivateDevices=true \
@@ -301,21 +328,36 @@ jobs:
               test ! -w /opt
               test ! -w /usr/share
               test ! -w /home/runner
+              test ! -x /home/runner
               test -w /var/lib/imtegrale-build
               if sudo -n true 2>/dev/null; then exit 91; fi
               if docker info >/dev/null 2>&1; then exit 92; fi
               if unshare -Ur true 2>/dev/null; then exit 93; fi
+              test "$COREPACK_HOME" = \
+                /var/lib/imtegrale-build/tooling/corepack
+              test "$(stat -c "%u:%g:%a" "$COREPACK_HOME")" = \
+                "$BUILDER_UID:$BUILDER_GID:700"
+              test "$(command -v corepack)" = "$COREPACK_SYSTEM_PATH"
+              test ! -w "$COREPACK_SYSTEM_REAL"
+              test "$(sha256sum "$COREPACK_SYSTEM_REAL" | cut -d " " -f1)" = \
+                "$COREPACK_SYSTEM_DIGEST"
+              corepack install --global pnpm@11.9.0
+              test "$(corepack pnpm --version)" = "11.9.0"
               python -m venv .venv
               .venv/bin/python -m pip install --disable-pip-version-check \
                 -r deploy/requirements.lock
-              pnpm --dir frontend install --frozen-lockfile
+              corepack pnpm --dir frontend install --frozen-lockfile
               mkdir -p artifacts/wheel
               .venv/bin/python -m pip wheel --no-deps --wheel-dir artifacts/wheel .
-              pnpm --dir frontend build
+              corepack pnpm --dir frontend build
               .venv/bin/python scripts/generate_sbom.py \
                 --output artifacts/imtegrale.cdx.json
               cp -R frontend/dist artifacts/frontend
+              test "$(sha256sum "$COREPACK_SYSTEM_REAL" | cut -d " " -f1)" = \
+                "$COREPACK_SYSTEM_DIGEST"
             '
+          test "$(sha256sum "$corepack_real" | cut -d ' ' -f1)" = \
+            "$corepack_digest"
           if pgrep -u "$BUILDER_UID" >/dev/null; then
             echo "BUILDER_PROCESS_REMAINS" >&2
             exit 1

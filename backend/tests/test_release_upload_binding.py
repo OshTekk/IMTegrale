@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github/workflows/ci.yml"
 SEAL_HELPER = ROOT / "scripts/seal_release_artifact.py"
 SEALED_ROOT = "/var/lib/imtegrale-validated-release/artifact"
+BUILDER_COREPACK_HOME = "/var/lib/imtegrale-build/tooling/corepack"
 
 
 def _release_job() -> str:
@@ -19,6 +22,52 @@ def _roundtrip_job() -> str:
     return WORKFLOW.read_text(encoding="utf-8").split(
         "\n  release-artifact-roundtrip:\n", maxsplit=1
     )[1]
+
+
+def _assert_isolated_builder_corepack_contract(release: str) -> None:
+    build_start = release.index("Build exact release artifacts in isolated authority")
+    seal_start = release.index("Seal release artifact from separated builder")
+    isolated_build = release[build_start:seal_start]
+
+    assert "pnpm/action-setup@" not in release
+    assert "cache: pnpm" not in release
+    assert "/home/runner/setup-pnpm" not in isolated_build
+    assert "--setenv=PNPM_HOME" not in isolated_build
+    assert '--setenv="PATH=$PATH"' not in isolated_build
+    assert '--setenv="PATH=$builder_path"' in isolated_build
+    assert "/opt/hostedtoolcache/node/22.*/*/bin/node" in isolated_build
+    assert 'corepack_path="$node_bin/corepack"' in isolated_build
+    assert 'test "$(command -v corepack)" = "$COREPACK_SYSTEM_PATH"' in isolated_build
+    assert "corepack install --global pnpm@11.9.0" in isolated_build
+    assert 'test "$(corepack pnpm --version)" = "11.9.0"' in isolated_build
+    assert "corepack pnpm --dir frontend install --frozen-lockfile" in isolated_build
+    assert "corepack pnpm --dir frontend build" in isolated_build
+    assert "\n              pnpm --dir frontend" not in isolated_build
+
+    assert f"--setenv=COREPACK_HOME={BUILDER_COREPACK_HOME}" in isolated_build
+    assert BUILDER_COREPACK_HOME.startswith("/var/lib/imtegrale-build/")
+    assert not BUILDER_COREPACK_HOME.startswith(SEALED_ROOT)
+    assert "--property=ProtectHome=read-only" in isolated_build
+    assert "--property=ProtectSystem=strict" in isolated_build
+    assert "--property=InaccessiblePaths=/home/runner" in isolated_build
+    assert "--property=ReadWritePaths=/var/lib/imtegrale-build" in isolated_build
+    assert "ReadWritePaths=/home/runner" not in isolated_build
+    assert "test ! -x /home/runner" in isolated_build
+    assert "--property=NoNewPrivileges=true" in isolated_build
+    assert "--property=RestrictNamespaces=true" in isolated_build
+    assert 'grep -Eq "^CapPrm:' in isolated_build
+    assert 'grep -Eq "^CapEff:' in isolated_build
+    assert "if sudo -n true" in isolated_build
+    assert "if docker info" in isolated_build
+    assert "if unshare -Ur true" in isolated_build
+    assert 'test ! -w "$COREPACK_SYSTEM_REAL"' in isolated_build
+    assert isolated_build.count('sha256sum "$COREPACK_SYSTEM_REAL"') == 2
+
+    after_seal = release[seal_start:]
+    assert BUILDER_COREPACK_HOME not in after_seal
+    assert "/var/lib/imtegrale-build/tooling" not in after_seal
+    assert "--source /var/lib/imtegrale-build/source/artifacts" in after_seal
+    assert f"path: {SEALED_ROOT}/" in after_seal
 
 
 def test_release_upload_uses_only_the_sealed_tree() -> None:
@@ -52,6 +101,35 @@ def test_builder_is_isolated_before_build_and_separated_before_seal() -> None:
     assert "BUILDER_SUDO_AVAILABLE_AFTER_SEAL" in separated
     assert "BUILDER_DOCKER_AVAILABLE_AFTER_SEAL" in separated
     assert "runner passwordless-sudo=true trusted=true" in separated
+
+
+def test_isolated_builder_provisions_pinned_pnpm_without_runner_home() -> None:
+    _assert_isolated_builder_corepack_contract(_release_job())
+
+
+@pytest.mark.parametrize(
+    ("original", "mutation"),
+    (
+        (
+            "corepack pnpm --dir frontend install --frozen-lockfile",
+            "pnpm --dir frontend install --frozen-lockfile",
+        ),
+        (
+            f"COREPACK_HOME={BUILDER_COREPACK_HOME}",
+            "COREPACK_HOME=/home/runner/setup-pnpm",
+        ),
+    ),
+)
+def test_isolated_builder_corepack_contract_kills_path_mutations(
+    original: str,
+    mutation: str,
+) -> None:
+    release = _release_job()
+    assert release.count(original) == 1
+    mutated_release = release.replace(original, mutation, 1)
+
+    with pytest.raises(AssertionError):
+        _assert_isolated_builder_corepack_contract(mutated_release)
 
 
 def test_seal_is_verified_immediately_before_upload() -> None:
