@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -8,7 +11,10 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github/workflows/ci.yml"
 SEAL_HELPER = ROOT / "scripts/seal_release_artifact.py"
 SEALED_ROOT = "/var/lib/imtegrale-validated-release/artifact"
+BUILDER_ROOT = "/var/lib/imtegrale-build"
+BUILDER_TOOLING_ROOT = f"{BUILDER_ROOT}/tooling"
 BUILDER_COREPACK_HOME = "/var/lib/imtegrale-build/tooling/corepack"
+BUILDER_SHIM_DIR = "/var/lib/imtegrale-build/tooling/bin"
 
 
 def _release_job() -> str:
@@ -19,38 +25,67 @@ def _release_job() -> str:
 
 
 def _roundtrip_job() -> str:
-    return WORKFLOW.read_text(encoding="utf-8").split(
-        "\n  release-artifact-roundtrip:\n", maxsplit=1
-    )[1]
+    return WORKFLOW.read_text(encoding="utf-8").split("\n  release-artifact-roundtrip:\n", maxsplit=1)[1]
 
 
 def _assert_isolated_builder_corepack_contract(release: str) -> None:
+    builder_start = release.index("Create separated release builder")
     build_start = release.index("Build exact release artifacts in isolated authority")
     seal_start = release.index("Seal release artifact from separated builder")
+    preparation = release[builder_start:build_start]
     isolated_build = release[build_start:seal_start]
+    builder_authority = release[builder_start:seal_start]
 
     assert "pnpm/action-setup@" not in release
     assert "cache: pnpm" not in release
-    assert "/home/runner/setup-pnpm" not in isolated_build
-    assert "--setenv=PNPM_HOME" not in isolated_build
+    assert "/home/runner/setup-pnpm" not in builder_authority
+    assert "--setenv=PNPM_HOME" not in builder_authority
+    assert "PNPM_HOME=" not in builder_authority
     assert '--setenv="PATH=$PATH"' not in isolated_build
     assert '--setenv="PATH=$builder_path"' in isolated_build
-    assert "/opt/hostedtoolcache/node/22.*/*/bin/node" in isolated_build
-    assert 'corepack_path="$node_bin/corepack"' in isolated_build
+    assert "/opt/hostedtoolcache/node/22.*/*/bin/node" in preparation
+    assert 'corepack_path="$node_bin/corepack"' in preparation
+    assert 'pnpm_shim_dir="/var/lib/imtegrale-build/tooling/bin"' in preparation
+    assert 'pnpm_shim_path="$pnpm_shim_dir/pnpm"' in preparation
+    assert 'enable --install-directory "$pnpm_shim_dir" pnpm' in preparation
+    assert 'test -L "$pnpm_shim_path"' in preparation
+    assert 'pnpm_shim_real="$(readlink -f "$pnpm_shim_path")"' in preparation
+    assert 'test "$pnpm_shim_real" = "$corepack_dist/pnpm.js"' in preparation
+    assert "stat -c '%u:%g:%a' \"$pnpm_shim_dir\"" in preparation
+    assert '"0:0:555"' in preparation
+    assert 'chmod 0555 "$tooling_root" "$pnpm_shim_dir"' in preparation
+    assert 'find "$pnpm_shim_dir" -mindepth 1 -maxdepth 1 \\' in preparation
+    assert "! -type l -print -quit" in preparation
+    assert 'find "$pnpm_shim_dir" -type f -links +1' in preparation
+    assert "install --global pnpm@11.9.0" in preparation
+    assert "COREPACK_ENABLE_NETWORK=0" in builder_authority
+    assert 'builder_path="$pnpm_shim_dir:$node_bin:' in isolated_build
+    assert '--setenv="PNPM_SHIM_PATH=$pnpm_shim_path"' in isolated_build
+    assert f'pnpm_shim_dir="{BUILDER_SHIM_DIR}"' in isolated_build
     assert 'test "$(command -v corepack)" = "$COREPACK_SYSTEM_PATH"' in isolated_build
-    assert "corepack install --global pnpm@11.9.0" in isolated_build
+    assert 'test "$(command -v pnpm)" = "$PNPM_SHIM_PATH"' in isolated_build
+    assert 'test "$(pnpm --version)" = "11.9.0"' in isolated_build
     assert 'test "$(corepack pnpm --version)" = "11.9.0"' in isolated_build
-    assert "corepack pnpm --dir frontend install --frozen-lockfile" in isolated_build
-    assert "corepack pnpm --dir frontend build" in isolated_build
-    assert "\n              pnpm --dir frontend" not in isolated_build
+    assert "pnpm --dir frontend install --frozen-lockfile" in isolated_build
+    assert "pnpm --dir frontend build" in isolated_build
+    assert "corepack pnpm --dir frontend" not in isolated_build
+    assert "pnpm --dir frontend typecheck" not in isolated_build
+    assert "pnpm --dir frontend check:bundle" not in isolated_build
 
     assert f"--setenv=COREPACK_HOME={BUILDER_COREPACK_HOME}" in isolated_build
+    assert "--setenv=COREPACK_ENABLE_NETWORK=0" in isolated_build
     assert BUILDER_COREPACK_HOME.startswith("/var/lib/imtegrale-build/")
     assert not BUILDER_COREPACK_HOME.startswith(SEALED_ROOT)
+    assert 'test ! -w "$COREPACK_HOME"' in isolated_build
+    assert 'test ! -w "$PNPM_SHIM_PATH"' in isolated_build
+    assert 'test ! -w "$(dirname "$PNPM_SHIM_PATH")"' in isolated_build
     assert "--property=ProtectHome=read-only" in isolated_build
     assert "--property=ProtectSystem=strict" in isolated_build
     assert "--property=InaccessiblePaths=/home/runner" in isolated_build
-    assert "--property=ReadWritePaths=/var/lib/imtegrale-build" in isolated_build
+    assert (
+        '--property="ReadWritePaths=/var/lib/imtegrale-build/source '
+        '/var/lib/imtegrale-build/cache"' in isolated_build
+    )
     assert "ReadWritePaths=/home/runner" not in isolated_build
     assert "test ! -x /home/runner" in isolated_build
     assert "--property=NoNewPrivileges=true" in isolated_build
@@ -61,11 +96,13 @@ def _assert_isolated_builder_corepack_contract(release: str) -> None:
     assert "if docker info" in isolated_build
     assert "if unshare -Ur true" in isolated_build
     assert 'test ! -w "$COREPACK_SYSTEM_REAL"' in isolated_build
-    assert isolated_build.count('sha256sum "$COREPACK_SYSTEM_REAL"') == 2
+    assert isolated_build.count('sha256sum "$COREPACK_SYSTEM_REAL"') == 4
+    assert isolated_build.count('sha256sum "$PNPM_SHIM_REAL"') == 4
 
     after_seal = release[seal_start:]
     assert BUILDER_COREPACK_HOME not in after_seal
-    assert "/var/lib/imtegrale-build/tooling" not in after_seal
+    assert BUILDER_TOOLING_ROOT not in after_seal
+    assert BUILDER_SHIM_DIR not in after_seal
     assert "--source /var/lib/imtegrale-build/source/artifacts" in after_seal
     assert f"path: {SEALED_ROOT}/" in after_seal
 
@@ -89,7 +126,7 @@ def test_builder_is_isolated_before_build_and_separated_before_seal() -> None:
     scans = release.index("Audit sealed release artifact")
     assert install < identity < build < seal < scans
     isolated_build = release[build:seal]
-    assert "--uid=\"$BUILDER_UID\"" in isolated_build
+    assert '--uid="$BUILDER_UID"' in isolated_build
     assert "--property=ProtectSystem=strict" in isolated_build
     assert "--property=NoNewPrivileges=true" in isolated_build
     assert "--property=KillMode=control-group" in isolated_build
@@ -97,7 +134,7 @@ def test_builder_is_isolated_before_build_and_separated_before_seal() -> None:
     assert "if sudo -n true" in isolated_build
     assert "if docker info" in isolated_build
     separated = release[seal:scans]
-    assert "--builder-uid \"$BUILDER_UID\"" in separated
+    assert '--builder-uid "$BUILDER_UID"' in separated
     assert "BUILDER_SUDO_AVAILABLE_AFTER_SEAL" in separated
     assert "BUILDER_DOCKER_AVAILABLE_AFTER_SEAL" in separated
     assert "runner passwordless-sudo=true trusted=true" in separated
@@ -108,28 +145,203 @@ def test_isolated_builder_provisions_pinned_pnpm_without_runner_home() -> None:
 
 
 @pytest.mark.parametrize(
-    ("original", "mutation"),
+    "replacements",
     (
+        (('builder_path="$pnpm_shim_dir:$node_bin:', 'builder_path="$node_bin:'),),
         (
-            "corepack pnpm --dir frontend install --frozen-lockfile",
-            "pnpm --dir frontend install --frozen-lockfile",
+            ('builder_path="$pnpm_shim_dir:$node_bin:', 'builder_path="$node_bin:'),
+            (
+                "pnpm --dir frontend build",
+                "corepack pnpm --dir frontend build",
+            ),
         ),
         (
-            f"COREPACK_HOME={BUILDER_COREPACK_HOME}",
-            "COREPACK_HOME=/home/runner/setup-pnpm",
+            (
+                'pnpm_shim_dir="/var/lib/imtegrale-build/tooling/bin"',
+                'pnpm_shim_dir="/home/runner/setup-pnpm"',
+            ),
         ),
+        (
+            (
+                f"--setenv=COREPACK_HOME={BUILDER_COREPACK_HOME}",
+                "--setenv=PNPM_HOME=/home/runner/setup-pnpm\n"
+                f"            --setenv=COREPACK_HOME={BUILDER_COREPACK_HOME}",
+            ),
+        ),
+        (
+            (
+                '"$corepack_path" install --global pnpm@11.9.0',
+                '"$corepack_path" install --global pnpm@11.9',
+            ),
+        ),
+        (
+            (
+                '"$corepack_path" install --global pnpm@11.9.0',
+                '"$corepack_path" install --global pnpm@latest',
+            ),
+        ),
+        (
+            (
+                'pnpm_shim_dir="/var/lib/imtegrale-build/tooling/bin"',
+                f'pnpm_shim_dir="{SEALED_ROOT}/tooling/bin"',
+            ),
+        ),
+        (
+            (
+                'chmod 0555 "$tooling_root" "$pnpm_shim_dir"',
+                'chmod 0555 "$tooling_root"; chmod 0755 "$pnpm_shim_dir"',
+            ),
+        ),
+        (
+            (
+                'test "$pnpm_shim_real" = "$corepack_dist/pnpm.js"',
+                'test "$pnpm_shim_real" = "$GITHUB_WORKSPACE/pnpm"',
+            ),
+        ),
+        (
+            (
+                "--source /var/lib/imtegrale-build/source/artifacts",
+                f"--source {BUILDER_COREPACK_HOME}",
+            ),
+        ),
+    ),
+    ids=(
+        "shim-removed-from-path",
+        "corepack-command-without-shim",
+        "runner-home-pnpm",
+        "pnpm-home-variable",
+        "non-exact-version",
+        "latest-version",
+        "shim-in-sealed-tree",
+        "builder-writable-shim",
+        "shim-targets-checkout",
+        "corepack-home-in-manifest",
     ),
 )
 def test_isolated_builder_corepack_contract_kills_path_mutations(
-    original: str,
-    mutation: str,
+    replacements: tuple[tuple[str, str], ...],
+    tmp_path: Path,
 ) -> None:
     release = _release_job()
-    assert release.count(original) == 1
-    mutated_release = release.replace(original, mutation, 1)
+    mutated_release = release
+    for original, mutation in replacements:
+        assert mutated_release.count(original) >= 1
+        mutated_release = mutated_release.replace(original, mutation)
+
+    mutation_copy = tmp_path / "release-artifact-mutated.yml"
+    mutation_copy.write_text(mutated_release, encoding="utf-8")
 
     with pytest.raises(AssertionError):
-        _assert_isolated_builder_corepack_contract(mutated_release)
+        _assert_isolated_builder_corepack_contract(mutation_copy.read_text(encoding="utf-8"))
+    mutation_copy.unlink()
+
+
+def test_frontend_build_script_remains_a_single_unchanged_lifecycle() -> None:
+    package = json.loads((ROOT / "frontend/package.json").read_text(encoding="utf-8"))
+    release = _release_job()
+
+    assert package["scripts"]["build"] == ("pnpm typecheck && vite build && pnpm check:bundle")
+    assert release.count("pnpm --dir frontend build") == 1
+    assert "pnpm --dir frontend typecheck" not in release
+    assert "pnpm --dir frontend check:bundle" not in release
+
+
+def test_dedicated_shim_supports_nested_pnpm_lifecycle_without_global_pnpm(
+    tmp_path: Path,
+) -> None:
+    system_bin = tmp_path / "opt/hostedtoolcache/node/22.test/x64/bin"
+    corepack_dist = tmp_path / "opt/hostedtoolcache/node/22.test/x64/corepack/dist"
+    shim_dir = tmp_path / "var/lib/imtegrale-build/tooling/bin"
+    project = tmp_path / "project/frontend"
+    invocation_log = tmp_path / "pnpm-invocations.log"
+    for directory in (system_bin, corepack_dist, shim_dir, project):
+        directory.mkdir(parents=True, exist_ok=True)
+
+    package = {
+        "scripts": {"inner": "pnpm --version", "build": "pnpm inner"},
+        "packageManager": "pnpm@11.9.0",
+    }
+    (project / "package.json").write_text(json.dumps(package), encoding="utf-8")
+
+    pnpm_target = corepack_dist / "pnpm"
+    pnpm_target.write_text(
+        f"#!{sys.executable}\n"
+        "import json\n"
+        "import os\n"
+        "from pathlib import Path\n"
+        "import subprocess\n"
+        "import sys\n"
+        "\n"
+        "with Path(os.environ['PNPM_INVOCATION_LOG']).open('a') as stream:\n"
+        "    stream.write(sys.argv[0] + '\\n')\n"
+        "args = sys.argv[1:]\n"
+        "cwd = Path.cwd()\n"
+        "if args[:1] == ['--dir']:\n"
+        "    cwd /= args[1]\n"
+        "    args = args[2:]\n"
+        "if args == ['--version']:\n"
+        "    print('11.9.0')\n"
+        "    raise SystemExit(0)\n"
+        "scripts = json.loads((cwd / 'package.json').read_text())['scripts']\n"
+        "subprocess.run(['/bin/sh', '-ceu', scripts[args[0]]], cwd=cwd, "
+        "env=os.environ, check=True)\n",
+        encoding="utf-8",
+    )
+    pnpm_target.chmod(0o555)
+    pnpm_shim = shim_dir / "pnpm"
+    pnpm_shim.symlink_to(pnpm_target)
+
+    corepack = system_bin / "corepack"
+    corepack.write_text(
+        '#!/bin/sh\nset -eu\ntest "$1" = pnpm\nshift\nexec "$PNPM_SHIM_TARGET" "$@"\n',
+        encoding="utf-8",
+    )
+    corepack.chmod(0o555)
+
+    path = f"{shim_dir}:{system_bin}:/usr/bin:/bin"
+    env = {
+        "HOME": str(tmp_path / "var/lib/imtegrale-build"),
+        "PATH": path,
+        "PNPM_INVOCATION_LOG": str(invocation_log),
+        "PNPM_SHIM_TARGET": str(pnpm_target),
+    }
+    resolved = subprocess.run(
+        ["/bin/sh", "-ceu", "command -v pnpm"],
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert resolved.stdout.strip() == str(pnpm_shim)
+    assert "PNPM_HOME" not in env
+
+    direct = subprocess.run(
+        [str(pnpm_shim), "--version"],
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    explicit = subprocess.run(
+        [str(corepack), "pnpm", "--version"],
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    nested = subprocess.run(
+        ["/bin/sh", "-ceu", "test ! -x /home/runner; pnpm build"],
+        cwd=project,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert direct.stdout.strip() == "11.9.0"
+    assert explicit.stdout.strip() == "11.9.0"
+    assert nested.stdout.strip() == "11.9.0"
+    assert len(invocation_log.read_text(encoding="utf-8").splitlines()) == 5
 
 
 def test_seal_is_verified_immediately_before_upload() -> None:
@@ -163,7 +375,7 @@ def test_dependency_lifecycles_build_and_wheel_smoke_never_run_as_uploader() -> 
     smoke_start = release.index("Smoke-test sealed release under non-privileged build UID")
     final_verify = release.index("Verify seal immediately before upload")
     isolated_smoke = release[smoke_start:final_verify]
-    assert "--uid=\"$BUILDER_UID\"" in isolated_smoke
+    assert '--uid="$BUILDER_UID"' in isolated_smoke
     assert "scripts/smoke_release.py" in isolated_smoke
     assert "--property=PrivateNetwork=true" in isolated_smoke
 
