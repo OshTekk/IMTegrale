@@ -15,6 +15,8 @@ from pathlib import Path
 import pytest
 
 SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "check_content_boundary.py"
+if str(SCRIPT_PATH.parent) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_PATH.parent))
 SCRIPT_SPEC = importlib.util.spec_from_file_location("content_boundary_checker", SCRIPT_PATH)
 assert SCRIPT_SPEC is not None and SCRIPT_SPEC.loader is not None
 content_boundary_checker = importlib.util.module_from_spec(SCRIPT_SPEC)
@@ -180,6 +182,27 @@ def test_valid_lzma_alone_stream_is_rejected(tmp_path: Path):
     result = scan_repository(repo)
 
     assert result.violations["MAGIC_LZMA"] == 1
+
+
+def test_lzma_magic_probe_caps_the_declared_dictionary(monkeypatch: pytest.MonkeyPatch):
+    observed: dict[str, int] = {}
+
+    class Probe:
+        eof = False
+
+        def __init__(self, *, format: int, filters: list[dict[str, int]]) -> None:
+            assert format == lzma.FORMAT_RAW
+            observed["dictionary"] = filters[0]["dict_size"]
+
+        def decompress(self, _data: bytes, *, max_length: int) -> bytes:
+            assert max_length == 1
+            return b""
+
+    monkeypatch.setattr(content_boundary_checker.lzma, "LZMADecompressor", Probe)
+    synthetic_header = bytes((93,)) + (0xFFFFFFFF).to_bytes(4, "little") + b"\xff" * 8
+
+    assert not content_boundary_checker._is_lzma_alone_stream(synthetic_header + b"payload")
+    assert observed["dictionary"] == content_boundary_checker.MAX_LZMA_SCAN_DICTIONARY_BYTES
 
 
 def test_valid_zip_with_a_long_self_extracting_preamble_is_rejected(tmp_path: Path):
@@ -609,7 +632,7 @@ def test_built_frontend_accepts_only_the_pinned_pdfjs_worker(
 def test_wheel_entries_are_scanned_without_extraction_or_path_disclosure(tmp_path: Path):
     wheel = tmp_path / "package.whl"
     private_filename = "UnpublishedExam.PDF.txt"
-    with zipfile.ZipFile(wheel, "w") as archive:
+    with zipfile.ZipFile(wheel, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr(f"../private/{private_filename}", b"%PDF-1.7")
 
     result = scan_wheel(wheel)
@@ -624,7 +647,7 @@ def test_wheel_entries_are_scanned_without_extraction_or_path_disclosure(tmp_pat
 
 def test_safe_wheel_passes(tmp_path: Path):
     wheel = tmp_path / "package.whl"
-    with zipfile.ZipFile(wheel, "w") as archive:
+    with zipfile.ZipFile(wheel, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("app/__init__.py", b"SYNTHETIC = True\n")
         archive.writestr(
             "app-1.0.dist-info/METADATA",
