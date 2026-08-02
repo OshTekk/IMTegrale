@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -15,8 +17,11 @@ def _clear_legacy_sync_environment(monkeypatch) -> None:  # noqa: ANN001
 
 def _production_settings(tmp_path: Path, **updates) -> Settings:  # noqa: ANN003
     lock_directory = tmp_path / "locks"
-    lock_directory.mkdir(mode=0o2770, exist_ok=True)
-    lock_directory.chmod(0o2770)
+    # Materialize the real permission profile of the platform running the test.
+    lock_directory_mode = 0o2770 if sys.platform.startswith("linux") else 0o770
+    lock_directory.mkdir(mode=lock_directory_mode, exist_ok=True)
+    lock_directory.chmod(lock_directory_mode)
+    assert stat.S_IMODE(lock_directory.stat().st_mode) == lock_directory_mode
     values = {
         "environment": "production",
         "database_url": "postgresql+psycopg:///botnote",
@@ -127,16 +132,22 @@ def test_sync_role_rejects_relative_or_symlink_lock_directory(tmp_path: Path) ->
     with pytest.raises(RuntimeError, match="provisioned"):
         missing.validate_for_runtime(RuntimeRole.SYNC)
 
-    unsafe = tmp_path / "unsafe"
-    unsafe.mkdir(mode=0o750)
-    unsafe.chmod(0o750)
-    wrong_mode = _production_settings(
-        tmp_path,
-        credential_key="",
-        sync_lock_dir=unsafe,
-    )
-    with pytest.raises(RuntimeError, match="2770"):
-        wrong_mode.validate_for_runtime(RuntimeRole.SYNC)
+    expected_mode = 0o2770 if sys.platform.startswith("linux") else 0o770
+    for directory_name, unsafe_mode in (
+        ("too-broad", expected_mode | 0o005),
+        ("other-writable", expected_mode | 0o002),
+        ("missing-group-write", expected_mode & ~0o020),
+    ):
+        unsafe = tmp_path / directory_name
+        unsafe.mkdir(mode=unsafe_mode)
+        unsafe.chmod(unsafe_mode)
+        wrong_mode = _production_settings(
+            tmp_path,
+            credential_key="",
+            sync_lock_dir=unsafe,
+        )
+        with pytest.raises(RuntimeError, match="2770"):
+            wrong_mode.validate_for_runtime(RuntimeRole.SYNC)
 
 
 def test_sync_role_requires_exact_local_peer_database_url(tmp_path: Path) -> None:
