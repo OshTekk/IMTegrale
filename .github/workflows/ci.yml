@@ -181,7 +181,8 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "22"
-      - name: Install root-owned release seal helper
+      - name: Install root-owned release validation tools
+        id: release-tools
         shell: bash
         run: |
           set -euo pipefail
@@ -190,16 +191,284 @@ jobs:
           grep -E '^Cap(Prm|Eff|Bnd):' /proc/self/status
           sudo -n -l
           sudo -n true
-          helper_digest="$(sha256sum scripts/seal_release_artifact.py | cut -d ' ' -f1)"
+          tools_dir="/usr/local/libexec/imtegrale-release-tools"
+          runner_uid="$(id -u)"
+          runner_gid="$(id -g)"
+          python_path="$(command -v python)"
+          case "$(readlink -f "$python_path")" in
+            /opt/hostedtoolcache/Python/3.12.*/*/bin/python*) ;;
+            *)
+              echo "RELEASE_TOOLS_PYTHON_INVALID" >&2
+              exit 1
+              ;;
+          esac
           sudo -n install -d -o root -g root -m 0755 /usr/local/libexec
+          test "$(sudo -n stat -c '%u:%g:%a' /usr/local/libexec)" = \
+            "0:0:755"
+          test ! -L /usr/local/libexec
+          test ! -e "$tools_dir"
+          staging="$(sudo -n mktemp -d \
+            /usr/local/libexec/.imtegrale-release-tools.XXXXXX)"
+          cleanup() {
+            sudo -n rm -rf -- "$staging"
+          }
+          trap cleanup EXIT
+          sudo -n "$python_path" - \
+            "$GITHUB_WORKSPACE/scripts" \
+            "$staging" \
+            "$tools_dir" \
+            "$runner_uid" \
+            "$runner_gid" <<'PY'
+          import hashlib
+          import os
+          import stat
+          import sys
+
+          SOURCE_ROOT, STAGING, DESTINATION = sys.argv[1:4]
+          EXPECTED_UID = int(sys.argv[4])
+          EXPECTED_GID = int(sys.argv[5])
+          MAX_TOOL_BYTES = 1_048_576
+          TOOL_NAMES = (
+              "check_content_boundary.py",
+              "check_secrets.py",
+              "probe_release_artifact_readonly.py",
+              "seal_release_artifact.py",
+              "smoke_release.py",
+              "verify_release_artifact.py",
+          )
+          NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+          CLOEXEC = getattr(os, "O_CLOEXEC", 0)
+          DIRECTORY = getattr(os, "O_DIRECTORY", 0)
+
+          def fail(code: str) -> None:
+              raise SystemExit(f"release-tools: denied code={code}")
+
+          def digest_descriptor(descriptor: int) -> str:
+              value = hashlib.sha256()
+              while True:
+                  chunk = os.read(descriptor, 131_072)
+                  if not chunk:
+                      return value.hexdigest()
+                  value.update(chunk)
+
+          def stable_identity(metadata: os.stat_result) -> tuple[int, ...]:
+              return (
+                  metadata.st_dev,
+                  metadata.st_ino,
+                  metadata.st_mode,
+                  metadata.st_nlink,
+                  metadata.st_uid,
+                  metadata.st_gid,
+                  metadata.st_size,
+                  metadata.st_mtime_ns,
+                  metadata.st_ctime_ns,
+              )
+
+          parent = os.path.dirname(DESTINATION)
+          parent_metadata = os.lstat(parent)
+          if (
+              not stat.S_ISDIR(parent_metadata.st_mode)
+              or stat.S_ISLNK(parent_metadata.st_mode)
+              or parent_metadata.st_uid != 0
+              or parent_metadata.st_gid != 0
+              or stat.S_IMODE(parent_metadata.st_mode) & 0o022
+          ):
+              fail("PARENT_AUTHORITY_INVALID")
+          try:
+              os.lstat(DESTINATION)
+          except FileNotFoundError:
+              pass
+          else:
+              fail("DESTINATION_EXISTS")
+
+          source_descriptor = os.open(
+              SOURCE_ROOT,
+              os.O_RDONLY | DIRECTORY | NOFOLLOW | CLOEXEC,
+          )
+          staging_descriptor = os.open(
+              STAGING,
+              os.O_RDONLY | DIRECTORY | NOFOLLOW | CLOEXEC,
+          )
+          digests: dict[str, str] = {}
+          try:
+              for name in TOOL_NAMES:
+                  source = os.open(
+                      name,
+                      os.O_RDONLY | NOFOLLOW | CLOEXEC,
+                      dir_fd=source_descriptor,
+                  )
+                  try:
+                      before = os.fstat(source)
+                      if (
+                          not stat.S_ISREG(before.st_mode)
+                          or before.st_nlink != 1
+                          or before.st_uid != EXPECTED_UID
+                          or before.st_gid != EXPECTED_GID
+                          or not 0 < before.st_size <= MAX_TOOL_BYTES
+                      ):
+                          fail("SOURCE_AUTHORITY_INVALID")
+                      before_identity = stable_identity(before)
+                      expected_digest = digest_descriptor(source)
+                      os.lseek(source, 0, os.SEEK_SET)
+                      destination = os.open(
+                          name,
+                          os.O_WRONLY | os.O_CREAT | os.O_EXCL | NOFOLLOW | CLOEXEC,
+                          0o400,
+                          dir_fd=staging_descriptor,
+                      )
+                      copied = hashlib.sha256()
+                      try:
+                          while True:
+                              chunk = os.read(source, 131_072)
+                              if not chunk:
+                                  break
+                              copied.update(chunk)
+                              view = memoryview(chunk)
+                              while view:
+                                  written = os.write(destination, view)
+                                  view = view[written:]
+                          os.fsync(destination)
+                          os.fchmod(destination, 0o444)
+                      finally:
+                          os.close(destination)
+                      after = os.fstat(source)
+                      path_after = os.stat(
+                          name,
+                          dir_fd=source_descriptor,
+                          follow_symlinks=False,
+                      )
+                      if (
+                          before_identity != stable_identity(after)
+                          or (path_after.st_dev, path_after.st_ino)
+                          != (before.st_dev, before.st_ino)
+                          or expected_digest != copied.hexdigest()
+                      ):
+                          fail("SOURCE_CHANGED_DURING_COPY")
+                      installed = os.open(
+                          name,
+                          os.O_RDONLY | NOFOLLOW | CLOEXEC,
+                          dir_fd=staging_descriptor,
+                      )
+                      try:
+                          installed_metadata = os.fstat(installed)
+                          installed_digest = digest_descriptor(installed)
+                      finally:
+                          os.close(installed)
+                      if (
+                          not stat.S_ISREG(installed_metadata.st_mode)
+                          or installed_metadata.st_nlink != 1
+                          or installed_metadata.st_uid != 0
+                          or installed_metadata.st_gid != 0
+                          or stat.S_IMODE(installed_metadata.st_mode) != 0o444
+                          or installed_digest != expected_digest
+                      ):
+                          fail("INSTALLED_TOOL_INVALID")
+                      digests[name] = expected_digest
+                  finally:
+                      os.close(source)
+
+              manifest = "".join(
+                  f"{digests[name]}  {name}\n" for name in TOOL_NAMES
+              ).encode("ascii")
+              manifest_descriptor = os.open(
+                  "tools.sha256",
+                  os.O_WRONLY | os.O_CREAT | os.O_EXCL | NOFOLLOW | CLOEXEC,
+                  0o400,
+                  dir_fd=staging_descriptor,
+              )
+              try:
+                  view = memoryview(manifest)
+                  while view:
+                      written = os.write(manifest_descriptor, view)
+                      view = view[written:]
+                  os.fsync(manifest_descriptor)
+                  os.fchmod(manifest_descriptor, 0o444)
+              finally:
+                  os.close(manifest_descriptor)
+              os.fsync(staging_descriptor)
+          finally:
+              os.close(staging_descriptor)
+              os.close(source_descriptor)
+
+          os.chmod(STAGING, 0o555)
+          for path in (STAGING, *(os.path.join(STAGING, name) for name in (*TOOL_NAMES, "tools.sha256"))):
+              metadata = os.lstat(path)
+              if stat.S_ISLNK(metadata.st_mode):
+                  fail("INSTALLED_SYMLINK")
+              if path != STAGING and (
+                  not stat.S_ISREG(metadata.st_mode)
+                  or metadata.st_nlink != 1
+                  or metadata.st_uid != 0
+                  or metadata.st_gid != 0
+                  or stat.S_IMODE(metadata.st_mode) != 0o444
+              ):
+                  fail("INSTALLED_INVENTORY_INVALID")
+              acl_names = {
+                  name
+                  for name in os.listxattr(path, follow_symlinks=False)
+                  if name in {"system.posix_acl_access", "system.posix_acl_default"}
+              }
+              if acl_names:
+                  fail("INSTALLED_ACL_INVALID")
+          directory_metadata = os.lstat(STAGING)
+          if (
+              directory_metadata.st_uid != 0
+              or directory_metadata.st_gid != 0
+              or stat.S_IMODE(directory_metadata.st_mode) != 0o555
+          ):
+              fail("INSTALLED_DIRECTORY_INVALID")
+          os.rename(STAGING, DESTINATION)
+          parent_descriptor = os.open(
+              parent,
+              os.O_RDONLY | DIRECTORY | NOFOLLOW | CLOEXEC,
+          )
+          try:
+              os.fsync(parent_descriptor)
+          finally:
+              os.close(parent_descriptor)
+          PY
+          trap - EXIT
+
+          expected_inventory="$(printf '%s\n' \
+            check_content_boundary.py \
+            check_secrets.py \
+            probe_release_artifact_readonly.py \
+            seal_release_artifact.py \
+            smoke_release.py \
+            tools.sha256 \
+            verify_release_artifact.py | LC_ALL=C sort)"
+          installed_inventory="$(find "$tools_dir" -mindepth 1 -maxdepth 1 \
+            -printf '%f\n' | LC_ALL=C sort)"
+          test "$installed_inventory" = "$expected_inventory"
+          test "$(stat -c '%u:%g:%a' "$tools_dir")" = "0:0:555"
+          test -z "$(find "$tools_dir" -mindepth 1 ! -user root -print -quit)"
+          test -z "$(find "$tools_dir" -mindepth 1 ! -group root -print -quit)"
+          test -z "$(find "$tools_dir" -mindepth 1 -type l -print -quit)"
+          test -z "$(find "$tools_dir" -type f -links +1 -print -quit)"
+          test "$(find "$tools_dir" -maxdepth 1 -type f -name '*.py' | wc -l)" -eq 6
+          test "$(wc -l < "$tools_dir/tools.sha256")" -eq 6
+          if grep -Evq '^[0-9a-f]{64}  [A-Za-z0-9_]+\.py$' \
+            "$tools_dir/tools.sha256"; then
+            echo "RELEASE_TOOLS_MANIFEST_INVALID" >&2
+            exit 1
+          fi
+          (
+            cd "$tools_dir"
+            sha256sum --strict -c tools.sha256
+          )
+          tools_manifest_digest="$(sha256sum "$tools_dir/tools.sha256" | cut -d ' ' -f1)"
+          [[ "$tools_manifest_digest" =~ ^[0-9a-f]{64}$ ]]
+          helper_digest="$(awk '$2 == "seal_release_artifact.py" { print $1 }' \
+            "$tools_dir/tools.sha256")"
           sudo -n install -o root -g root -m 0500 \
-            scripts/seal_release_artifact.py \
+            "$tools_dir/seal_release_artifact.py" \
             /usr/local/libexec/imtegrale-seal-release
           installed_digest="$(sudo -n sha256sum \
             /usr/local/libexec/imtegrale-seal-release | cut -d ' ' -f1)"
           test "$helper_digest" = "$installed_digest"
           test "$(sudo -n stat -c '%u:%g:%a' \
             /usr/local/libexec/imtegrale-seal-release)" = "0:0:500"
+          echo "manifest-digest=$tools_manifest_digest" >> "$GITHUB_OUTPUT"
       - name: Create separated release builder
         id: builder
         shell: bash
@@ -452,6 +721,7 @@ jobs:
           phase builder_ready
       - name: Build exact release artifacts in isolated authority
         env:
+          BUILDER_NAME: ${{ steps.builder.outputs.builder-name }}
           BUILDER_GID: ${{ steps.builder.outputs.builder-gid }}
           BUILDER_UID: ${{ steps.builder.outputs.builder-uid }}
           COREPACK_SYSTEM_DIGEST: ${{ steps.builder.outputs.corepack-digest }}
@@ -461,6 +731,7 @@ jobs:
           PNPM_SHIM_DIGEST: ${{ steps.builder.outputs.pnpm-shim-digest }}
           PNPM_SHIM_PATH: ${{ steps.builder.outputs.pnpm-shim-path }}
           PNPM_SHIM_REAL: ${{ steps.builder.outputs.pnpm-shim-real }}
+          RELEASE_TOOLS_MANIFEST_DIGEST: ${{ steps.release-tools.outputs.manifest-digest }}
         shell: bash
         run: |
           set -euo pipefail
@@ -617,6 +888,28 @@ jobs:
             echo "BUILDER_OUTPUT_OWNER_INVALID" >&2
             exit 1
           fi
+          release_tools_dir="/usr/local/libexec/imtegrale-release-tools"
+          test "$(sha256sum "$release_tools_dir/tools.sha256" | cut -d ' ' -f1)" = \
+            "$RELEASE_TOOLS_MANIFEST_DIGEST"
+          (
+            cd "$release_tools_dir"
+            sha256sum --strict -c tools.sha256
+          )
+          test "$(stat -c '%u:%g:%a' "$release_tools_dir")" = "0:0:555"
+          test -z "$(find "$release_tools_dir" -mindepth 1 \
+            ! -user root -print -quit)"
+          test -z "$(find "$release_tools_dir" -mindepth 1 \
+            ! -group root -print -quit)"
+          test -z "$(find "$release_tools_dir" -mindepth 1 \
+            -type l -print -quit)"
+          test -z "$(find "$release_tools_dir" -type f \
+            -links +1 -print -quit)"
+          sudo -n -u "$BUILDER_NAME" test ! -w /usr/local/libexec
+          sudo -n -u "$BUILDER_NAME" test ! -w "$release_tools_dir"
+          while IFS= read -r tool; do
+            sudo -n -u "$BUILDER_NAME" test ! -w "$release_tools_dir/$tool"
+          done < <(find "$release_tools_dir" -mindepth 1 -maxdepth 1 \
+            -printf '%f\n' | LC_ALL=C sort)
       - name: Seal release artifact from separated builder
         id: seal
         env:
@@ -649,17 +942,101 @@ jobs:
           BUILDER_NAME: ${{ steps.builder.outputs.builder-name }}
           BUILDER_GID: ${{ steps.builder.outputs.builder-gid }}
           BUILDER_UID: ${{ steps.builder.outputs.builder-uid }}
+          RELEASE_TOOLS_MANIFEST_DIGEST: ${{ steps.release-tools.outputs.manifest-digest }}
           SEAL_DIGEST: ${{ steps.seal.outputs.seal-digest }}
         shell: bash
         run: |
           set -euo pipefail
+          release_tools_dir="/usr/local/libexec/imtegrale-release-tools"
           python_path="$(command -v python)"
-          sudo -n -u "$BUILDER_NAME" -H \
-            env PYTHONDONTWRITEBYTECODE=1 \
-            "$python_path" "$GITHUB_WORKSPACE/scripts/probe_release_artifact_readonly.py" \
-            /var/lib/imtegrale-validated-release/artifact \
-            --expected-seal-digest "$SEAL_DIGEST" \
-            --expected-source-commit "$GITHUB_SHA"
+          case "$(readlink -f "$python_path")" in
+            /opt/hostedtoolcache/Python/3.12.*/*/bin/python*) ;;
+            *)
+              echo "RELEASE_PROBE_PYTHON_INVALID" >&2
+              exit 1
+              ;;
+          esac
+          test "$(sha256sum "$release_tools_dir/tools.sha256" | cut -d ' ' -f1)" = \
+            "$RELEASE_TOOLS_MANIFEST_DIGEST"
+          (
+            cd "$release_tools_dir"
+            sha256sum --strict -c tools.sha256
+          )
+          test "$(stat -c '%u:%g:%a' "$release_tools_dir")" = "0:0:555"
+          sudo -n -u "$BUILDER_NAME" test ! -w /usr/local/libexec
+          sudo -n -u "$BUILDER_NAME" test ! -w "$release_tools_dir"
+          while IFS= read -r tool; do
+            sudo -n -u "$BUILDER_NAME" test ! -w "$release_tools_dir/$tool"
+          done < <(find "$release_tools_dir" -mindepth 1 -maxdepth 1 \
+            -printf '%f\n' | LC_ALL=C sort)
+          sudo -n systemd-run \
+            --unit=imtegrale-release-probe \
+            --service-type=exec \
+            --uid="$BUILDER_UID" \
+            --gid="$BUILDER_GID" \
+            --working-directory=/var/lib/imtegrale-build \
+            --setenv=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            --setenv=HOME=/var/lib/imtegrale-build \
+            --setenv=PYTHONDONTWRITEBYTECODE=1 \
+            --setenv="PYTHON_PATH=$python_path" \
+            --setenv="RELEASE_TOOLS_DIR=$release_tools_dir" \
+            --setenv="RELEASE_TOOLS_MANIFEST_DIGEST=$RELEASE_TOOLS_MANIFEST_DIGEST" \
+            --setenv="SEAL_DIGEST=$SEAL_DIGEST" \
+            --setenv="SOURCE_COMMIT=$GITHUB_SHA" \
+            --setenv="BUILDER_UID=$BUILDER_UID" \
+            --setenv="BUILDER_GID=$BUILDER_GID" \
+            --property=ProtectSystem=strict \
+            --property=ProtectHome=read-only \
+            --property=InaccessiblePaths=/home/runner \
+            --property=PrivateTmp=true \
+            --property=PrivateNetwork=true \
+            --property=PrivateDevices=true \
+            --property=ProtectProc=invisible \
+            --property=ProcSubset=pid \
+            --property=NoNewPrivileges=true \
+            --property=RestrictSUIDSGID=true \
+            --property=RestrictNamespaces=true \
+            --property=ProtectKernelTunables=true \
+            --property=ProtectKernelModules=true \
+            --property=ProtectKernelLogs=true \
+            --property=ProtectControlGroups=true \
+            --property=LockPersonality=true \
+            --property=RestrictAddressFamilies=AF_UNIX \
+            --property=KillMode=control-group \
+            --property=TimeoutStopSec=5s \
+            --property=RuntimeMaxSec=2min \
+            --property=UMask=0077 \
+            --wait \
+            --pipe \
+            --collect \
+            --quiet \
+            /bin/bash -ceu '
+              test "$(id -u)" = "$BUILDER_UID"
+              test "$(id -g)" = "$BUILDER_GID"
+              test "$(id -G)" = "$BUILDER_GID"
+              grep -Eq "^CapPrm:[[:space:]]+0{16}$" /proc/self/status
+              grep -Eq "^CapEff:[[:space:]]+0{16}$" /proc/self/status
+              grep -Eq "^NoNewPrivs:[[:space:]]+1$" /proc/self/status
+              test ! -w /opt
+              test ! -w /usr/local/libexec
+              test ! -w "$RELEASE_TOOLS_DIR"
+              test ! -w "$RELEASE_TOOLS_DIR/tools.sha256"
+              test ! -x /home/runner
+              if sudo -n true 2>/dev/null; then exit 91; fi
+              if docker info >/dev/null 2>&1; then exit 92; fi
+              if unshare -Ur true 2>/dev/null; then exit 93; fi
+              test "$(sha256sum "$RELEASE_TOOLS_DIR/tools.sha256" | cut -d " " -f1)" = \
+                "$RELEASE_TOOLS_MANIFEST_DIGEST"
+              (
+                cd "$RELEASE_TOOLS_DIR"
+                sha256sum --strict -c tools.sha256
+              )
+              exec "$PYTHON_PATH" \
+                "$RELEASE_TOOLS_DIR/probe_release_artifact_readonly.py" \
+                /var/lib/imtegrale-validated-release/artifact \
+                --expected-seal-digest "$SEAL_DIGEST" \
+                --expected-source-commit "$SOURCE_COMMIT"
+            '
           if pgrep -u "$BUILDER_UID" >/dev/null; then
             echo "BUILDER_PROCESS_REMAINS_AFTER_PROBE" >&2
             exit 1
@@ -694,25 +1071,41 @@ jobs:
         env:
           BUILDER_GID: ${{ steps.builder.outputs.builder-gid }}
           BUILDER_UID: ${{ steps.builder.outputs.builder-uid }}
+          RELEASE_TOOLS_MANIFEST_DIGEST: ${{ steps.release-tools.outputs.manifest-digest }}
         shell: bash
         run: |
           set -euo pipefail
+          release_tools_dir="/usr/local/libexec/imtegrale-release-tools"
           smoke_python="/var/lib/imtegrale-build/source/.venv/bin/python"
           mapfile -t wheels < <(find \
             /var/lib/imtegrale-validated-release/artifact/wheel \
             -maxdepth 1 -type f -name '*.whl' -print)
           test "${#wheels[@]}" -eq 1
+          test "$(sha256sum "$release_tools_dir/tools.sha256" | cut -d ' ' -f1)" = \
+            "$RELEASE_TOOLS_MANIFEST_DIGEST"
+          (
+            cd "$release_tools_dir"
+            sha256sum --strict -c tools.sha256
+          )
           sudo -n systemd-run \
             --unit=imtegrale-release-smoke \
             --service-type=exec \
             --uid="$BUILDER_UID" \
             --gid="$BUILDER_GID" \
-            --working-directory="$GITHUB_WORKSPACE" \
-            --setenv="PATH=$PATH" \
+            --working-directory=/var/lib/imtegrale-build \
+            --setenv=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
             --setenv=HOME=/var/lib/imtegrale-build \
             --setenv=PYTHONDONTWRITEBYTECODE=1 \
+            --setenv="SMOKE_PYTHON=$smoke_python" \
+            --setenv="RELEASE_TOOLS_DIR=$release_tools_dir" \
+            --setenv="RELEASE_TOOLS_MANIFEST_DIGEST=$RELEASE_TOOLS_MANIFEST_DIGEST" \
+            --setenv="WHEEL_PATH=${wheels[0]}" \
+            --setenv=DIST_PATH=/var/lib/imtegrale-validated-release/artifact/frontend \
+            --setenv="BUILDER_UID=$BUILDER_UID" \
+            --setenv="BUILDER_GID=$BUILDER_GID" \
             --property=ProtectSystem=strict \
             --property=ProtectHome=read-only \
+            --property=InaccessiblePaths=/home/runner \
             --property=PrivateTmp=true \
             --property=PrivateNetwork=true \
             --property=PrivateDevices=true \
@@ -729,9 +1122,31 @@ jobs:
             --pipe \
             --collect \
             --quiet \
-            "$smoke_python" scripts/smoke_release.py \
-            --wheel "${wheels[0]}" \
-            --dist /var/lib/imtegrale-validated-release/artifact/frontend
+            /bin/bash -ceu '
+              test "$(id -u)" = "$BUILDER_UID"
+              test "$(id -g)" = "$BUILDER_GID"
+              test "$(id -G)" = "$BUILDER_GID"
+              grep -Eq "^CapPrm:[[:space:]]+0{16}$" /proc/self/status
+              grep -Eq "^CapEff:[[:space:]]+0{16}$" /proc/self/status
+              grep -Eq "^NoNewPrivs:[[:space:]]+1$" /proc/self/status
+              test ! -w /opt
+              test ! -w /usr/local/libexec
+              test ! -w "$RELEASE_TOOLS_DIR"
+              test ! -w "$RELEASE_TOOLS_DIR/tools.sha256"
+              test ! -x /home/runner
+              if sudo -n true 2>/dev/null; then exit 91; fi
+              if docker info >/dev/null 2>&1; then exit 92; fi
+              if unshare -Ur true 2>/dev/null; then exit 93; fi
+              test "$(sha256sum "$RELEASE_TOOLS_DIR/tools.sha256" | cut -d " " -f1)" = \
+                "$RELEASE_TOOLS_MANIFEST_DIGEST"
+              (
+                cd "$RELEASE_TOOLS_DIR"
+                sha256sum --strict -c tools.sha256
+              )
+              exec "$SMOKE_PYTHON" "$RELEASE_TOOLS_DIR/smoke_release.py" \
+                --wheel "$WHEEL_PATH" \
+                --dist "$DIST_PATH"
+            '
           if pgrep -u "$BUILDER_UID" >/dev/null; then
             echo "BUILDER_PROCESS_REMAINS_AFTER_SMOKE" >&2
             exit 1

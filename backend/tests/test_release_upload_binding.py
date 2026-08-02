@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import hashlib
+import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -17,6 +21,15 @@ BUILDER_ROOT = "/var/lib/imtegrale-build"
 BUILDER_TOOLING_ROOT = f"{BUILDER_ROOT}/tooling"
 BUILDER_COREPACK_HOME = "/var/lib/imtegrale-build/tooling/corepack"
 BUILDER_SHIM_DIR = "/var/lib/imtegrale-build/tooling/bin"
+RELEASE_TOOLS_DIR = "/usr/local/libexec/imtegrale-release-tools"
+RELEASE_TOOL_NAMES = (
+    "check_content_boundary.py",
+    "check_secrets.py",
+    "probe_release_artifact_readonly.py",
+    "seal_release_artifact.py",
+    "smoke_release.py",
+    "verify_release_artifact.py",
+)
 COREPACK_PHASES = (
     "resolve_node_start",
     "resolve_node_ok",
@@ -62,6 +75,130 @@ def _release_job() -> str:
 
 def _roundtrip_job() -> str:
     return WORKFLOW.read_text(encoding="utf-8").split("\n  release-artifact-roundtrip:\n", maxsplit=1)[1]
+
+
+def _assert_release_tools_bundle_contract(release: str) -> None:
+    install_start = release.index("Install root-owned release validation tools")
+    builder_start = release.index("Create separated release builder")
+    build_start = release.index("Build exact release artifacts in isolated authority")
+    seal_start = release.index("Seal release artifact from separated builder")
+    probe_start = release.index("Probe sealed release against build-UID mutations")
+    audit_start = release.index("Audit sealed release artifact")
+    smoke_start = release.index("Smoke-test sealed release under non-privileged build UID")
+    final_verify_start = release.index("Verify seal immediately before upload")
+
+    assert install_start < builder_start < build_start < seal_start < probe_start
+    assert probe_start < audit_start < smoke_start < final_verify_start
+    install = release[install_start:builder_start]
+    build = release[build_start:seal_start]
+    probe = release[probe_start:audit_start]
+    smoke = release[smoke_start:final_verify_start]
+
+    assert "id: release-tools" in install
+    assert f'tools_dir="{RELEASE_TOOLS_DIR}"' in install
+    tool_block = install.split("TOOL_NAMES = (", maxsplit=1)[1].split("\n          )", maxsplit=1)[0]
+    installed_tools = tuple(re.findall(r'"([a-z_]+\.py)"', tool_block))
+    assert installed_tools == RELEASE_TOOL_NAMES
+    for tool_name in RELEASE_TOOL_NAMES:
+        assert f"            {tool_name} \\" in install or tool_name in tool_block
+    assert "cp -R scripts" not in install
+    assert "cp -a scripts" not in install
+    assert "fixtures" not in install
+    assert "Parcours" not in install
+
+    for secure_install_control in (
+        "os.O_RDONLY | NOFOLLOW | CLOEXEC",
+        "dir_fd=source_descriptor",
+        "stat.S_ISREG(before.st_mode)",
+        "before.st_nlink != 1",
+        "before.st_uid != EXPECTED_UID",
+        "before.st_gid != EXPECTED_GID",
+        "before.st_size <= MAX_TOOL_BYTES",
+        "SOURCE_CHANGED_DURING_COPY",
+        "follow_symlinks=False",
+        "(path_after.st_dev, path_after.st_ino)",
+        "installed_metadata.st_nlink != 1",
+        "installed_metadata.st_uid != 0",
+        "installed_metadata.st_gid != 0",
+        "installed_digest != expected_digest",
+        "os.listxattr(path, follow_symlinks=False)",
+        "INSTALLED_ACL_INVALID",
+        "os.rename(STAGING, DESTINATION)",
+    ):
+        assert secure_install_control in install
+    assert "MAX_TOOL_BYTES = 1_048_576" in install
+    assert "os.chmod(STAGING, 0o555)" in install
+    assert "os.fchmod(destination, 0o444)" in install
+    assert "os.fchmod(manifest_descriptor, 0o444)" in install
+    assert "tools.sha256" in install
+    assert 'f"{digests[name]}  {name}\\n" for name in TOOL_NAMES' in install
+    assert "sha256sum --strict -c tools.sha256" in install
+    assert "RELEASE_TOOLS_MANIFEST_INVALID" in install
+    assert 'echo "manifest-digest=$tools_manifest_digest" >> "$GITHUB_OUTPUT"' in install
+    assert f'"{RELEASE_TOOLS_DIR}/seal_release_artifact.py"' not in install
+    assert '"$tools_dir/seal_release_artifact.py"' in install
+    assert "/usr/local/libexec/imtegrale-seal-release" in install
+    assert 'touch "$tools_dir/' not in install
+    assert '>> "$tools_dir/' not in install
+
+    assert "RELEASE_TOOLS_MANIFEST_DIGEST" in build
+    assert f'release_tools_dir="{RELEASE_TOOLS_DIR}"' in build
+    assert "sha256sum --strict -c tools.sha256" in build
+    assert 'sudo -n -u "$BUILDER_NAME" test ! -w /usr/local/libexec' in build
+    assert 'sudo -n -u "$BUILDER_NAME" test ! -w "$release_tools_dir"' in build
+
+    for section, script_name in (
+        (probe, "probe_release_artifact_readonly.py"),
+        (smoke, "smoke_release.py"),
+    ):
+        assert f'"$RELEASE_TOOLS_DIR/{script_name}"' in section
+        assert "$GITHUB_WORKSPACE" not in section
+        assert "/home/runner/work" not in section
+        assert f"scripts/{script_name}" not in section
+        assert "--working-directory=/var/lib/imtegrale-build" in section
+        assert '--uid="$BUILDER_UID"' in section
+        assert '--gid="$BUILDER_GID"' in section
+        assert "--property=ProtectSystem=strict" in section
+        assert "--property=ProtectHome=read-only" in section
+        assert "--property=InaccessiblePaths=/home/runner" in section
+        assert "--property=NoNewPrivileges=true" in section
+        assert "--property=RestrictNamespaces=true" in section
+        assert "PYTHONDONTWRITEBYTECODE=1" in section
+        assert "PYTHONPATH" not in section
+        assert 'test ! -w "$RELEASE_TOOLS_DIR"' in section
+        assert "sha256sum --strict -c tools.sha256" in section
+        assert "if sudo -n true" in section
+        assert "if docker info" in section
+        assert "if unshare -Ur true" in section
+        assert 'grep -Eq "^CapPrm:[[:space:]]+0{16}$"' in section
+        assert 'grep -Eq "^CapEff:[[:space:]]+0{16}$"' in section
+        assert 'grep -Eq "^NoNewPrivs:[[:space:]]+1$"' in section
+
+    assert "--property=PrivateNetwork=true" in probe
+    assert "--property=RestrictAddressFamilies=AF_UNIX" in probe
+    assert "/var/lib/imtegrale-validated-release/artifact" in probe
+    assert "--expected-seal-digest" in probe
+    assert "--expected-source-commit" in probe
+    assert "--property=PrivateNetwork=true" in smoke
+    assert 'smoke_python="/var/lib/imtegrale-build/source/.venv/bin/python"' in smoke
+    assert '--wheel "$WHEEL_PATH"' in smoke
+    assert '--dist "$DIST_PATH"' in smoke
+
+    post_seal_builder = probe + smoke
+    for forbidden_path in (
+        "$GITHUB_WORKSPACE",
+        "/home/runner/work",
+        "scripts/",
+        "frontend/dist",
+        "/var/lib/imtegrale-build/source/artifacts",
+    ):
+        assert forbidden_path not in post_seal_builder
+
+    assert release.count("sha256sum --strict -c tools.sha256") >= 6
+    upload = release.split("uses: actions/upload-artifact@", maxsplit=1)[1]
+    assert RELEASE_TOOLS_DIR not in upload
+    assert RELEASE_TOOLS_DIR not in _roundtrip_job()
+    assert f"path: {SEALED_ROOT}/" in upload
 
 
 def _assert_isolated_builder_corepack_contract(release: str) -> None:
@@ -238,10 +375,14 @@ def test_release_upload_uses_only_the_sealed_tree() -> None:
     assert "path: frontend/dist" not in upload
 
 
+def test_post_seal_validation_tools_use_root_owned_bundle() -> None:
+    _assert_release_tools_bundle_contract(_release_job())
+
+
 def test_builder_is_isolated_before_build_and_separated_before_seal() -> None:
     release = _release_job()
 
-    install = release.index("Install root-owned release seal helper")
+    install = release.index("Install root-owned release validation tools")
     identity = release.index("Create separated release builder")
     build = release.index("Build exact release artifacts in isolated authority")
     seal = release.index("Seal release artifact from separated builder")
@@ -439,6 +580,265 @@ def test_unconfined_builder_probe_cannot_replace_systemd_readonly_proof(
         _assert_isolated_builder_corepack_contract(mutation_copy.read_text(encoding="utf-8"))
     mutation_copy.unlink()
     assert not mutation_copy.exists()
+
+
+@pytest.mark.parametrize(
+    ("original", "replacement"),
+    (
+        (
+            '"$RELEASE_TOOLS_DIR/probe_release_artifact_readonly.py"',
+            '"$GITHUB_WORKSPACE/scripts/probe_release_artifact_readonly.py"',
+        ),
+        (
+            '"$RELEASE_TOOLS_DIR/probe_release_artifact_readonly.py"',
+            '"/home/runner/work/IMTegrale/scripts/probe_release_artifact_readonly.py"',
+        ),
+        (
+            '"$RELEASE_TOOLS_DIR/smoke_release.py"',
+            '"scripts/smoke_release.py"',
+        ),
+        (
+            f'tools_dir="{RELEASE_TOOLS_DIR}"',
+            f'tools_dir="{SEALED_ROOT}/imtegrale-release-tools"',
+        ),
+        ("os.chmod(STAGING, 0o555)", "os.chmod(STAGING, 0o755)"),
+        (
+            "--working-directory=/var/lib/imtegrale-build",
+            "--working-directory=/home/runner/work/IMTegrale",
+        ),
+    ),
+    ids=(
+        "probe-from-github-workspace",
+        "probe-from-runner-home",
+        "smoke-from-checkout",
+        "bundle-in-sealed-tree",
+        "builder-writable-bundle",
+        "smoke-working-directory-in-runner-home",
+    ),
+)
+def test_release_tools_contract_kills_path_and_authority_mutations(
+    original: str,
+    replacement: str,
+    tmp_path: Path,
+) -> None:
+    release = _release_job()
+    assert original in release
+    mutated_release = release.replace(original, replacement)
+    mutation_copy = tmp_path / "release-tools-path-mutated.yml"
+    mutation_copy.write_text(mutated_release, encoding="utf-8")
+    with pytest.raises(AssertionError):
+        _assert_release_tools_bundle_contract(mutation_copy.read_text(encoding="utf-8"))
+    mutation_copy.unlink()
+    assert not mutation_copy.exists()
+
+
+def _create_synthetic_release_tools_bundle(tmp_path: Path) -> Path:
+    bundle = tmp_path / "root-owned-release-tools-simulation"
+    bundle.mkdir()
+    manifest_lines: list[str] = []
+    for tool_name in RELEASE_TOOL_NAMES:
+        content = (ROOT / "scripts" / tool_name).read_bytes()
+        destination = bundle / tool_name
+        destination.write_bytes(content)
+        destination.chmod(0o444)
+        manifest_lines.append(f"{hashlib.sha256(content).hexdigest()}  {tool_name}\n")
+    manifest = bundle / "tools.sha256"
+    manifest.write_text("".join(manifest_lines), encoding="ascii")
+    manifest.chmod(0o444)
+    bundle.chmod(0o555)
+    return bundle
+
+
+def _assert_synthetic_release_tools_bundle(bundle: Path) -> None:
+    expected_inventory = {*RELEASE_TOOL_NAMES, "tools.sha256"}
+    inventory = {path.name for path in bundle.iterdir()}
+    assert inventory == expected_inventory
+    assert bundle.stat().st_mode & 0o777 == 0o555
+
+    manifest_records: dict[str, str] = {}
+    manifest = bundle / "tools.sha256"
+    for line in manifest.read_text(encoding="ascii").splitlines():
+        digest, separator, name = line.partition("  ")
+        assert separator == "  "
+        assert re.fullmatch(r"[0-9a-f]{64}", digest)
+        assert name in RELEASE_TOOL_NAMES
+        assert "/" not in name
+        assert name not in manifest_records
+        manifest_records[name] = digest
+    assert tuple(manifest_records) == RELEASE_TOOL_NAMES
+
+    for path in bundle.iterdir():
+        assert not path.is_symlink()
+        metadata = path.stat()
+        assert path.is_file()
+        assert metadata.st_nlink == 1
+        assert metadata.st_mode & 0o777 == 0o444
+        if path.name != "tools.sha256":
+            assert hashlib.sha256(path.read_bytes()).hexdigest() == manifest_records[path.name]
+
+
+def _create_synthetic_sealed_release(tmp_path: Path, bundle: Path) -> tuple[Path, str, str]:
+    source = tmp_path / "synthetic-release-source"
+    frontend = source / "frontend"
+    assets = frontend / "assets"
+    vite = frontend / ".vite"
+    wheel_directory = source / "wheel"
+    assets.mkdir(parents=True)
+    vite.mkdir()
+    wheel_directory.mkdir()
+    (frontend / "index.html").write_text('<div id="root"></div>\n', encoding="utf-8")
+    (assets / "app-fictive.js").write_text("export const synthetic = true;\n", encoding="utf-8")
+    (vite / "manifest.json").write_text(
+        json.dumps(
+            {
+                "index.html": {
+                    "file": "assets/app-fictive.js",
+                    "isEntry": True,
+                    "name": "index",
+                    "src": "index.html",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    with zipfile.ZipFile(wheel_directory / "botnote_fictive-1.0.0-py3-none-any.whl", "w") as wheel:
+        wheel.writestr("app/__init__.py", '"""Synthetic release fixture."""\n')
+    (source / "imtegrale.cdx.json").write_text(
+        json.dumps({"bomFormat": "CycloneDX", "components": [], "specVersion": "1.6"}),
+        encoding="utf-8",
+    )
+
+    module_name = "_synthetic_release_tools_sealer"
+    spec = importlib.util.spec_from_file_location(module_name, bundle / "seal_release_artifact.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+        destination = tmp_path / "synthetic-published/artifact"
+        destination.parent.mkdir()
+        source_commit = "0e7822504a732850eebbfd74c2a93e6576fe6cd0"
+        result = module.seal_tree(source, destination, source_commit)
+    finally:
+        sys.modules.pop(module_name, None)
+    return destination, result.seal_digest, source_commit
+
+
+def _make_release_tree_writable_for_cleanup(root: Path) -> None:
+    root.parent.chmod(0o755)
+    for path in sorted(root.rglob("*"), reverse=True):
+        path.chmod(0o755 if path.is_dir() else 0o644)
+    root.chmod(0o755)
+
+
+def test_release_tools_bundle_closes_imports_without_checkout_access(
+    tmp_path: Path,
+) -> None:
+    bundle = _create_synthetic_release_tools_bundle(tmp_path)
+    _assert_synthetic_release_tools_bundle(bundle)
+    outside_checkout = tmp_path / "outside-checkout"
+    synthetic_home = tmp_path / "home"
+    outside_checkout.mkdir()
+    synthetic_home.mkdir()
+    assert not outside_checkout.is_relative_to(ROOT)
+    environment = {
+        "HOME": str(synthetic_home),
+        "PATH": os.defpath,
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+
+    for script_name in (
+        "probe_release_artifact_readonly.py",
+        "verify_release_artifact.py",
+        "smoke_release.py",
+    ):
+        result = subprocess.run(
+            [sys.executable, str(bundle / script_name), "--help"],
+            cwd=outside_checkout,
+            env=environment,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert "usage:" in result.stdout
+        assert "ModuleNotFoundError" not in result.stderr
+    assert not any(bundle.rglob("__pycache__"))
+
+
+def test_post_seal_probe_runs_from_bundle_without_checkout_access(tmp_path: Path) -> None:
+    bundle = _create_synthetic_release_tools_bundle(tmp_path)
+    destination, seal_digest, source_commit = _create_synthetic_sealed_release(tmp_path, bundle)
+    outside_checkout = tmp_path / "probe-outside-checkout"
+    synthetic_home = tmp_path / "probe-home"
+    outside_checkout.mkdir()
+    synthetic_home.mkdir()
+    assert not outside_checkout.is_relative_to(ROOT)
+    environment = {
+        "HOME": str(synthetic_home),
+        "PATH": os.defpath,
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(bundle / "probe_release_artifact_readonly.py"),
+                str(destination),
+                "--expected-seal-digest",
+                seal_digest,
+                "--expected-source-commit",
+                source_commit,
+                "--expected-owner",
+                str(os.geteuid()),
+                "--expected-group",
+                str(destination.stat().st_gid),
+            ],
+            cwd=outside_checkout,
+            env=environment,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        _make_release_tree_writable_for_cleanup(destination)
+    assert result.stdout == "readonly-probe: ok mutations_denied=11 concurrent_attempts=500\n"
+    assert result.stderr == ""
+
+
+@pytest.mark.parametrize(
+    "mutation_id",
+    (
+        "remove-verify-release-artifact",
+        "remove-check-content-boundary",
+        "remove-check-secrets",
+        "remove-seal-release-artifact",
+        "change-installed-digest",
+        "add-unmanifested-file",
+    ),
+)
+def test_synthetic_release_tools_bundle_kills_inventory_mutations(
+    mutation_id: str,
+    tmp_path: Path,
+) -> None:
+    bundle = _create_synthetic_release_tools_bundle(tmp_path)
+    bundle.chmod(0o755)
+    if mutation_id.startswith("remove-"):
+        tool_name = mutation_id.removeprefix("remove-").replace("-", "_") + ".py"
+        (bundle / tool_name).unlink()
+    elif mutation_id == "change-installed-digest":
+        tool = bundle / "smoke_release.py"
+        tool.chmod(0o644)
+        with tool.open("ab") as stream:
+            stream.write(b"# mutation\n")
+        tool.chmod(0o444)
+    else:
+        unexpected = bundle / "unexpected.py"
+        unexpected.write_text("raise SystemExit(1)\n", encoding="utf-8")
+        unexpected.chmod(0o444)
+    bundle.chmod(0o555)
+
+    with pytest.raises(AssertionError):
+        _assert_synthetic_release_tools_bundle(bundle)
 
 
 def test_frontend_build_script_remains_a_single_unchanged_lifecycle() -> None:
@@ -748,19 +1148,29 @@ def test_dependency_lifecycles_build_and_wheel_smoke_never_run_as_uploader() -> 
     final_verify = release.index("Verify seal immediately before upload")
     isolated_smoke = release[smoke_start:final_verify]
     assert '--uid="$BUILDER_UID"' in isolated_smoke
-    assert "scripts/smoke_release.py" in isolated_smoke
+    assert '"$RELEASE_TOOLS_DIR/smoke_release.py"' in isolated_smoke
+    assert "scripts/smoke_release.py" not in isolated_smoke
+    assert "--working-directory=/var/lib/imtegrale-build" in isolated_smoke
     assert "--property=PrivateNetwork=true" in isolated_smoke
+    assert "--property=ProtectSystem=strict" in isolated_smoke
+    assert "--property=NoNewPrivileges=true" in isolated_smoke
 
 
-def test_post_seal_probe_uses_raw_builder_permissions() -> None:
+def test_post_seal_probe_uses_confined_builder_and_root_owned_bundle() -> None:
     release = _release_job()
     probe_start = release.index("Probe sealed release against build-UID mutations")
     audit_start = release.index("Audit sealed release artifact")
     probe = release[probe_start:audit_start]
 
-    assert 'sudo -n -u "$BUILDER_NAME" -H' in probe
-    assert "probe_release_artifact_readonly.py" in probe
-    assert "systemd-run" not in probe
+    assert "systemd-run" in probe
+    assert '--uid="$BUILDER_UID"' in probe
+    assert '--gid="$BUILDER_GID"' in probe
+    assert '"$RELEASE_TOOLS_DIR/probe_release_artifact_readonly.py"' in probe
+    assert "$GITHUB_WORKSPACE" not in probe
+    assert "--working-directory=/var/lib/imtegrale-build" in probe
+    assert "--property=PrivateNetwork=true" in probe
+    assert "--property=ProtectSystem=strict" in probe
+    assert "--property=NoNewPrivileges=true" in probe
 
 
 def test_privileged_helper_requires_root_owned_system_authority() -> None:
