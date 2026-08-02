@@ -3,6 +3,7 @@ import type { Page, Route } from "@playwright/test";
 export const SYNTHETIC_APP_FIXTURE_ONLY = true as const;
 
 export type AppSessionMode = "anonymous" | "imt" | "passkey" | "token" | "viewer";
+export type LogoutFixtureMode = "success" | "fail-before-server" | "lose-after-commit" | "indeterminate";
 
 export interface FakeAppState {
   autonomousAvailable: boolean;
@@ -25,9 +26,12 @@ export interface FakeAppState {
   externalRequests: string[];
   loginError: boolean;
   loginRequests: Array<Record<string, unknown>>;
+  logoutMode: LogoutFixtureMode;
+  logoutRequests: number;
   passkeyCreates: number;
   passkeyDeletes: string[];
   session: Record<string, unknown>;
+  sessionRequests: number;
   syncMode: "manual" | "session_only" | "autonomous";
   syncModeUpdates: Array<Record<string, unknown>>;
   syncRequests: number;
@@ -580,8 +584,12 @@ function recordCsrf(route: Route, state: FakeAppState) {
   state.csrfHeaders.push(route.request().headers()["x-csrf-token"]);
 }
 
-export async function installFakeAppApi(page: Page, mode: AppSessionMode = "imt"): Promise<FakeAppState> {
-  const state: FakeAppState = {
+export async function installFakeAppApi(
+  page: Page,
+  mode: AppSessionMode = "imt",
+  sharedState?: FakeAppState,
+): Promise<FakeAppState> {
+  const state: FakeAppState = sharedState ?? {
     autonomousAvailable: false,
     autonomousConfigured: false,
     autonomousNeedsReenrollment: false,
@@ -602,10 +610,13 @@ export async function installFakeAppApi(page: Page, mode: AppSessionMode = "imt"
     externalRequests: [],
     loginError: false,
     loginRequests: [],
+    logoutMode: "success",
+    logoutRequests: 0,
     passkeyCreates: 0,
     passkeyDeletes: [],
     passAccessPurges: 0,
     session: session(mode),
+    sessionRequests: 0,
     syncMode: "manual",
     syncModeUpdates: [],
     syncRequests: 0,
@@ -633,6 +644,11 @@ export async function installFakeAppApi(page: Page, mode: AppSessionMode = "imt"
       return;
     }
     if (url.pathname === "/api/v1/auth/session") {
+      state.sessionRequests += 1;
+      if (state.logoutMode === "indeterminate" && state.logoutRequests > 0) {
+        await route.abort("failed");
+        return;
+      }
       await json(route, state.session);
       return;
     }
@@ -660,7 +676,16 @@ export async function installFakeAppApi(page: Page, mode: AppSessionMode = "imt"
     }
     if (url.pathname === "/api/v1/auth/logout" && request.method() === "POST") {
       recordCsrf(route, state);
+      state.logoutRequests += 1;
+      if (state.logoutMode === "fail-before-server" || state.logoutMode === "indeterminate") {
+        await route.abort("failed");
+        return;
+      }
       state.session = session("anonymous");
+      if (state.logoutMode === "lose-after-commit") {
+        await route.abort("failed");
+        return;
+      }
       await json(route, { ok: true });
       return;
     }
