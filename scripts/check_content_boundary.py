@@ -26,12 +26,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import BinaryIO
 
+from wheel_boundary import parse_wheel_profile, read_member_payload
+
 MAX_INDEX_BLOB_BYTES = 32 * 1024 * 1024
 MAX_FIXTURE_BYTES = 2 * 1024 * 1024
 MAX_ARTIFACT_FILE_BYTES = 64 * 1024 * 1024
+MAX_WHEEL_FILE_BYTES = 256 * 1024 * 1024
 MAX_WHEEL_ENTRIES = 20_000
 MAX_WHEEL_ENTRY_BYTES = 64 * 1024 * 1024
 MAX_WHEEL_TOTAL_BYTES = 256 * 1024 * 1024
+MAX_WHEEL_COMPRESSION_RATIO = 200
+MAX_LZMA_SCAN_DICTIONARY_BYTES = 1024 * 1024
 
 REGULAR_INDEX_MODES = {"100644", "100755"}
 FORBIDDEN_INDEX_MODES = {"120000": "TRACKED_SYMLINK", "160000": "TRACKED_GITLINK"}
@@ -413,13 +418,36 @@ def _is_tar_container(data: bytes) -> bool:
 
 
 def _is_lzma_alone_stream(data: bytes) -> bool:
-    """Recognize an LZMA-alone stream while bounding decompressed output."""
+    """Recognize LZMA-alone while bounding output and decoder dictionary memory."""
 
     if len(data) < 13:
         return False
+    properties = data[0]
+    if properties >= 9 * 5 * 5:
+        return False
+    lc = properties % 9
+    remainder = properties // 9
+    lp = remainder % 5
+    pb = remainder // 5
+    declared_dictionary = int.from_bytes(data[1:5], "little")
+    dictionary_size = min(
+        max(declared_dictionary, 4_096),
+        MAX_LZMA_SCAN_DICTIONARY_BYTES,
+    )
     try:
-        decompressor = lzma.LZMADecompressor(format=lzma.FORMAT_ALONE)
-        output = decompressor.decompress(data, max_length=1)
+        decompressor = lzma.LZMADecompressor(
+            format=lzma.FORMAT_RAW,
+            filters=[
+                {
+                    "id": lzma.FILTER_LZMA1,
+                    "dict_size": dictionary_size,
+                    "lc": lc,
+                    "lp": lp,
+                    "pb": pb,
+                }
+            ],
+        )
+        output = decompressor.decompress(data[13:], max_length=1)
     except (EOFError, lzma.LZMAError, ValueError):
         return False
     return bool(output) or decompressor.eof
@@ -808,13 +836,22 @@ def scan_directory(directory: Path, *, logical_root: str = "frontend/dist") -> S
     return result
 
 
-def _zip_entry_is_symlink(info: zipfile.ZipInfo) -> bool:
-    unix_mode = (info.external_attr >> 16) & 0xFFFF
-    return stat.S_ISLNK(unix_mode)
+def _decoded_wheel_name(raw_name: bytes, flags: int) -> str | None:
+    try:
+        return raw_name.decode("utf-8" if flags & 0x0800 else "ascii", errors="strict")
+    except UnicodeDecodeError:
+        return None
+
+
+def _scan_wheel_metadata(result: ScanResult, data: bytes) -> None:
+    if not data:
+        return
+    for rule_id in _content_rules("wheel-metadata.bin", data, force_sensitive=True):
+        result.add(rule_id)
 
 
 def scan_wheel(wheel_path: Path) -> ScanResult:
-    """Inspect a wheel as a ZIP container without extracting or following links."""
+    """Inspect every byte of a release wheel without extracting or following links."""
 
     result = ScanResult()
     try:
@@ -829,62 +866,88 @@ def scan_wheel(wheel_path: Path) -> ScanResult:
         result.add("WHEEL_FILE_TYPE_INVALID")
         return result
 
+    open_flags = os.O_RDONLY
+    open_flags |= getattr(os, "O_CLOEXEC", 0)
+    open_flags |= getattr(os, "O_NOFOLLOW", 0)
     try:
-        archive = zipfile.ZipFile(wheel_path)
-    except (OSError, zipfile.BadZipFile):
-        result.add("WHEEL_INVALID")
+        descriptor = os.open(wheel_path, open_flags)
+    except OSError:
+        result.add("WHEEL_UNAVAILABLE")
         return result
-
-    normalized_paths: set[str] = set()
-    total_size = 0
     try:
-        entries = archive.infolist()
-        if len(entries) > MAX_WHEEL_ENTRIES:
-            result.add("WHEEL_ENTRY_COUNT_LIMIT")
+        try:
+            opened_stat = os.fstat(descriptor)
+        except OSError:
+            result.add("WHEEL_UNAVAILABLE")
             return result
-        for info in entries:
-            if info.is_dir():
+        if not stat.S_ISREG(opened_stat.st_mode):
+            result.add("WHEEL_FILE_TYPE_INVALID")
+            return result
+
+        profile = parse_wheel_profile(
+            descriptor,
+            max_file_bytes=MAX_WHEEL_FILE_BYTES,
+            max_entries=MAX_WHEEL_ENTRIES,
+            max_entry_bytes=MAX_WHEEL_ENTRY_BYTES,
+            max_total_bytes=MAX_WHEEL_TOTAL_BYTES,
+            max_compression_ratio=MAX_WHEEL_COMPRESSION_RATIO,
+        )
+        for rule_id in profile.violations:
+            result.add(rule_id)
+
+        _scan_wheel_metadata(result, profile.archive_comment)
+        normalized_paths: set[str] = set()
+        for member in profile.members:
+            metadata_blobs = {
+                member.name_raw,
+                member.local_name_raw,
+                member.central_extra,
+                member.local_extra,
+                member.member_comment,
+            }
+            if member.name is not None:
+                metadata_blobs.add(member.name.encode("utf-8"))
+            for metadata in metadata_blobs:
+                _scan_wheel_metadata(result, metadata)
+
+            decoded_names = [member.name]
+            if member.local_name_raw and member.local_name_raw != member.name_raw:
+                decoded_names.append(_decoded_wheel_name(member.local_name_raw, member.flags))
+            for decoded_name in decoded_names:
+                if decoded_name is None:
+                    continue
+                normalized_path, path_rule_ids = normalize_repo_path(decoded_name)
+                for rule_id in path_rule_ids:
+                    result.add(rule_id)
+                if normalized_path is None:
+                    continue
+                if normalized_path in normalized_paths:
+                    result.add("PATH_NORMALIZATION_COLLISION")
+                normalized_paths.add(normalized_path)
+                for rule_id in _path_rules(normalized_path, force_sensitive=True):
+                    result.add(rule_id)
+
+            if member.directory:
                 continue
             result.artifact_files += 1
-            if info.flag_bits & 0x1:
-                result.add("WHEEL_ENCRYPTED_ENTRY")
+            if not profile.payloads_safe or not member.payload_readable:
                 continue
-            if _zip_entry_is_symlink(info):
-                result.add("WHEEL_SYMLINK_ENTRY")
-                continue
-
-            normalized_path, path_rule_ids = normalize_repo_path(info.filename)
-            for rule_id in path_rule_ids:
+            payload = read_member_payload(
+                descriptor,
+                member,
+                max_output_bytes=MAX_WHEEL_ENTRY_BYTES,
+            )
+            for rule_id in payload.violations:
                 result.add(rule_id)
+            if payload.data is None:
+                continue
+            normalized_path, _rules = normalize_repo_path(member.name or "")
             if normalized_path is None:
                 continue
-            if normalized_path in normalized_paths:
-                result.add("PATH_NORMALIZATION_COLLISION")
-            normalized_paths.add(normalized_path)
-            for rule_id in _path_rules(normalized_path, force_sensitive=True):
-                result.add(rule_id)
-
-            total_size += info.file_size
-            if info.file_size > MAX_WHEEL_ENTRY_BYTES:
-                result.add("WHEEL_ENTRY_SIZE_LIMIT")
-                continue
-            if total_size > MAX_WHEEL_TOTAL_BYTES:
-                result.add("WHEEL_TOTAL_SIZE_LIMIT")
-                break
-            try:
-                with archive.open(info, "r") as stream:
-                    data, read_error = _read_limited(stream, MAX_WHEEL_ENTRY_BYTES)
-            except (OSError, RuntimeError, zipfile.BadZipFile):
-                result.add("WHEEL_ENTRY_UNAVAILABLE")
-                continue
-            if read_error is not None:
-                result.add("WHEEL_ENTRY_SIZE_LIMIT")
-                continue
-            assert data is not None
-            for rule_id in _content_rules(normalized_path, data, force_sensitive=True):
+            for rule_id in _content_rules(normalized_path, payload.data, force_sensitive=True):
                 result.add(rule_id)
     finally:
-        archive.close()
+        os.close(descriptor)
     return result
 
 
