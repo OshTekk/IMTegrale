@@ -166,8 +166,21 @@ def test_encrypted_backup_restore_is_isolated_and_never_writes_plaintext() -> No
 def test_operational_alert_timer_uses_only_stable_aggregate_codes() -> None:
     service = read("deploy/botnote-operations-check.service")
     timer = read("deploy/botnote-operations-check.timer")
+    environment = read("deploy/botnote-operations.env.example")
 
     assert 'botnote operations-check' in service
+    assert "EnvironmentFile=/etc/botnote/botnote-operations.env" in service
+    assert "botnote-runtime.env" not in service
+    assert "botnote.env" not in service
+    assert "LoadCredential=" not in service
+    for forbidden in (
+        "BOTNOTE_AUTONOMOUS_SYNC_CANARY_ACCOUNT_IDS",
+        "BOTNOTE_OWNER_IMT_USERNAME",
+        "BOTNOTE_LEARNING_ALLOWED_IMT_USERNAMES",
+        "BOTNOTE_CREDENTIAL_KEY",
+        "BOTNOTE_TOKEN_PEPPER",
+    ):
+        assert forbidden not in environment
     assert 'OnUnitActiveSec=5min' in timer
     assert 'Persistent=true' in timer
 

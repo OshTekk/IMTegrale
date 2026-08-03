@@ -13,6 +13,7 @@ EnvironmentFile=/etc/botnote/botnote-runtime.env
 EnvironmentFile=/etc/botnote/botnote.env
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
+LoadCredential=autonomous-sync-canary-account-ids
 ExecStart=/opt/botnote/runtime/bin/botnote worker scheduler
 Restart=on-failure
 RestartSec=3
@@ -35,6 +36,7 @@ ProtectKernelModules=true
 ProtectKernelTunables=true
 ProtectSystem=strict
 InaccessiblePaths=-/etc/botnote/sync-hpke
+InaccessiblePaths=-/etc/credstore
 LockPersonality=true
 MemoryDenyWriteExecute=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX

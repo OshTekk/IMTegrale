@@ -157,6 +157,7 @@ def test_sync_commands_report_results_and_fail_on_partial_error(monkeypatch, cap
     monkeypatch.setattr("sys.argv", ["botnote", "sync-due"])
     with pytest.raises(SystemExit, match="1"):
         cli.main()
+    assert StubSettings.validated_roles[-1] is RuntimeRole.SCHEDULER
 
 
 def test_schema_rotation_and_operations_commands_are_dispatchable(monkeypatch, capsys) -> None:  # noqa: ANN001
@@ -188,6 +189,7 @@ def test_schema_rotation_and_operations_commands_are_dispatchable(monkeypatch, c
     monkeypatch.setattr("sys.argv", ["botnote", "operations-check"])
     cli.main()
     assert '"ok": true' in capsys.readouterr().out
+    assert StubSettings.validated_roles[-1] is RuntimeRole.OPERATIONS
 
     monkeypatch.setattr(cli, "operational_alert_codes", lambda _db, _settings: ["TEST_ALERT"])
     with pytest.raises(SystemExit, match="1"):

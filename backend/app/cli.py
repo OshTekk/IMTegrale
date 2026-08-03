@@ -21,6 +21,10 @@ def _runtime_role(command: str, worker_kind: str | None = None) -> RuntimeRole:
         return RuntimeRole.WEB
     if command in {"sync", "sync-all", "sync-worker"}:
         return RuntimeRole.SYNC
+    if command == "sync-due":
+        return RuntimeRole.SCHEDULER
+    if command == "operations-check":
+        return RuntimeRole.OPERATIONS
     if command == "pass-sessions-migrate-hpke":
         return RuntimeRole.SYNC_MIGRATION
     if command == "hpke-rotate-envelopes":

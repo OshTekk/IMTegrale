@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import ipaddress
+import json
 import os
 import stat
 import sys
@@ -24,6 +25,7 @@ class RuntimeRole(StrEnum):
     CALENDAR = "calendar"
     OUTBOX = "outbox"
     SCHEDULER = "scheduler"
+    OPERATIONS = "operations"
     CLI = "cli"
 
 
@@ -34,6 +36,83 @@ class AutonomousSyncRollout(StrEnum):
 
 
 AUTONOMOUS_SYNC_CANARY_MAX_ACCOUNTS = 25
+
+RUNTIME_IDENTIFIER_CREDENTIALS = {
+    "autonomous_sync_canary_account_ids": "autonomous-sync-canary-account-ids",
+    "owner_imt_username": "owner-imt-username",
+    "learning_allowed_imt_usernames": "learning-allowed-imt-usernames",
+}
+RUNTIME_IDENTIFIER_ENVIRONMENT_VARIABLES = {
+    "autonomous_sync_canary_account_ids": "BOTNOTE_AUTONOMOUS_SYNC_CANARY_ACCOUNT_IDS",
+    "owner_imt_username": "BOTNOTE_OWNER_IMT_USERNAME",
+    "learning_allowed_imt_usernames": "BOTNOTE_LEARNING_ALLOWED_IMT_USERNAMES",
+}
+_RUNTIME_IDENTIFIER_ALLOWED_ROLES = {
+    "autonomous_sync_canary_account_ids": frozenset(
+        {RuntimeRole.WEB, RuntimeRole.SCHEDULER, RuntimeRole.SYNC}
+    ),
+    "owner_imt_username": frozenset({RuntimeRole.SYNC}),
+    "learning_allowed_imt_usernames": frozenset({RuntimeRole.WEB}),
+}
+_RUNTIME_IDENTIFIER_CREDENTIAL_MAX_BYTES = 4_096
+_OPERATIONS_ALLOWED_ENVIRONMENT_VARIABLES = frozenset(
+    {
+        "BOTNOTE_ENVIRONMENT",
+        "BOTNOTE_DATABASE_URL",
+        "BOTNOTE_WORKER_HEARTBEAT_TTL_SECONDS",
+        "BOTNOTE_AUTONOMOUS_SYNC_ENABLED",
+        "BOTNOTE_AUTONOMOUS_SYNC_ENROLLMENT_ENABLED",
+        "BOTNOTE_AUTONOMOUS_SYNC_ROLLOUT",
+    }
+)
+
+
+def _read_runtime_identifier_credential(logical_name: str) -> str | None:
+    credentials_directory = os.environ.get("CREDENTIALS_DIRECTORY")
+    if not credentials_directory:
+        return None
+    directory = Path(credentials_directory)
+    if not directory.is_absolute():
+        raise RuntimeError("RUNTIME_IDENTIFIER_CREDENTIAL_DIRECTORY_INVALID")
+    path = directory / logical_name
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except FileNotFoundError:
+        return None
+    except OSError:
+        raise RuntimeError("RUNTIME_IDENTIFIER_CREDENTIAL_UNREADABLE") from None
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or not 1 <= metadata.st_size <= _RUNTIME_IDENTIFIER_CREDENTIAL_MAX_BYTES
+            or stat.S_IMODE(metadata.st_mode) & 0o077
+        ):
+            raise RuntimeError("RUNTIME_IDENTIFIER_CREDENTIAL_UNSAFE")
+        with os.fdopen(descriptor, encoding="utf-8", closefd=True) as source:
+            descriptor = None
+            value = source.read(_RUNTIME_IDENTIFIER_CREDENTIAL_MAX_BYTES + 1)
+    except (OSError, UnicodeError):
+        raise RuntimeError("RUNTIME_IDENTIFIER_CREDENTIAL_UNREADABLE") from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    value = value.rstrip("\r\n")
+    if not value or len(value.encode("utf-8")) > _RUNTIME_IDENTIFIER_CREDENTIAL_MAX_BYTES:
+        raise RuntimeError("RUNTIME_IDENTIFIER_CREDENTIAL_INVALID")
+    return value
+
+
+def _parse_identifier_list_credential(value: str) -> list[str]:
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        raise RuntimeError("RUNTIME_IDENTIFIER_CREDENTIAL_INVALID") from None
+    if not isinstance(parsed, list) or not all(isinstance(item, str) for item in parsed):
+        raise RuntimeError("RUNTIME_IDENTIFIER_CREDENTIAL_INVALID")
+    return parsed
 
 
 class Settings(BaseSettings):
@@ -208,9 +287,12 @@ class Settings(BaseSettings):
             return self
 
         if self.learning_access_mode == "personal":
-            if not self.learning_allowed_imt_usernames:
+            # Production identifiers are loaded later from a role-scoped
+            # systemd credential. Non-web roles deliberately construct the
+            # same non-identifying policy without receiving the login.
+            if self.environment != "production" and not self.learning_allowed_imt_usernames:
                 raise ValueError("Personal learning mode requires an IMT account allowlist")
-            if len(self.learning_allowed_imt_usernames) != 1:
+            if self.learning_allowed_imt_usernames and len(self.learning_allowed_imt_usernames) != 1:
                 raise ValueError("Personal learning mode requires exactly one IMT account")
             if not self.learning_allowed_identities:
                 raise ValueError("Personal learning mode requires a private ingress allowlist")
@@ -237,17 +319,101 @@ class Settings(BaseSettings):
             return self
         if not runtime_enabled or not enrollment_enabled:
             raise ValueError("AUTONOMOUS_SYNC_ROLLOUT_CONFIGURATION_INVALID")
-        if rollout is AutonomousSyncRollout.CANARY and not canary_accounts:
-            raise ValueError("AUTONOMOUS_SYNC_ROLLOUT_CONFIGURATION_INVALID")
+        # A canary identifier is required only by the three code consumers.
+        # It is injected from a role-scoped systemd credential during runtime
+        # validation, so non-consumer processes keep an empty list.
         if rollout is AutonomousSyncRollout.ALL and canary_accounts:
             raise ValueError("AUTONOMOUS_SYNC_ROLLOUT_CONFIGURATION_INVALID")
         return self
+
+    def _load_runtime_identifier_credentials(self, runtime_role: RuntimeRole) -> None:
+        configured_environment_names = {name.casefold() for name in os.environ}
+        raw_environment = [
+            variable
+            for variable in RUNTIME_IDENTIFIER_ENVIRONMENT_VARIABLES.values()
+            if variable.casefold() in configured_environment_names
+        ]
+        if raw_environment:
+            raise RuntimeError("RUNTIME_IDENTIFIER_ENVIRONMENT_FORBIDDEN")
+
+        credential_values: dict[str, str] = {}
+        for field_name, logical_name in RUNTIME_IDENTIFIER_CREDENTIALS.items():
+            value = _read_runtime_identifier_credential(logical_name)
+            if value is not None:
+                credential_values[field_name] = value
+
+        if any(
+            runtime_role not in _RUNTIME_IDENTIFIER_ALLOWED_ROLES[field_name]
+            for field_name in credential_values
+        ):
+            raise RuntimeError("RUNTIME_IDENTIFIER_CREDENTIAL_FORBIDDEN_FOR_ROLE")
+
+        # Production never falls back to a value parsed from Environment or a
+        # dotenv file. Only the credential copy for this exact service role can
+        # repopulate these fields.
+        self.autonomous_sync_canary_account_ids = []
+        self.owner_imt_username = ""
+        self.learning_allowed_imt_usernames = []
+
+        canary_value = credential_values.get("autonomous_sync_canary_account_ids")
+        if canary_value is not None:
+            parsed_canary = _parse_identifier_list_credential(canary_value)
+            self.autonomous_sync_canary_account_ids = (
+                self.normalize_autonomous_sync_canary_accounts(parsed_canary)
+            )
+
+        owner_value = credential_values.get("owner_imt_username")
+        if owner_value is not None:
+            owner_username = owner_value.strip().casefold()
+            if (
+                not 2 <= len(owner_username) <= 160
+                or any(ord(character) < 33 for character in owner_username)
+            ):
+                raise RuntimeError("RUNTIME_IDENTIFIER_CREDENTIAL_INVALID")
+            self.owner_imt_username = owner_username
+
+        learning_value = credential_values.get("learning_allowed_imt_usernames")
+        if learning_value is not None:
+            parsed_learning = _parse_identifier_list_credential(learning_value)
+            self.learning_allowed_imt_usernames = self.normalize_learning_usernames(
+                parsed_learning
+            )
+
+        canary_consumer = runtime_role in _RUNTIME_IDENTIFIER_ALLOWED_ROLES[
+            "autonomous_sync_canary_account_ids"
+        ]
+        if self.autonomous_sync_rollout is AutonomousSyncRollout.CANARY:
+            if canary_consumer and not self.autonomous_sync_canary_account_ids:
+                raise RuntimeError("RUNTIME_IDENTIFIER_CREDENTIAL_REQUIRED")
+        elif self.autonomous_sync_canary_account_ids:
+            raise RuntimeError("RUNTIME_IDENTIFIER_CREDENTIAL_UNEXPECTED")
+
+        if runtime_role is RuntimeRole.WEB:
+            if self.learning_access_mode == "personal":
+                if len(self.learning_allowed_imt_usernames) != 1:
+                    raise RuntimeError("RUNTIME_IDENTIFIER_CREDENTIAL_REQUIRED")
+            elif self.learning_allowed_imt_usernames:
+                raise RuntimeError("RUNTIME_IDENTIFIER_CREDENTIAL_UNEXPECTED")
+
+        if runtime_role is RuntimeRole.SYNC:
+            if self.owner_imt_password_file is not None and not self.owner_imt_username:
+                raise RuntimeError("RUNTIME_IDENTIFIER_CREDENTIAL_REQUIRED")
+            if self.owner_imt_username and self.owner_imt_password_file is None:
+                raise RuntimeError("RUNTIME_IDENTIFIER_CREDENTIAL_UNEXPECTED")
 
     def validate_for_runtime(self, role: RuntimeRole | str) -> None:
         try:
             runtime_role = RuntimeRole(role)
         except (TypeError, ValueError):
             raise RuntimeError("Unknown runtime role") from None
+        if self.environment == "production":
+            self._load_runtime_identifier_credentials(runtime_role)
+            if runtime_role is RuntimeRole.OPERATIONS and any(
+                name.casefold().startswith("botnote_")
+                and name not in _OPERATIONS_ALLOWED_ENVIRONMENT_VARIABLES
+                for name in os.environ
+            ):
+                raise RuntimeError("OPERATIONS_ENVIRONMENT_FORBIDDEN")
         if runtime_role is RuntimeRole.WEB:
             self.validate_learning_content_boundary()
         if runtime_role in {
@@ -276,6 +442,14 @@ class Settings(BaseSettings):
             or self.token_previous_peppers
         ):
             raise RuntimeError("HPKE_ROTATION_UNRELATED_SECRET_FORBIDDEN")
+        if runtime_role is RuntimeRole.OPERATIONS and (
+            self.credential_key
+            or self.credential_previous_keys
+            or self.token_pepper
+            or self.token_previous_peppers
+            or self.owner_imt_password_file is not None
+        ):
+            raise RuntimeError("OPERATIONS_UNRELATED_SECRET_FORBIDDEN")
 
         needs_credential_key = runtime_role in {
             RuntimeRole.WEB,

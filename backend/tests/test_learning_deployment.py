@@ -33,8 +33,9 @@ def test_learning_runtime_defaults_and_optional_read_only_mount() -> None:
     assert "BOTNOTE_LEARNING_STUDENT_STATUS_MAX_AGE_DAYS=30" in runtime_env
     assert "BOTNOTE_LEARNING_ACCESS_MODE=cohort" in runtime_env
     assert "BOTNOTE_LEARNING_AUDIENCE_ID=fip:2028" in runtime_env
-    assert "BOTNOTE_LEARNING_ALLOWED_IMT_USERNAMES='[]'" in runtime_env
+    assert "BOTNOTE_LEARNING_ALLOWED_IMT_USERNAMES" not in runtime_env
     assert "BOTNOTE_LEARNING_ALLOWED_IDENTITIES='[]'" in runtime_env
+    assert "LoadCredential=learning-allowed-imt-usernames" in service
     assert "User=botnote" in service
     assert "Group=botnote" in service
     assert "ProtectSystem=strict" in service
@@ -52,7 +53,8 @@ def test_personal_learning_deployment_is_explicit_and_keeps_real_identity_privat
 
     assert "BOTNOTE_LEARNING_ACCESS_MODE=personal" in example
     assert "BOTNOTE_LEARNING_AUDIENCE_ID=personal:owner" in example
-    assert "BOTNOTE_LEARNING_ALLOWED_IMT_USERNAMES" in example
+    assert "BOTNOTE_LEARNING_ALLOWED_IMT_USERNAMES" not in example
+    assert "learning-allowed-imt-usernames" in example
     assert "BOTNOTE_LEARNING_ALLOWED_IDENTITIES" in example
     assert "une liste absente ou vide" in deployment
     assert "l'audience générale `fip:2028`" in deployment
