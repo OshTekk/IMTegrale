@@ -51,7 +51,7 @@ une copie locale portant seulement le même SHA Git. Un manifest absent implique
 un échec fermé avant la bascule. Conserver la release active comme cible de
 rollback jusqu'à la fin des vérifications.
 
-La révision `0017` supprime physiquement les anciennes colonnes de mot de passe IMT. Si l'opérateur choisit l'exception facultative pour son unique compte propriétaire, il doit créer **avant** la migration `/etc/botnote/owner-imt-password`, sans passer le secret dans l'historique du shell, puis l'installer en `botnote:botnote 0400`. Définir ensuite `BOTNOTE_OWNER_IMT_USERNAME` et `BOTNOTE_OWNER_IMT_PASSWORD_FILE` dans l'environnement privé. Aucun autre compte ne doit disposer d'un secret local.
+La révision `0017` supprime physiquement les anciennes colonnes de mot de passe IMT. Si l'opérateur choisit l'exception facultative pour son unique compte propriétaire, il doit créer **avant** la migration `/etc/botnote/owner-imt-password`, sans passer le secret dans l'historique du shell, puis l'installer en `botnote:botnote 0400`. Conserver uniquement `BOTNOTE_OWNER_IMT_PASSWORD_FILE` dans le profil privé du sync worker et fournir le login par le credential systemd root-only `owner-imt-username`. Aucun autre service et aucun autre compte ne doivent recevoir cet identifiant ou ce secret local.
 
 ## Installation LXC
 
@@ -59,11 +59,19 @@ La révision `0017` supprime physiquement les anciennes colonnes de mot de passe
 2. Installer `age`, déposer uniquement la clé publique de sauvegarde dans `/etc/botnote/backup-age-recipient` en `root:botnote 0640`, et conserver la clé privée de restauration hors du PVE et du LXC. Installer `deploy/backup.sh` en `/usr/local/libexec/botnote-backup`, propriétaire `root:root` et mode `0755` ; l'unité ne dépend ainsi jamais du contenu d'une release applicative. Un dump n'est valide qu'après restauration testée depuis son fichier `.dump.age` sur une base isolée.
 3. Créer un environnement neuf avec `python3 -m venv /opt/botnote/venvs/<release>` ; ne jamais recopier un ancien venv, car ses scripts contiennent des chemins absolus. Installer `deploy/requirements.lock`, puis le wheel IMTégrale avec `python -m pip install --no-deps`. Vérifier que les shebangs de `bin/botnote` et `bin/alembic` pointent vers le nouveau chemin, puis appliquer `chown -R root:botnote-runtime` et `chmod -R g+rX,o-rwx` à la release et au venv. Les utilisateurs `botnote` et `botnote-sync` appartiennent au groupe de lecture borné `botnote-runtime`. Ne pas compter sur l'`umask` seul : une archive tar conserve ses propres modes.
 4. Installer une copie adaptée de `botnote-runtime.env` en `root:botnote 0640`; `BOTNOTE_BIND_HOST` doit être l'adresse privée du conteneur et `BOTNOTE_TRUSTED_PROXY_IPS` ne doit contenir que le frontal. Les secrets et surcharges privées du web, scheduler, calendar et outbox restent dans `botnote.env`. Le worker sync charge à la place `botnote-sync.env`, installé `root:root 0600`, et ne reçoit ni secrets Telegram, ni mTLS, ni configuration Parcours. En production, les clés de chiffrement doivent être des valeurs base64 URL-safe de 32 octets, les peppers doivent contenir au moins 32 octets et toutes ces valeurs doivent être distinctes. `BOTNOTE_PASS_SESSION_MAX_DAYS` ne doit jamais dépasser 30. Pour Parcours, conserver `BOTNOTE_LEARNING_CONTENT_ROOT=/opt/botnote-learning` et `BOTNOTE_LEARNING_STUDENT_STATUS_MAX_AGE_DAYS=30`, ou réduire cette dernière durée après analyse d'impact. Cette fraîcheur est indépendante de la session : seule une authentification IMT réussie la renouvelle, jamais une passkey, un token ou une consultation. Le mode `cohort` conserve le comportement FIP 2028 existant. Une release personnelle doit sélectionner explicitement `BOTNOTE_LEARNING_ACCESS_MODE=personal` dans le fichier privé et renseigner une audience distincte préfixée `personal:`, l'allowlist de logins IMT et l'allowlist réseau exactes décrites plus bas ; une liste absente ou vide, ou l'audience générale `fip:2028`, fait échouer la configuration.
+   Les identifiants d'exécution ne sont jamais des variables d'environnement en
+   production. Installer leurs sources sous `/etc/credstore`, répertoire
+   `root:root 0700`, fichiers réguliers `root:root 0400`, sans lien ni hardlink :
+   `autonomous-sync-canary-account-ids` pour web/scheduler/sync,
+   `learning-allowed-imt-usernames` pour le web personnel et
+   `owner-imt-username` pour le sync worker utilisant l'exception propriétaire.
+   Les deux listes utilisent JSON ; le login propriétaire est une ligne unique.
+   Calendar, outbox et `operations-check` ne reçoivent aucun de ces credentials.
    Pour G7A, vérifier aussi que
    `BOTNOTE_AUTONOMOUS_SYNC_ROLLOUT=off`,
    `BOTNOTE_AUTONOMOUS_SYNC_ENABLED=false`,
-   `BOTNOTE_AUTONOMOUS_SYNC_ENROLLMENT_ENABLED=false` et
-   `BOTNOTE_AUTONOMOUS_SYNC_CANARY_ACCOUNT_IDS=[]`. Toute combinaison
+   `BOTNOTE_AUTONOMOUS_SYNC_ENROLLMENT_ENABLED=false` et que le credential
+   canary est absent. Toute ancienne variable brute, même vide, ou combinaison
    production incohérente doit faire échouer la validation. Les clés G3 sont
    provisionnées hors Git et injectées uniquement par `LoadCredential`; elles
    ne doivent jamais être ajoutées à un environnement. Depuis G4, le web reçoit
@@ -78,7 +86,7 @@ La révision `0017` supprime physiquement les anciennes colonnes de mot de passe
    contraction est décrite
    dans
    [`pass-session-hpke-migration.md`](../docs/security/pass-session-hpke-migration.md).
-5. Définir `BOTNOTE_ADMIN_ALLOWED_IDENTITIES` dans `/etc/botnote/botnote.env`. Une liste vide garde toutes les routes admin invisibles.
+5. Définir `BOTNOTE_ADMIN_ALLOWED_IDENTITIES` dans `/etc/botnote/botnote.env`. Une liste vide garde toutes les routes admin invisibles. Installer séparément `/etc/botnote/botnote-operations.env` en `root:botnote 0640` depuis l'exemple non identifiant ; l'unité `operations-check` ne charge ni `botnote.env`, ni secret, ni credential d'identifiant.
 6. Valider les unités avec `systemd-analyze verify`, nftables avec `nft -c -f`, puis exécuter `alembic upgrade head` sous l'utilisateur `botnote`.
 7. Suivre la procédure [d'isolation du worker sync](../docs/security/sync-worker-isolation.md) pour créer l'identité Unix, les groupes, les locks, le rôle PostgreSQL, les règles `pg_hba` bornées à la base `botnote`, les deux paires HPKE et le fichier sync privé. Vérifier `pg_hba_file_rules` avant le reload PostgreSQL. Installer `botnote-web.service`, `botnote-scheduler.service`, `botnote-sync-worker.service`, `botnote-job-worker@.service`, `botnote-operations-check.service`, `botnote-operations-check.timer` et le CLI, puis exécuter `systemctl daemon-reload`. Arrêter, désactiver et empêcher le redémarrage de `botnote-job-worker@sync.service`; le template et le CLI refusent désormais cette instance. Calendar et outbox conservent le template générique.
 8. Pour G4A, arrêter le scheduler et le worker sync, appliquer `0026`, basculer
@@ -218,7 +226,7 @@ Le stockage de production suit cette structure :
 Le mode `personal` est une restriction générique de déploiement, pas une donnée du frontend. Il conserve les invariants owner primaire, compte actif, absence de token partagé, méthode IMT/passkey, preuve académique et fraîcheur IMT, puis exige en plus :
 
 - `BOTNOTE_LEARNING_AUDIENCE_ID` identique à l'audience unique du bundle actif et préfixé `personal:` ; l'audience générale `fip:2028` est refusée dans ce mode ;
-- exactement un login IMT stable dans `BOTNOTE_LEARNING_ALLOWED_IMT_USERNAMES` ; ni le nom affiché ni un nom transmis par React ne sont utilisés ;
+- exactement un login IMT stable dans le credential web-only `learning-allowed-imt-usernames` ; ni le nom affiché ni un nom transmis par React ne sont utilisés ;
 - l'identité exacte produite par le frontal dans `BOTNOTE_LEARNING_ALLOWED_IDENTITIES`, exclusivement sous forme `lan:…` ou `tailnet:…`.
 
 Les valeurs réelles restent dans `/etc/botnote/botnote.env`, en `root:botnote 0640`, jamais dans le dépôt ou le manifest public. Pour une identité LAN, réserver l'adresse du terminal dans DHCP avant de déclarer `lan:<adresse>` ; pour Tailnet, utiliser l'identité de connexion exacte fournie par Tailscale Serve. Le frontal classe en `peer:…` toute combinaison de port ou d'en-têtes qu'il ne reconnaît pas ; seul son listener LAN 443 produit `lan:…`. Ne jamais autoriser `internet:…`, `peer:…`, un préfixe, un joker ou un sous-réseau entier. `BOTNOTE_TRUSTED_PROXY_IPS` doit continuer à ne contenir que le frontal mTLS : un header `X-BotNote-Client-Identity` envoyé directement par un autre pair est ignoré.

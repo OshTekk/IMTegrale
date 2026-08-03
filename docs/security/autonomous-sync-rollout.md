@@ -16,20 +16,23 @@ des comptes, clés, sessions et credentials synthétiques.
 
 ## Configuration
 
-Le rollout repose sur quatre réglages privés :
+Le rollout repose sur trois réglages privés non identifiants et, en mode
+`canary`, un credential systemd séparé :
 
 ```text
 BOTNOTE_AUTONOMOUS_SYNC_ROLLOUT=off|canary|all
 BOTNOTE_AUTONOMOUS_SYNC_ENABLED=false|true
 BOTNOTE_AUTONOMOUS_SYNC_ENROLLMENT_ENABLED=false|true
-BOTNOTE_AUTONOMOUS_SYNC_CANARY_ACCOUNT_IDS='["UUID interne canonique"]'
+autonomous-sync-canary-account-ids  # credential JSON root-only
 ```
 
 Les identifiants canary sont des UUID internes canoniques, dédupliqués et
 limités à 25. Aucun login IMT, nom ou identifiant étudiant ne doit apparaître
-dans Git, les logs ou l'API. La valeur d'environnement est une liste JSON :
-`[]` lorsqu'elle est vide, ou `["uuid-1","uuid-2"]` dans la configuration
-privée d'un futur canary.
+dans Git, les logs, l'API, `Environment`, les arguments ou `/proc/*/environ`.
+Le credential contient une liste JSON et n'est mappé qu'au web, au scheduler et
+au sync worker. `operations-check`, calendar et outbox ne le reçoivent jamais.
+Les anciennes variables `BOTNOTE_AUTONOMOUS_SYNC_CANARY_ACCOUNT_IDS` sont
+refusées en production, même vides.
 
 | Rollout | Runtime | Enrôlement | Allowlist | Résultat |
 | --- | --- | --- | --- | --- |
@@ -133,9 +136,10 @@ G7B est une intervention séparée. Avant toute modification :
 1. sauvegarder PostgreSQL de manière chiffrée et tester sa restauration ;
 2. vérifier zéro credential réel et zéro compte autonome ;
 3. vérifier keysets actifs, heartbeat et `operations-check` ;
-4. choisir un seul UUID interne hors dépôt et hors logs ;
+4. choisir un seul UUID interne hors dépôt et hors logs, puis l'installer comme
+   liste JSON dans le credential root-only `autonomous-sync-canary-account-ids` ;
 5. mettre `rollout=canary`, runtime et enrôlement à `true` dans les fichiers
-   privés ;
+   privés non identifiants, sans ancienne variable d'allowlist ;
 6. fournir au web uniquement la clé publique credential prévue ;
 7. ne modifier aucune clé privée ni l'isolation du worker ;
 8. redémarrer, exiger une readiness verte et vérifier les vues neutres ;

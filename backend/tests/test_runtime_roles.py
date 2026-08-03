@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import base64
+import json
+import os
 import stat
 import sys
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from app.config import RuntimeRole, Settings
@@ -11,8 +14,15 @@ from app.config import RuntimeRole, Settings
 
 @pytest.fixture(autouse=True)
 def _clear_legacy_sync_environment(monkeypatch) -> None:  # noqa: ANN001
-    monkeypatch.delenv("BOTNOTE_CREDENTIAL_KEY", raising=False)
-    monkeypatch.delenv("BOTNOTE_CREDENTIAL_PREVIOUS_KEYS", raising=False)
+    for variable in (
+        "BOTNOTE_CREDENTIAL_KEY",
+        "BOTNOTE_CREDENTIAL_PREVIOUS_KEYS",
+        "BOTNOTE_AUTONOMOUS_SYNC_CANARY_ACCOUNT_IDS",
+        "BOTNOTE_OWNER_IMT_USERNAME",
+        "BOTNOTE_LEARNING_ALLOWED_IMT_USERNAMES",
+        "CREDENTIALS_DIRECTORY",
+    ):
+        monkeypatch.delenv(variable, raising=False)
 
 
 def _production_settings(tmp_path: Path, **updates) -> Settings:  # noqa: ANN003
@@ -38,6 +48,281 @@ def _production_settings(tmp_path: Path, **updates) -> Settings:  # noqa: ANN003
     }
     values.update(updates)
     return Settings(_env_file=None, **values)
+
+
+def _install_runtime_identifier_credentials(
+    tmp_path: Path,
+    monkeypatch,
+    contents: dict[str, str],
+    *,
+    directory_name: str = "credentials",
+) -> Path:  # noqa: ANN001
+    directory = tmp_path / directory_name
+    directory.mkdir(mode=0o700)
+    directory.chmod(0o700)
+    for logical_name, value in contents.items():
+        path = directory / logical_name
+        path.write_text(value, encoding="utf-8")
+        path.chmod(0o400)
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(directory))
+    return directory
+
+
+def _materialize_web_tls(tmp_path: Path) -> dict[str, Path]:
+    paths = {
+        "backend_tls_cert": tmp_path / "server.crt",
+        "backend_tls_key": tmp_path / "server.key",
+        "backend_tls_ca": tmp_path / "ca.crt",
+    }
+    for path in paths.values():
+        path.write_text("synthetic", encoding="utf-8")
+        path.chmod(0o600)
+    return paths
+
+
+def _isolate_operations_environment(monkeypatch) -> None:  # noqa: ANN001
+    allowed = {
+        "BOTNOTE_ENVIRONMENT",
+        "BOTNOTE_DATABASE_URL",
+        "BOTNOTE_WORKER_HEARTBEAT_TTL_SECONDS",
+        "BOTNOTE_AUTONOMOUS_SYNC_ENABLED",
+        "BOTNOTE_AUTONOMOUS_SYNC_ENROLLMENT_ENABLED",
+        "BOTNOTE_AUTONOMOUS_SYNC_ROLLOUT",
+    }
+    for name in tuple(os.environ):
+        if name.startswith("BOTNOTE_") and name not in allowed:
+            monkeypatch.delenv(name)
+
+
+def test_runtime_identifiers_are_loaded_only_for_proven_consumers(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:  # noqa: ANN001
+    canary_id = str(uuid4())
+    _install_runtime_identifier_credentials(
+        tmp_path,
+        monkeypatch,
+        {"autonomous-sync-canary-account-ids": json.dumps([canary_id])},
+        directory_name="scheduler-credentials",
+    )
+    scheduler = _production_settings(
+        tmp_path,
+        autonomous_sync_enabled=True,
+        autonomous_sync_enrollment_enabled=True,
+        autonomous_sync_rollout="canary",
+    )
+    scheduler.validate_for_runtime(RuntimeRole.SCHEDULER)
+    assert scheduler.autonomous_sync_canary_account_ids == [canary_id]
+    assert scheduler.owner_imt_username == ""
+    assert scheduler.learning_allowed_imt_usernames == []
+
+    _install_runtime_identifier_credentials(
+        tmp_path,
+        monkeypatch,
+        {
+            "autonomous-sync-canary-account-ids": json.dumps([canary_id]),
+            "learning-allowed-imt-usernames": json.dumps(["FICTITIOUS-OWNER"]),
+        },
+        directory_name="web-credentials",
+    )
+    web = _production_settings(
+        tmp_path,
+        autonomous_sync_enabled=True,
+        autonomous_sync_enrollment_enabled=True,
+        autonomous_sync_rollout="canary",
+        learning_access_mode="personal",
+        learning_audience_id="personal:fictitious-owner",
+        learning_allowed_identities=["lan:192.0.2.10"],
+        **_materialize_web_tls(tmp_path),
+    )
+    web.validate_for_runtime(RuntimeRole.WEB)
+    assert web.autonomous_sync_canary_account_ids == [canary_id]
+    assert web.learning_allowed_imt_usernames == ["fictitious-owner"]
+    assert web.owner_imt_username == ""
+
+    _install_runtime_identifier_credentials(
+        tmp_path,
+        monkeypatch,
+        {
+            "autonomous-sync-canary-account-ids": json.dumps([canary_id]),
+            "owner-imt-username": "FICTITIOUS-OWNER",
+        },
+        directory_name="sync-credentials",
+    )
+    sync = _production_settings(
+        tmp_path,
+        credential_key="",
+        autonomous_sync_enabled=True,
+        autonomous_sync_enrollment_enabled=True,
+        autonomous_sync_rollout="canary",
+        owner_imt_password_file=tmp_path / "owner-imt-password",
+    )
+    sync.validate_for_runtime(RuntimeRole.SYNC)
+    assert sync.autonomous_sync_canary_account_ids == [canary_id]
+    assert sync.owner_imt_username == "fictitious-owner"
+    assert sync.learning_allowed_imt_usernames == []
+
+
+def test_non_consumers_receive_no_runtime_identifiers(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:  # noqa: ANN001
+    common = {
+        "autonomous_sync_enabled": True,
+        "autonomous_sync_enrollment_enabled": True,
+        "autonomous_sync_rollout": "canary",
+    }
+    for role in (RuntimeRole.CALENDAR, RuntimeRole.OUTBOX):
+        settings = _production_settings(tmp_path, **common)
+        settings.validate_for_runtime(role)
+        assert settings.autonomous_sync_canary_account_ids == []
+        assert settings.owner_imt_username == ""
+        assert settings.learning_allowed_imt_usernames == []
+
+    _isolate_operations_environment(monkeypatch)
+    operations = _production_settings(
+        tmp_path,
+        credential_key="",
+        token_pepper="",
+        admin_allowed_identities=[],
+        **common,
+    )
+    operations.validate_for_runtime(RuntimeRole.OPERATIONS)
+    assert operations.autonomous_sync_canary_account_ids == []
+
+    _install_runtime_identifier_credentials(
+        tmp_path,
+        monkeypatch,
+        {"autonomous-sync-canary-account-ids": json.dumps([str(uuid4())])},
+        directory_name="calendar-credentials",
+    )
+    with pytest.raises(RuntimeError, match="FORBIDDEN_FOR_ROLE"):
+        _production_settings(tmp_path, **common).validate_for_runtime(RuntimeRole.CALENDAR)
+
+
+@pytest.mark.parametrize(
+    ("variable", "value", "role", "updates"),
+    (
+        (
+            "BOTNOTE_AUTONOMOUS_SYNC_CANARY_ACCOUNT_IDS",
+            lambda: json.dumps([str(uuid4())]),
+            RuntimeRole.SCHEDULER,
+            {
+                "autonomous_sync_enabled": True,
+                "autonomous_sync_enrollment_enabled": True,
+                "autonomous_sync_rollout": "canary",
+            },
+        ),
+        (
+            "BOTNOTE_OWNER_IMT_USERNAME",
+            lambda: "fictitious-owner",
+            RuntimeRole.SYNC,
+            {"credential_key": ""},
+        ),
+        (
+            "BOTNOTE_LEARNING_ALLOWED_IMT_USERNAMES",
+            lambda: json.dumps(["fictitious-owner"]),
+            RuntimeRole.WEB,
+            {},
+        ),
+    ),
+)
+def test_production_rejects_legacy_identifier_environment_variables(
+    tmp_path: Path,
+    monkeypatch,
+    variable: str,
+    value,
+    role: RuntimeRole,
+    updates: dict,
+) -> None:  # noqa: ANN001
+    monkeypatch.setenv(variable, value())
+    settings = _production_settings(tmp_path, **updates)
+    with pytest.raises(RuntimeError, match="RUNTIME_IDENTIFIER_ENVIRONMENT_FORBIDDEN"):
+        settings.validate_for_runtime(role)
+
+
+@pytest.mark.parametrize(
+    ("variable", "empty_value", "role", "updates"),
+    (
+        (
+            "BOTNOTE_AUTONOMOUS_SYNC_CANARY_ACCOUNT_IDS",
+            "[]",
+            RuntimeRole.SCHEDULER,
+            {},
+        ),
+        ("BOTNOTE_OWNER_IMT_USERNAME", "", RuntimeRole.SYNC, {"credential_key": ""}),
+        (
+            "BOTNOTE_LEARNING_ALLOWED_IMT_USERNAMES",
+            "[]",
+            RuntimeRole.WEB,
+            {},
+        ),
+    ),
+)
+def test_production_rejects_even_empty_legacy_identifier_environment_variables(
+    tmp_path: Path,
+    monkeypatch,
+    variable: str,
+    empty_value: str,
+    role: RuntimeRole,
+    updates: dict,
+) -> None:  # noqa: ANN001
+    monkeypatch.setenv(variable, empty_value)
+    settings = _production_settings(tmp_path, **updates)
+    with pytest.raises(RuntimeError, match="RUNTIME_IDENTIFIER_ENVIRONMENT_FORBIDDEN"):
+        settings.validate_for_runtime(role)
+
+
+def test_operations_rejects_any_nonminimal_botnote_environment(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:  # noqa: ANN001
+    _isolate_operations_environment(monkeypatch)
+    monkeypatch.setenv("BOTNOTE_ALLOWED_HOSTS", '["synthetic.invalid"]')
+    settings = _production_settings(
+        tmp_path,
+        credential_key="",
+        token_pepper="",
+        admin_allowed_identities=[],
+    )
+    with pytest.raises(RuntimeError, match="OPERATIONS_ENVIRONMENT_FORBIDDEN"):
+        settings.validate_for_runtime(RuntimeRole.OPERATIONS)
+
+
+def test_production_has_no_silent_identifier_fallback(
+    tmp_path: Path,
+) -> None:
+    canary_id = str(uuid4())
+    settings = _production_settings(
+        tmp_path,
+        autonomous_sync_enabled=True,
+        autonomous_sync_enrollment_enabled=True,
+        autonomous_sync_rollout="canary",
+        autonomous_sync_canary_account_ids=[canary_id],
+    )
+    with pytest.raises(RuntimeError, match="RUNTIME_IDENTIFIER_CREDENTIAL_REQUIRED"):
+        settings.validate_for_runtime(RuntimeRole.SCHEDULER)
+    assert settings.autonomous_sync_canary_account_ids == []
+
+
+def test_runtime_identifier_credential_permissions_fail_closed(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:  # noqa: ANN001
+    directory = _install_runtime_identifier_credentials(
+        tmp_path,
+        monkeypatch,
+        {"autonomous-sync-canary-account-ids": json.dumps([str(uuid4())])},
+    )
+    (directory / "autonomous-sync-canary-account-ids").chmod(0o440)
+    settings = _production_settings(
+        tmp_path,
+        autonomous_sync_enabled=True,
+        autonomous_sync_enrollment_enabled=True,
+        autonomous_sync_rollout="canary",
+    )
+    with pytest.raises(RuntimeError, match="RUNTIME_IDENTIFIER_CREDENTIAL_UNSAFE"):
+        settings.validate_for_runtime(RuntimeRole.SCHEDULER)
 
 
 def test_non_web_runtime_does_not_require_web_tls_or_learning_files(tmp_path: Path) -> None:
