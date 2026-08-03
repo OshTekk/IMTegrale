@@ -110,6 +110,8 @@ La création `viewer` par un token `owner` est intentionnelle mais laisse un ris
 
 Les comptes, sessions, tokens et passkeys portent une génération d'accès. L'action administrative `revoke_access` incrémente cette génération avant de supprimer les accès visibles ; une session ou un token créé tardivement par une requête déjà en vol reste lié à l'ancienne génération et est refusé. La suppression d'une passkey ferme toutes les sessions passkey et fait progresser les autres accès légitimes vers la nouvelle génération afin de fermer la même fenêtre de concurrence sans révoquer inutilement les tokens restants.
 
+La déconnexion web n'est publiée localement qu'après une preuve serveur : soit la réponse `ok` émise après le commit de suppression de la WebSession courante, soit une lecture réseau `no-store` de `/api/v1/auth/session` qui établit l'absence de session. Un résultat ambigu déclenche cette vérification ; si elle confirme encore le même principal, les caches et les autres onglets restent authentifiés, et si elle échoue aussi, l'interface signale explicitement un état indéterminé. Le cookie de session HttpOnly n'est jamais considéré comme supprimé par une mutation frontend.
+
 Les échecs liés à un identifiant IMT choisi par le client sont conservés pour la télémétrie et l'assistance, mais ne bloquent jamais cet identifiant avant une vérification valide des credentials. Les limites par client restent appliquées. Le circuit global d'authentification est alimenté uniquement par des défaillances amont distribuées, pas par des mots de passe invalides envoyés par des clients.
 
 ## Step-up récent étudiant proposé

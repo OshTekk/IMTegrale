@@ -2,12 +2,11 @@ import { useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, Ellipsis, LibraryBig, LogIn, LogOut, RefreshCw, ShieldCheck } from "lucide-react";
 import { Suspense, useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { authLogout } from "../generated/api/sdk.gen";
 import { ApiError } from "../lib/api";
 import { isPrimaryOwnerSession } from "../lib/auth";
 import { learningEntryVisible } from "../lib/learning";
-import { apiData, throwOnApiError } from "../lib/generatedApi";
-import { useDashboard, useRefreshDashboard } from "../lib/queries";
+import { isCurrentLogoutAttempt, requestServerConfirmedLogout, type LogoutPhase } from "../lib/logout";
+import { replaceSessionState, useDashboard, useRefreshDashboard } from "../lib/queries";
 import { broadcastSessionChange } from "../lib/sessionSync";
 import { formatSyncDuration, manualSyncMessage, useServerCountdown } from "../lib/sync";
 import { useAccountEventStream } from "../lib/useAccountEventStream";
@@ -48,11 +47,17 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
   const [profileOpen, setProfileOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [passReconnectOpen, setPassReconnectOpen] = useState(false);
+  const [logoutIssue, setLogoutIssue] = useState<"failed" | "indeterminate" | null>(null);
+  const [logoutPhase, setLogoutPhase] = useState<LogoutPhase>("idle");
   const [title, subtitle] = appPageHeading(location.pathname, session);
   const primaryOwner = isPrimaryOwnerSession(session);
   const visibleNav = visibleAppNavigation(session, primaryOwner);
   const { primary: mobilePrimaryNav, secondary: mobileSecondaryNav } = mobileAppNavigation(session, primaryOwner);
   const profileWrap = useRef<HTMLDivElement>(null);
+  const logoutRetryButton = useRef<HTMLButtonElement>(null);
+  const logoutAttempt = useRef(0);
+  const logoutPending = useRef(false);
+  const logoutMounted = useRef(true);
   const mobileSecondaryFirstLink = useRef<HTMLAnchorElement>(null);
   const mainRef = useRef<HTMLElement>(null);
   const previousPath = useRef(location.pathname);
@@ -63,6 +68,14 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
   const eventAccountId = dashboard.data?.account.id;
   const latestEventId = dashboard.data?.latest_event_id;
   const live = useAccountEventStream(eventAccountId, latestEventId);
+
+  useEffect(() => {
+    logoutMounted.current = true;
+    return () => {
+      logoutMounted.current = false;
+      logoutAttempt.current += 1;
+    };
+  }, []);
 
   useEffect(() => {
     setProfileOpen(false);
@@ -79,7 +92,7 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
       if (!profileWrap.current?.contains(event.target as Node)) setProfileOpen(false);
     };
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setProfileOpen(false);
+      if (event.key === "Escape" && !document.querySelector("[aria-modal='true']")) setProfileOpen(false);
     };
     document.addEventListener("pointerdown", close);
     document.addEventListener("keydown", closeOnEscape);
@@ -128,13 +141,59 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
           ? "Reconnecter"
           : "Synchroniser";
 
-  const logout = async () => {
-    await apiData(authLogout({ throwOnError: throwOnApiError })).catch(() => undefined);
+  const finalizeAuthoritativeSessionChange = async (authoritativeSession: Session) => {
+    await queryClient.cancelQueries();
     queryClient.clear();
+    replaceSessionState(queryClient, authoritativeSession);
     broadcastSessionChange();
-    navigate("/");
+    if (!authoritativeSession.authenticated) navigate("/");
     window.location.reload();
   };
+
+  const logout = async () => {
+    if (logoutPending.current || !session.account) return;
+    logoutPending.current = true;
+    setLogoutIssue(null);
+    const attempt = ++logoutAttempt.current;
+    setLogoutPhase("requesting");
+
+    try {
+      const result = await requestServerConfirmedLogout({
+        expectedAccountId: session.account.id,
+        onPhase: (phase) => {
+          if (!logoutMounted.current || !isCurrentLogoutAttempt(attempt, logoutAttempt.current)) return;
+          setLogoutPhase(phase);
+        },
+      });
+      if (!logoutMounted.current || !isCurrentLogoutAttempt(attempt, logoutAttempt.current)) return;
+
+      if (result.kind === "confirmed") {
+        await finalizeAuthoritativeSessionChange({ authenticated: false });
+        return;
+      }
+      if (result.kind === "principal-changed") {
+        await finalizeAuthoritativeSessionChange(result.session);
+        return;
+      }
+      setLogoutIssue(result.kind);
+    } finally {
+      if (attempt === logoutAttempt.current) logoutPending.current = false;
+    }
+  };
+
+  const closeLogoutIssue = () => {
+    setLogoutIssue(null);
+    setLogoutPhase("idle");
+  };
+
+  const logoutIsBusy =
+    logoutPending.current || logoutPhase === "requesting" || logoutPhase === "verifying" || logoutPhase === "confirmed";
+  const logoutButtonLabel =
+    logoutPhase === "verifying"
+      ? "Vérification de la session…"
+      : logoutPhase === "requesting"
+        ? "Déconnexion…"
+        : "Se déconnecter";
 
   return (
     <div className="app-shell">
@@ -235,8 +294,14 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
               </button>
               {profileOpen && (
                 <div className="profile-menu" id="profile-menu" role="menu">
-                  <button type="button" role="menuitem" onClick={logout}>
-                    <LogOut size={17} /> Se déconnecter
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => void logout()}
+                    disabled={logoutIsBusy}
+                    aria-busy={logoutIsBusy}
+                  >
+                    <LogOut size={17} /> {logoutButtonLabel}
                   </button>
                 </div>
               )}
@@ -330,6 +395,29 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
             </NavLink>
           ))}
         </nav>
+      </Modal>
+      <Modal
+        open={logoutIssue !== null}
+        title={logoutIssue === "failed" ? "Déconnexion non confirmée" : "Impossible de confirmer la déconnexion"}
+        description={
+          logoutIssue === "failed"
+            ? "La session est encore active. Réessaie dans un instant."
+            : "L’état de la session n’a pas pu être vérifié. Réessaie ou recharge la page avant de quitter cet appareil."
+        }
+        onClose={closeLogoutIssue}
+        initialFocusRef={logoutRetryButton}
+        size="small"
+      >
+        <footer className="modal-actions">
+          {logoutIssue === "indeterminate" && (
+            <button className="secondary-button" type="button" onClick={() => window.location.reload()}>
+              Recharger la page
+            </button>
+          )}
+          <button ref={logoutRetryButton} className="primary-button" type="button" onClick={() => void logout()}>
+            Réessayer
+          </button>
+        </footer>
       </Modal>
       <PassReconnectModal
         open={passReconnectOpen}
