@@ -12,6 +12,7 @@ SYNC_UNIT = ROOT / "deploy" / "botnote-sync-worker.service"
 GENERIC_UNIT = ROOT / "deploy" / "botnote-job-worker@.service"
 WEB_UNIT = ROOT / "deploy" / "botnote-web.service"
 SCHEDULER_UNIT = ROOT / "deploy" / "botnote-scheduler.service"
+LEGACY_WORKER_UNIT = ROOT / "deploy" / "botnote-worker.service"
 PROVISIONER = ROOT / "deploy" / "security" / "provision-sync-hpke-keys"
 PG_HBA_RULES = ROOT / "deploy" / "security" / "botnote-sync.pg-hba.conf"
 POSTGRES_ROLE = ROOT / "deploy" / "security" / "provision-sync-postgres-role.sql"
@@ -21,7 +22,10 @@ def test_dedicated_unit_has_fixed_credentials_and_hardening() -> None:
     unit = SYNC_UNIT.read_text()
     assert "User=botnote-sync" in unit
     assert "Group=botnote-sync" in unit
-    assert "ExecStart=/opt/botnote/runtime/bin/botnote sync-worker" in unit
+    assert (
+        "ExecStart=/usr/bin/env CREDENTIALS_DIRECTORY=/run/botnote-sync-hpke "
+        "/opt/botnote/runtime/bin/botnote sync-worker"
+    ) in unit
     assert "EnvironmentFile=/etc/botnote/botnote.env" not in unit
     assert unit.count("LoadCredential=") == 6
     for logical_name in (
@@ -50,8 +54,29 @@ def test_dedicated_unit_has_fixed_credentials_and_hardening() -> None:
         "CapabilityBoundingSet=",
         "InaccessiblePaths=-/etc/botnote/sync-hpke",
         "ReadWritePaths=/run/botnote-sync-locks",
+        "RuntimeDirectory=botnote-sync-hpke",
+        "RuntimeDirectoryMode=0700",
+        "Environment=RUNTIME_IDENTIFIER_CREDENTIALS_DIRECTORY="
+        "/run/credentials/botnote-sync-worker.service",
+        "ReadOnlyPaths=/run/botnote-sync-hpke",
     ):
         assert directive in unit
+    for logical_name in (
+        "imt-sync-credential-private",
+        "imt-sync-credential-public",
+        "pass-service-session-private",
+        "pass-service-session-public",
+        "owner-imt-password",
+    ):
+        assert (
+            f"/run/credentials/botnote-sync-worker.service/{logical_name}:"
+            f"/run/botnote-sync-hpke/{logical_name}"
+        ) in unit
+    for identifier_name in (
+        "autonomous-sync-canary-account-ids",
+        "owner-imt-username",
+    ):
+        assert f"/run/botnote-sync-hpke/{identifier_name}" not in unit
     assert "ExecCondition=/usr/bin/test %i != sync" in GENERIC_UNIT.read_text()
 
 
@@ -65,18 +90,40 @@ def test_web_can_share_only_the_account_lock_boundary() -> None:
     ) in unit
     assert "LoadCredential=autonomous-sync-canary-account-ids" in unit
     assert "LoadCredential=learning-allowed-imt-usernames" in unit
+    assert (
+        "ExecStart=/usr/bin/env CREDENTIALS_DIRECTORY=/run/botnote-web-hpke "
+        "/opt/botnote/runtime/bin/botnote serve"
+    ) in unit
+    assert (
+        "Environment=RUNTIME_IDENTIFIER_CREDENTIALS_DIRECTORY="
+        "/run/credentials/botnote-web.service"
+    ) in unit
+    assert "RuntimeDirectory=botnote botnote-web-hpke" in unit
+    assert "RuntimeDirectoryMode=0700" in unit
+    assert "ReadOnlyPaths=/run/botnote-web-hpke" in unit
+    assert (
+        "/run/credentials/botnote-web.service/pass-service-session-public:"
+        "/run/botnote-web-hpke/pass-service-session-public"
+    ) in unit
+    assert (
+        "-/run/credentials/botnote-web.service/imt-sync-credential-public:"
+        "/run/botnote-web-hpke/imt-sync-credential-public"
+    ) in unit
+    assert "/run/botnote-web-hpke/autonomous-sync-canary-account-ids" not in unit
+    assert "/run/botnote-web-hpke/learning-allowed-imt-usernames" not in unit
     for forbidden_name in (
         "pass-service-session-private",
         "imt-sync-credential-private",
         "imt-sync-credential-public",
     ):
-        assert forbidden_name not in unit
+        assert f"LoadCredential={forbidden_name}" not in unit
     assert "InaccessiblePaths=-/etc/botnote/sync-hpke" in unit
 
 
 def test_other_runtime_units_receive_only_their_identifier_consumers() -> None:
     generic = GENERIC_UNIT.read_text()
     scheduler = SCHEDULER_UNIT.read_text()
+    legacy_worker = LEGACY_WORKER_UNIT.read_text()
 
     assert "InaccessiblePaths=-/etc/botnote/sync-hpke" in generic
     assert "InaccessiblePaths=-/etc/credstore" in generic
@@ -86,6 +133,16 @@ def test_other_runtime_units_receive_only_their_identifier_consumers() -> None:
     assert "InaccessiblePaths=-/etc/credstore" in scheduler
     assert scheduler.count("LoadCredential=") == 1
     assert "LoadCredential=autonomous-sync-canary-account-ids" in scheduler
+    assert (
+        "Environment=RUNTIME_IDENTIFIER_CREDENTIALS_DIRECTORY="
+        "/run/credentials/botnote-scheduler.service"
+    ) in scheduler
+    assert legacy_worker.count("LoadCredential=") == 1
+    assert "LoadCredential=autonomous-sync-canary-account-ids" in legacy_worker
+    assert (
+        "Environment=RUNTIME_IDENTIFIER_CREDENTIALS_DIRECTORY="
+        "/run/credentials/botnote-worker.service"
+    ) in legacy_worker
 
 
 def test_postgres_peer_identity_is_limited_to_the_application_database() -> None:

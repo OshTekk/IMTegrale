@@ -14,6 +14,7 @@ EnvironmentFile=/etc/botnote/botnote-runtime.env
 EnvironmentFile=/etc/botnote/botnote.env
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=RUNTIME_IDENTIFIER_CREDENTIALS_DIRECTORY=/run/credentials/botnote-worker.service
 LoadCredential=autonomous-sync-canary-account-ids
 ExecStart=/opt/botnote/runtime/bin/botnote sync-due
 TimeoutStartSec=10min

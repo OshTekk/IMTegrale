@@ -67,6 +67,11 @@ La révision `0017` supprime physiquement les anciennes colonnes de mot de passe
    `owner-imt-username` pour le sync worker utilisant l'exception propriétaire.
    Les deux listes utilisent JSON ; le login propriétaire est une ligne unique.
    Calendar, outbox et `operations-check` ne reçoivent aucun de ces credentials.
+   Web et sync conservent leurs chargeurs HPKE inchangés : leurs unités montent
+   une vue systemd en lecture seule contenant seulement les noms HPKE déjà
+   autorisés, tandis que le chargeur d'identifiants lit le répertoire credential
+   complet de l'unité via un chemin non identifiant. Aucun contenu n'est copié,
+   transformé ou placé dans l'environnement du processus.
    Pour G7A, vérifier aussi que
    `BOTNOTE_AUTONOMOUS_SYNC_ROLLOUT=off`,
    `BOTNOTE_AUTONOMOUS_SYNC_ENABLED=false`,

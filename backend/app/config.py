@@ -68,7 +68,7 @@ _OPERATIONS_ALLOWED_ENVIRONMENT_VARIABLES = frozenset(
 
 
 def _read_runtime_identifier_credential(logical_name: str) -> str | None:
-    credentials_directory = os.environ.get("CREDENTIALS_DIRECTORY")
+    credentials_directory = os.environ.get("RUNTIME_IDENTIFIER_CREDENTIALS_DIRECTORY")
     if not credentials_directory:
         return None
     directory = Path(credentials_directory)
