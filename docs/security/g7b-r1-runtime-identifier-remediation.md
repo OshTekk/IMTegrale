@@ -40,4 +40,18 @@ En production, ces trois valeurs sont refusées dans `Environment`, y compris
 sous leur ancienne forme vide. Elles ne peuvent être chargées que depuis un
 credential systemd mappé au rôle consommateur. Les sources du credstore restent
 `root:root 0400`; les unités ne peuvent pas lire directement le credstore.
+Les unités web et sync présentent en plus à leurs chargeurs HPKE existants une
+vue privée, filtrée et en lecture seule des mêmes fichiers credential systemd.
+Cette vue contient seulement les noms HPKE déjà admis par ces chargeurs ; les
+identifiants restent dans le répertoire credential complet lu par le seul
+chargeur d'identifiants. Il n'existe ni copie, ni transformation, ni fallback
+vers une valeur d'environnement.
 `operations-check` charge un profil distinct, sans secret et sans identifiant.
+
+## Dépendances cryptographiques
+
+`CVE-2026-69247` concernait uniquement les fonctions de déchiffrement PKCS7,
+qui ne sont pas utilisées par IMTégrale. `cryptography==50.0.0` corrige cette
+CVE et `pyOpenSSL==26.4.0` est requis pour sa compatibilité avec
+`cryptography` 50.x. Aucune exception `pip-audit` n'a été ajoutée et aucune
+primitive HPKE n'a été modifiée.

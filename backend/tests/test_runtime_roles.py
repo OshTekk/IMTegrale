@@ -20,6 +20,7 @@ def _clear_legacy_sync_environment(monkeypatch) -> None:  # noqa: ANN001
         "BOTNOTE_AUTONOMOUS_SYNC_CANARY_ACCOUNT_IDS",
         "BOTNOTE_OWNER_IMT_USERNAME",
         "BOTNOTE_LEARNING_ALLOWED_IMT_USERNAMES",
+        "RUNTIME_IDENTIFIER_CREDENTIALS_DIRECTORY",
         "CREDENTIALS_DIRECTORY",
     ):
         monkeypatch.delenv(variable, raising=False)
@@ -64,7 +65,7 @@ def _install_runtime_identifier_credentials(
         path = directory / logical_name
         path.write_text(value, encoding="utf-8")
         path.chmod(0o400)
-    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(directory))
+    monkeypatch.setenv("RUNTIME_IDENTIFIER_CREDENTIALS_DIRECTORY", str(directory))
     return directory
 
 
@@ -302,6 +303,31 @@ def test_production_has_no_silent_identifier_fallback(
     )
     with pytest.raises(RuntimeError, match="RUNTIME_IDENTIFIER_CREDENTIAL_REQUIRED"):
         settings.validate_for_runtime(RuntimeRole.SCHEDULER)
+    assert settings.autonomous_sync_canary_account_ids == []
+
+
+def test_identifier_loader_does_not_fallback_to_hpke_credential_directory(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:  # noqa: ANN001
+    canary_id = str(uuid4())
+    directory = _install_runtime_identifier_credentials(
+        tmp_path,
+        monkeypatch,
+        {"autonomous-sync-canary-account-ids": json.dumps([canary_id])},
+    )
+    monkeypatch.delenv("RUNTIME_IDENTIFIER_CREDENTIALS_DIRECTORY")
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(directory))
+    settings = _production_settings(
+        tmp_path,
+        autonomous_sync_enabled=True,
+        autonomous_sync_enrollment_enabled=True,
+        autonomous_sync_rollout="canary",
+    )
+
+    with pytest.raises(RuntimeError, match="RUNTIME_IDENTIFIER_CREDENTIAL_REQUIRED"):
+        settings.validate_for_runtime(RuntimeRole.SCHEDULER)
+
     assert settings.autonomous_sync_canary_account_ids == []
 
 

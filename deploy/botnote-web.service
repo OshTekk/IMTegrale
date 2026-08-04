@@ -14,17 +14,18 @@ EnvironmentFile=/etc/botnote/botnote-runtime.env
 EnvironmentFile=/etc/botnote/botnote.env
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=RUNTIME_IDENTIFIER_CREDENTIALS_DIRECTORY=/run/credentials/botnote-web.service
 LoadCredential=pass-service-session-public:/etc/botnote/sync-hpke/pass-service-session-v2.public.raw
 LoadCredential=autonomous-sync-canary-account-ids
 LoadCredential=learning-allowed-imt-usernames
-ExecStart=/opt/botnote/runtime/bin/botnote serve --host ${BOTNOTE_BIND_HOST} --port 8443
+ExecStart=/usr/bin/env CREDENTIALS_DIRECTORY=/run/botnote-web-hpke /opt/botnote/runtime/bin/botnote serve --host ${BOTNOTE_BIND_HOST} --port 8443
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=20
 MemoryMax=512M
 TasksMax=128
-RuntimeDirectory=botnote
-RuntimeDirectoryMode=0750
+RuntimeDirectory=botnote botnote-web-hpke
+RuntimeDirectoryMode=0700
 UMask=0077
 
 NoNewPrivileges=true
@@ -38,6 +39,9 @@ ProtectKernelLogs=true
 ProtectKernelModules=true
 ProtectKernelTunables=true
 ProtectSystem=strict
+BindReadOnlyPaths=/run/credentials/botnote-web.service/pass-service-session-public:/run/botnote-web-hpke/pass-service-session-public
+BindReadOnlyPaths=-/run/credentials/botnote-web.service/imt-sync-credential-public:/run/botnote-web-hpke/imt-sync-credential-public
+ReadOnlyPaths=/run/botnote-web-hpke
 ReadWritePaths=/run/botnote-sync-locks
 InaccessiblePaths=-/etc/botnote/sync-hpke
 InaccessiblePaths=-/etc/credstore

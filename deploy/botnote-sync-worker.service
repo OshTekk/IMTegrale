@@ -14,13 +14,14 @@ EnvironmentFile=/etc/botnote/botnote-runtime.env
 EnvironmentFile=/etc/botnote/botnote-sync.env
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=RUNTIME_IDENTIFIER_CREDENTIALS_DIRECTORY=/run/credentials/botnote-sync-worker.service
 LoadCredential=imt-sync-credential-private:/etc/botnote/sync-hpke/imt-sync-credential-v2.private.raw
 LoadCredential=imt-sync-credential-public:/etc/botnote/sync-hpke/imt-sync-credential-v2.public.raw
 LoadCredential=pass-service-session-private:/etc/botnote/sync-hpke/pass-service-session-v2.private.raw
 LoadCredential=pass-service-session-public:/etc/botnote/sync-hpke/pass-service-session-v2.public.raw
 LoadCredential=autonomous-sync-canary-account-ids
 LoadCredential=owner-imt-username
-ExecStart=/opt/botnote/runtime/bin/botnote sync-worker
+ExecStart=/usr/bin/env CREDENTIALS_DIRECTORY=/run/botnote-sync-hpke /opt/botnote/runtime/bin/botnote sync-worker
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=20
@@ -28,6 +29,8 @@ MemoryMax=384M
 MemorySwapMax=0
 TasksMax=64
 LimitCORE=0
+RuntimeDirectory=botnote-sync-hpke
+RuntimeDirectoryMode=0700
 UMask=0077
 
 NoNewPrivileges=true
@@ -44,7 +47,13 @@ ProtectKernelTunables=true
 ProtectSystem=strict
 ProtectProc=invisible
 ProcSubset=pid
+BindReadOnlyPaths=/run/credentials/botnote-sync-worker.service/imt-sync-credential-private:/run/botnote-sync-hpke/imt-sync-credential-private
+BindReadOnlyPaths=/run/credentials/botnote-sync-worker.service/imt-sync-credential-public:/run/botnote-sync-hpke/imt-sync-credential-public
+BindReadOnlyPaths=/run/credentials/botnote-sync-worker.service/pass-service-session-private:/run/botnote-sync-hpke/pass-service-session-private
+BindReadOnlyPaths=/run/credentials/botnote-sync-worker.service/pass-service-session-public:/run/botnote-sync-hpke/pass-service-session-public
+BindReadOnlyPaths=-/run/credentials/botnote-sync-worker.service/owner-imt-password:/run/botnote-sync-hpke/owner-imt-password
 ReadOnlyPaths=/opt/botnote/current /opt/botnote/runtime
+ReadOnlyPaths=/run/botnote-sync-hpke
 ReadWritePaths=/run/botnote-sync-locks
 InaccessiblePaths=-/etc/botnote/botnote.env
 InaccessiblePaths=-/etc/botnote/sync-hpke
