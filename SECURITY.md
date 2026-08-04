@@ -55,6 +55,33 @@ Avant toute exposition Internet, l'administrateur doit adapter les exemples de `
 
 Le [modèle de menace](docs/security/threat-model.md), la [procédure de rotation](docs/security/key-rotation.md) et les [niveaux d'assurance](docs/security/authentication-assurance.md) font partie de la politique maintenue.
 
+## Frontière de publication des releases CI
+
+Le job de release sépare l'autorité de build de l'autorité d'upload. Tout code
+de build, lifecycle de dépendance et code du wheel s'exécute sous un UID système
+dédié, absent des groupes `sudo` et `docker`, dans une unité systemd transitoire
+durcie. Le filesystem hôte y est en lecture seule hors du workspace dédié ; le
+cgroup entier est détruit à la fin. Un helper root installé avant le build
+confirme ensuite en lecture seule qu'aucun processus ou déclencheur planifié de
+cet UID ne subsiste avant de copier les sorties.
+
+La copie refuse liens symboliques, hardlinks, fichiers spéciaux, chemins cachés
+non autorisés, collisions de casse ou Unicode et toute mutation observée entre
+les métadonnées et les descripteurs ouverts. Elle produit un inventaire canonique
+v2 lié au commit, scelle l'arbre en `root:root` sans écriture et ne le publie
+qu'après la fin du builder. Les scans et `upload-artifact` ouvrent exclusivement
+ce même arbre root-owned. Le round-trip et son digest restent une détection
+complémentaire, pas la primitive de prévention.
+
+Le compte `runner` des VM GitHub Linux conserve réellement son sudo sans mot de
+passe ; il constitue donc l'autorité uploader de confiance, et non l'identité de
+build. La frontière couvre un processus résiduel non privilégié issu du build,
+y compris ses tentatives d'écriture, remplacement, lien ou élévation. Elle ne
+prétend pas résister à un workflow/uploader malveillant, à un processus déjà
+root, à une évasion du confinement noyau ni à une compromission de
+l'hyperviseur. Les jobs GitHub-hosted standards utilisent une VM neuve ; la
+création des identités et arbres `/var/lib` ne touche aucun hôte partagé.
+
 ## Niveaux d'assurance propriétaire
 
 Une session `owner` n'est pas nécessairement une authentification primaire. Une connexion par token reste une délégation liée au token qui l'a créée, même si ce token possède le rôle `owner`.

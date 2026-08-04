@@ -168,6 +168,8 @@ jobs:
     needs: [backend, postgres-backend, frontend]
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    outputs:
+      seal-digest: ${{ steps.seal.outputs.seal-digest }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
@@ -176,45 +178,994 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
-        with:
-          version: 11.9.0
-          run_install: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "22"
-          cache: pnpm
-          cache-dependency-path: frontend/pnpm-lock.yaml
-      - name: Install production locks
-        run: |
-          python -m pip install --disable-pip-version-check -r deploy/requirements.lock
-          pnpm --dir frontend install --frozen-lockfile
-      - name: Build exact release artifacts
-        run: |
-          mkdir -p artifacts/wheel
-          python -m pip wheel --no-deps --wheel-dir artifacts/wheel .
-          pnpm --dir frontend build
-          python scripts/generate_sbom.py --output artifacts/imtegrale.cdx.json
-      - name: Audit manifest and smoke-test built artifacts
+      - name: Install root-owned release validation tools
+        id: release-tools
         shell: bash
         run: |
-          mapfile -t wheels < <(find artifacts/wheel -maxdepth 1 -type f -name '*.whl' -print)
+          set -euo pipefail
+          test "$(id -u)" -ne 0
+          id
+          grep -E '^Cap(Prm|Eff|Bnd):' /proc/self/status
+          sudo -n -l
+          sudo -n true
+          tools_dir="/usr/local/libexec/imtegrale-release-tools"
+          runner_uid="$(id -u)"
+          runner_gid="$(id -g)"
+          python_path="$(command -v python)"
+          case "$(readlink -f "$python_path")" in
+            /opt/hostedtoolcache/Python/3.12.*/*/bin/python*) ;;
+            *)
+              echo "RELEASE_TOOLS_PYTHON_INVALID" >&2
+              exit 1
+              ;;
+          esac
+          sudo -n install -d -o root -g root -m 0755 /usr/local/libexec
+          test "$(sudo -n stat -c '%u:%g:%a' /usr/local/libexec)" = \
+            "0:0:755"
+          test ! -L /usr/local/libexec
+          test ! -e "$tools_dir"
+          staging="$(sudo -n mktemp -d \
+            /usr/local/libexec/.imtegrale-release-tools.XXXXXX)"
+          cleanup() {
+            sudo -n rm -rf -- "$staging"
+          }
+          trap cleanup EXIT
+          sudo -n "$python_path" - \
+            "$GITHUB_WORKSPACE/scripts" \
+            "$staging" \
+            "$tools_dir" \
+            "$runner_uid" \
+            "$runner_gid" <<'PY'
+          import hashlib
+          import os
+          import stat
+          import sys
+
+          SOURCE_ROOT, STAGING, DESTINATION = sys.argv[1:4]
+          EXPECTED_UID = int(sys.argv[4])
+          EXPECTED_GID = int(sys.argv[5])
+          MAX_TOOL_BYTES = 1_048_576
+          TOOL_NAMES = (
+              "check_content_boundary.py",
+              "check_secrets.py",
+              "probe_release_artifact_readonly.py",
+              "seal_release_artifact.py",
+              "smoke_release.py",
+              "verify_release_artifact.py",
+          )
+          NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+          CLOEXEC = getattr(os, "O_CLOEXEC", 0)
+          DIRECTORY = getattr(os, "O_DIRECTORY", 0)
+
+          def fail(code: str) -> None:
+              raise SystemExit(f"release-tools: denied code={code}")
+
+          def digest_descriptor(descriptor: int) -> str:
+              value = hashlib.sha256()
+              while True:
+                  chunk = os.read(descriptor, 131_072)
+                  if not chunk:
+                      return value.hexdigest()
+                  value.update(chunk)
+
+          def stable_identity(metadata: os.stat_result) -> tuple[int, ...]:
+              return (
+                  metadata.st_dev,
+                  metadata.st_ino,
+                  metadata.st_mode,
+                  metadata.st_nlink,
+                  metadata.st_uid,
+                  metadata.st_gid,
+                  metadata.st_size,
+                  metadata.st_mtime_ns,
+                  metadata.st_ctime_ns,
+              )
+
+          parent = os.path.dirname(DESTINATION)
+          parent_metadata = os.lstat(parent)
+          if (
+              not stat.S_ISDIR(parent_metadata.st_mode)
+              or stat.S_ISLNK(parent_metadata.st_mode)
+              or parent_metadata.st_uid != 0
+              or parent_metadata.st_gid != 0
+              or stat.S_IMODE(parent_metadata.st_mode) & 0o022
+          ):
+              fail("PARENT_AUTHORITY_INVALID")
+          try:
+              os.lstat(DESTINATION)
+          except FileNotFoundError:
+              pass
+          else:
+              fail("DESTINATION_EXISTS")
+
+          source_descriptor = os.open(
+              SOURCE_ROOT,
+              os.O_RDONLY | DIRECTORY | NOFOLLOW | CLOEXEC,
+          )
+          staging_descriptor = os.open(
+              STAGING,
+              os.O_RDONLY | DIRECTORY | NOFOLLOW | CLOEXEC,
+          )
+          digests: dict[str, str] = {}
+          try:
+              for name in TOOL_NAMES:
+                  source = os.open(
+                      name,
+                      os.O_RDONLY | NOFOLLOW | CLOEXEC,
+                      dir_fd=source_descriptor,
+                  )
+                  try:
+                      before = os.fstat(source)
+                      if (
+                          not stat.S_ISREG(before.st_mode)
+                          or before.st_nlink != 1
+                          or before.st_uid != EXPECTED_UID
+                          or before.st_gid != EXPECTED_GID
+                          or not 0 < before.st_size <= MAX_TOOL_BYTES
+                      ):
+                          fail("SOURCE_AUTHORITY_INVALID")
+                      before_identity = stable_identity(before)
+                      expected_digest = digest_descriptor(source)
+                      os.lseek(source, 0, os.SEEK_SET)
+                      destination = os.open(
+                          name,
+                          os.O_WRONLY | os.O_CREAT | os.O_EXCL | NOFOLLOW | CLOEXEC,
+                          0o400,
+                          dir_fd=staging_descriptor,
+                      )
+                      copied = hashlib.sha256()
+                      try:
+                          while True:
+                              chunk = os.read(source, 131_072)
+                              if not chunk:
+                                  break
+                              copied.update(chunk)
+                              view = memoryview(chunk)
+                              while view:
+                                  written = os.write(destination, view)
+                                  view = view[written:]
+                          os.fsync(destination)
+                          os.fchmod(destination, 0o444)
+                      finally:
+                          os.close(destination)
+                      after = os.fstat(source)
+                      path_after = os.stat(
+                          name,
+                          dir_fd=source_descriptor,
+                          follow_symlinks=False,
+                      )
+                      if (
+                          before_identity != stable_identity(after)
+                          or (path_after.st_dev, path_after.st_ino)
+                          != (before.st_dev, before.st_ino)
+                          or expected_digest != copied.hexdigest()
+                      ):
+                          fail("SOURCE_CHANGED_DURING_COPY")
+                      installed = os.open(
+                          name,
+                          os.O_RDONLY | NOFOLLOW | CLOEXEC,
+                          dir_fd=staging_descriptor,
+                      )
+                      try:
+                          installed_metadata = os.fstat(installed)
+                          installed_digest = digest_descriptor(installed)
+                      finally:
+                          os.close(installed)
+                      if (
+                          not stat.S_ISREG(installed_metadata.st_mode)
+                          or installed_metadata.st_nlink != 1
+                          or installed_metadata.st_uid != 0
+                          or installed_metadata.st_gid != 0
+                          or stat.S_IMODE(installed_metadata.st_mode) != 0o444
+                          or installed_digest != expected_digest
+                      ):
+                          fail("INSTALLED_TOOL_INVALID")
+                      digests[name] = expected_digest
+                  finally:
+                      os.close(source)
+
+              manifest = "".join(
+                  f"{digests[name]}  {name}\n" for name in TOOL_NAMES
+              ).encode("ascii")
+              manifest_descriptor = os.open(
+                  "tools.sha256",
+                  os.O_WRONLY | os.O_CREAT | os.O_EXCL | NOFOLLOW | CLOEXEC,
+                  0o400,
+                  dir_fd=staging_descriptor,
+              )
+              try:
+                  view = memoryview(manifest)
+                  while view:
+                      written = os.write(manifest_descriptor, view)
+                      view = view[written:]
+                  os.fsync(manifest_descriptor)
+                  os.fchmod(manifest_descriptor, 0o444)
+              finally:
+                  os.close(manifest_descriptor)
+              os.fsync(staging_descriptor)
+          finally:
+              os.close(staging_descriptor)
+              os.close(source_descriptor)
+
+          os.chmod(STAGING, 0o555)
+          for path in (STAGING, *(os.path.join(STAGING, name) for name in (*TOOL_NAMES, "tools.sha256"))):
+              metadata = os.lstat(path)
+              if stat.S_ISLNK(metadata.st_mode):
+                  fail("INSTALLED_SYMLINK")
+              if path != STAGING and (
+                  not stat.S_ISREG(metadata.st_mode)
+                  or metadata.st_nlink != 1
+                  or metadata.st_uid != 0
+                  or metadata.st_gid != 0
+                  or stat.S_IMODE(metadata.st_mode) != 0o444
+              ):
+                  fail("INSTALLED_INVENTORY_INVALID")
+              acl_names = {
+                  name
+                  for name in os.listxattr(path, follow_symlinks=False)
+                  if name in {"system.posix_acl_access", "system.posix_acl_default"}
+              }
+              if acl_names:
+                  fail("INSTALLED_ACL_INVALID")
+          directory_metadata = os.lstat(STAGING)
+          if (
+              directory_metadata.st_uid != 0
+              or directory_metadata.st_gid != 0
+              or stat.S_IMODE(directory_metadata.st_mode) != 0o555
+          ):
+              fail("INSTALLED_DIRECTORY_INVALID")
+          os.rename(STAGING, DESTINATION)
+          parent_descriptor = os.open(
+              parent,
+              os.O_RDONLY | DIRECTORY | NOFOLLOW | CLOEXEC,
+          )
+          try:
+              os.fsync(parent_descriptor)
+          finally:
+              os.close(parent_descriptor)
+          PY
+          trap - EXIT
+
+          expected_inventory="$(printf '%s\n' \
+            check_content_boundary.py \
+            check_secrets.py \
+            probe_release_artifact_readonly.py \
+            seal_release_artifact.py \
+            smoke_release.py \
+            tools.sha256 \
+            verify_release_artifact.py | LC_ALL=C sort)"
+          installed_inventory="$(find "$tools_dir" -mindepth 1 -maxdepth 1 \
+            -printf '%f\n' | LC_ALL=C sort)"
+          test "$installed_inventory" = "$expected_inventory"
+          test "$(stat -c '%u:%g:%a' "$tools_dir")" = "0:0:555"
+          test -z "$(find "$tools_dir" -mindepth 1 ! -user root -print -quit)"
+          test -z "$(find "$tools_dir" -mindepth 1 ! -group root -print -quit)"
+          test -z "$(find "$tools_dir" -mindepth 1 -type l -print -quit)"
+          test -z "$(find "$tools_dir" -type f -links +1 -print -quit)"
+          test "$(find "$tools_dir" -maxdepth 1 -type f -name '*.py' | wc -l)" -eq 6
+          test "$(wc -l < "$tools_dir/tools.sha256")" -eq 6
+          if grep -Evq '^[0-9a-f]{64}  [A-Za-z0-9_]+\.py$' \
+            "$tools_dir/tools.sha256"; then
+            echo "RELEASE_TOOLS_MANIFEST_INVALID" >&2
+            exit 1
+          fi
+          (
+            cd "$tools_dir"
+            sha256sum --strict -c tools.sha256
+          )
+          tools_manifest_digest="$(sha256sum "$tools_dir/tools.sha256" | cut -d ' ' -f1)"
+          [[ "$tools_manifest_digest" =~ ^[0-9a-f]{64}$ ]]
+          helper_digest="$(awk '$2 == "seal_release_artifact.py" { print $1 }' \
+            "$tools_dir/tools.sha256")"
+          sudo -n install -o root -g root -m 0500 \
+            "$tools_dir/seal_release_artifact.py" \
+            /usr/local/libexec/imtegrale-seal-release
+          installed_digest="$(sudo -n sha256sum \
+            /usr/local/libexec/imtegrale-seal-release | cut -d ' ' -f1)"
+          test "$helper_digest" = "$installed_digest"
+          test "$(sudo -n stat -c '%u:%g:%a' \
+            /usr/local/libexec/imtegrale-seal-release)" = "0:0:500"
+          echo "manifest-digest=$tools_manifest_digest" >> "$GITHUB_OUTPUT"
+      - name: Create separated release builder
+        id: builder
+        shell: bash
+        run: |
+          set -euo pipefail
+          phase() {
+            printf 'M5_COREPACK_PHASE=%s\n' "$1"
+          }
+          fail_phase() {
+            printf 'M5_COREPACK_FAILURE=%s\n' "$1" >&2
+            exit 1
+          }
+          builder_name="imtegrale-build"
+          sudo -n useradd \
+            --system \
+            --user-group \
+            --create-home \
+            --home-dir /var/lib/imtegrale-build \
+            --shell /usr/sbin/nologin \
+            "$builder_name"
+          builder_uid="$(id -u "$builder_name")"
+          builder_gid="$(id -g "$builder_name")"
+          test "$builder_uid" != "$(id -u)"
+          test "$(id -nG "$builder_name")" = "$builder_name"
+          if sudo -n -u "$builder_name" -H sudo -n true 2>/dev/null; then
+            echo "BUILDER_SUDO_AVAILABLE" >&2
+            exit 1
+          fi
+          if sudo -n -u "$builder_name" -H docker info >/dev/null 2>&1; then
+            echo "BUILDER_DOCKER_AVAILABLE" >&2
+            exit 1
+          fi
+          phase resolve_node_start
+          node_command="$(command -v node)" || fail_phase resolve_node_command
+          node_path="$(readlink -f "$node_command")" || \
+            fail_phase resolve_node_realpath
+          case "$node_path" in
+            /opt/hostedtoolcache/node/22.*/*/bin/node) ;;
+            *) fail_phase resolve_node_path ;;
+          esac
+          node_bin="$(dirname "$node_path")"
+          node_root="$(dirname "$node_bin")"
+          phase resolve_node_ok
+
+          phase resolve_corepack_start
+          corepack_path="$node_bin/corepack"
+          test -x "$corepack_path" || fail_phase resolve_corepack_executable
+          corepack_command="$(command -v corepack)" || \
+            fail_phase resolve_corepack_command
+          corepack_command_real="$(readlink -f "$corepack_command")" || \
+            fail_phase resolve_corepack_command_realpath
+          corepack_real="$(readlink -f "$corepack_path")" || \
+            fail_phase resolve_corepack_realpath
+          test "$corepack_command_real" = "$corepack_real" || \
+            fail_phase resolve_corepack_identity
+          case "$corepack_real" in
+            "$node_root"/lib/node_modules/corepack/dist/corepack.js) ;;
+            *) fail_phase resolve_corepack_path ;;
+          esac
+          case "$corepack_real" in
+            /home/runner/* | /tmp/* | /var/tmp/* | "$GITHUB_WORKSPACE"/* | \
+              /var/lib/imtegrale-build/* | \
+              /var/lib/imtegrale-validated-release/*)
+              fail_phase resolve_corepack_authority
+              ;;
+          esac
+          corepack_dist="$(dirname "$corepack_real")"
+          corepack_digest="$(sha256sum "$corepack_real" | cut -d ' ' -f1)" || \
+            fail_phase resolve_corepack_digest
+          [[ "$corepack_digest" =~ ^[0-9a-f]{64}$ ]] || \
+            fail_phase resolve_corepack_digest_format
+          phase resolve_corepack_ok
+
+          builder_root="/var/lib/imtegrale-build"
+          builder_source="/var/lib/imtegrale-build/source"
+          builder_cache="/var/lib/imtegrale-build/cache"
+          tooling_root="/var/lib/imtegrale-build/tooling"
+          corepack_home="/var/lib/imtegrale-build/tooling/corepack"
+          pnpm_shim_dir="/var/lib/imtegrale-build/tooling/bin"
+          pnpm_shim_path="$pnpm_shim_dir/pnpm"
+
+          phase prepare_directories_start
+          sudo -n install -d -o root -g root -m 0755 "$builder_root" || \
+            fail_phase prepare_builder_root
+          sudo -n install -d \
+            -o "$builder_name" \
+            -g "$builder_name" \
+            -m 0700 \
+            "$builder_source" \
+            "$builder_cache" || fail_phase prepare_builder_writable_directories
+          sudo -n install -d -o root -g root -m 0755 "$tooling_root" || \
+            fail_phase prepare_tooling_root
+          sudo -n install -d -o root -g root -m 0700 \
+            "$corepack_home" \
+            "$pnpm_shim_dir" || fail_phase prepare_tooling_directories
+          sudo -n cp -a --no-preserve=ownership \
+            "$GITHUB_WORKSPACE/." \
+            "$builder_source/" || fail_phase prepare_source_copy
+          sudo -n chown -R "$builder_name:$builder_name" "$builder_source" || \
+            fail_phase prepare_source_owner
+          phase prepare_directories_ok
+
+          phase install_pnpm_start
+          sudo -n env -i \
+            PATH="$node_bin:/usr/bin:/bin" \
+            HOME=/root \
+            COREPACK_HOME="$corepack_home" \
+            COREPACK_DEFAULT_TO_LATEST=0 \
+            COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+            "$corepack_path" install --global pnpm@11.9.0 || \
+            fail_phase install_pnpm
+          if ! sudo -n find "$corepack_home" -mindepth 1 \
+            -print -quit | grep -q .; then
+            fail_phase install_pnpm_cache_empty
+          fi
+          pnpm_install_version="$(sudo -n env -i \
+            PATH="$node_bin:/usr/bin:/bin" \
+            HOME=/root \
+            COREPACK_HOME="$corepack_home" \
+            COREPACK_DEFAULT_TO_LATEST=0 \
+            COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+            COREPACK_ENABLE_NETWORK=0 \
+            "$corepack_path" pnpm --version)" || \
+            fail_phase install_pnpm_offline_validation
+          test "$pnpm_install_version" = "11.9.0" || \
+            fail_phase install_pnpm_version
+          printf 'M5_COREPACK_PNPM_VERSION=%s\n' "$pnpm_install_version"
+          phase install_pnpm_ok
+
+          phase enable_shim_start
+          sudo -n env -i \
+            PATH="$node_bin:/usr/bin:/bin" \
+            HOME=/root \
+            COREPACK_HOME="$corepack_home" \
+            COREPACK_DEFAULT_TO_LATEST=0 \
+            COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+            COREPACK_ENABLE_NETWORK=0 \
+            "$corepack_path" enable --install-directory "$pnpm_shim_dir" pnpm || \
+            fail_phase enable_shim
+          phase enable_shim_ok
+
+          phase validate_shim_start
+          sudo -n test -L "$pnpm_shim_path" || fail_phase validate_shim_type
+          pnpm_shim_real="$(sudo -n readlink -f "$pnpm_shim_path")" || \
+            fail_phase validate_shim_realpath
+          test "$pnpm_shim_real" = "$corepack_dist/pnpm.js" || \
+            fail_phase validate_shim_target
+          case "$pnpm_shim_real" in
+            /home/runner/* | /tmp/* | /var/tmp/* | "$GITHUB_WORKSPACE"/* | \
+              "$builder_source"/* | /var/lib/imtegrale-validated-release/*)
+              fail_phase validate_shim_authority
+              ;;
+          esac
+          pnpm_shim_version="$(sudo -n env -i \
+            PATH="$pnpm_shim_dir:$node_bin:/usr/bin:/bin" \
+            HOME=/root \
+            COREPACK_HOME="$corepack_home" \
+            COREPACK_DEFAULT_TO_LATEST=0 \
+            COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+            COREPACK_ENABLE_NETWORK=0 \
+            "$pnpm_shim_path" --version)" || \
+            fail_phase validate_shim_offline_version
+          test "$pnpm_shim_version" = "11.9.0" || \
+            fail_phase validate_shim_version
+          printf 'M5_COREPACK_SHIM_VERSION=%s\n' "$pnpm_shim_version"
+          phase validate_shim_ok
+
+          phase freeze_tooling_start
+          sudo -n chown -R --no-dereference root:root "$tooling_root" || \
+            fail_phase freeze_tooling_owner
+          sudo -n find "$corepack_home" -type d -exec chmod 0555 {} + || \
+            fail_phase freeze_tooling_directories
+          sudo -n find "$corepack_home" -type f -exec chmod 0444 {} + || \
+            fail_phase freeze_tooling_files
+          sudo -n chmod 0555 "$tooling_root" "$pnpm_shim_dir" || \
+            fail_phase freeze_tooling_roots
+          phase freeze_tooling_ok
+
+          phase validate_tooling_start
+          test "$(stat -c '%u:%g:%a' "$tooling_root")" = "0:0:555" || \
+            fail_phase validate_tooling_root_mode
+          test "$(stat -c '%u:%g:%a' "$corepack_home")" = "0:0:555" || \
+            fail_phase validate_corepack_home_mode
+          test "$(stat -c '%u:%g:%a' "$pnpm_shim_dir")" = "0:0:555" || \
+            fail_phase validate_shim_directory_mode
+          test "$(stat -c '%u:%g' "$pnpm_shim_path")" = "0:0" || \
+            fail_phase validate_shim_owner
+          tooling_non_root="$(find "$tooling_root" ! -user root -print -quit)" || \
+            fail_phase validate_tooling_owner_scan
+          test -z "$tooling_non_root" || fail_phase validate_tooling_owner
+          corepack_non_root="$(find "$corepack_home" ! -user root \
+            -print -quit)" || fail_phase validate_corepack_owner_scan
+          test -z "$corepack_non_root" || fail_phase validate_corepack_owner
+          corepack_writable_mode="$(find "$corepack_home" -perm /022 \
+            -print -quit)" || fail_phase validate_corepack_mode_scan
+          test -z "$corepack_writable_mode" || fail_phase validate_corepack_mode
+          unexpected_shim_type="$(find "$pnpm_shim_dir" -mindepth 1 \
+            -maxdepth 1 ! -type l -print -quit)" || \
+            fail_phase validate_shim_inventory_type_scan
+          test -z "$unexpected_shim_type" || \
+            fail_phase validate_shim_inventory_type
+          unexpected_shim_hardlink="$(find "$pnpm_shim_dir" -type f \
+            -links +1 -print -quit)" || fail_phase validate_shim_hardlink_scan
+          test -z "$unexpected_shim_hardlink" || \
+            fail_phase validate_shim_hardlinks
+          tooling_inventory="$(find "$tooling_root" -mindepth 1 -maxdepth 1 \
+            -printf '%f\n' | LC_ALL=C sort)" || \
+            fail_phase validate_tooling_inventory
+          test "$tooling_inventory" = "$(printf 'bin\ncorepack')" || \
+            fail_phase validate_tooling_inventory
+          shim_inventory="$(find "$pnpm_shim_dir" -mindepth 1 -maxdepth 1 \
+            -printf '%f\n' | LC_ALL=C sort)" || \
+            fail_phase validate_shim_inventory
+          test "$shim_inventory" = "$(printf 'pnpm\npnpx')" || \
+            fail_phase validate_shim_inventory
+          for shim_name in pnpm pnpx; do
+            shim_real="$(readlink -f "$pnpm_shim_dir/$shim_name")" || \
+              fail_phase validate_shim_target
+            test "$shim_real" = "$corepack_dist/$shim_name.js" || \
+              fail_phase validate_shim_target
+          done
+          test "$(sha256sum "$corepack_real" | cut -d ' ' -f1)" = \
+            "$corepack_digest" || fail_phase validate_corepack_digest
+          pnpm_shim_digest="$(sha256sum "$pnpm_shim_real" | cut -d ' ' -f1)" || \
+            fail_phase validate_shim_digest
+          [[ "$pnpm_shim_digest" =~ ^[0-9a-f]{64}$ ]] || \
+            fail_phase validate_shim_digest_format
+          test ! -w "$corepack_home" || \
+            fail_phase validate_corepack_home_runner_mode
+          test ! -w "$pnpm_shim_dir" || \
+            fail_phase validate_shim_directory_runner_mode
+          sudo -n -u "$builder_name" test ! -w "$corepack_home" || \
+            fail_phase validate_corepack_home_builder_probe
+          sudo -n -u "$builder_name" test ! -w "$pnpm_shim_dir" || \
+            fail_phase validate_shim_directory_builder_probe
+          phase validate_tooling_ok
+
+          {
+            echo "builder-name=$builder_name"
+            echo "builder-uid=$builder_uid"
+            echo "builder-gid=$builder_gid"
+            echo "node-bin=$node_bin"
+            echo "corepack-path=$corepack_path"
+            echo "corepack-real=$corepack_real"
+            echo "corepack-digest=$corepack_digest"
+            echo "pnpm-shim-path=$pnpm_shim_path"
+            echo "pnpm-shim-real=$pnpm_shim_real"
+            echo "pnpm-shim-digest=$pnpm_shim_digest"
+          } >> "$GITHUB_OUTPUT" || fail_phase publish_builder_outputs
+          phase builder_ready
+      - name: Build exact release artifacts in isolated authority
+        env:
+          BUILDER_NAME: ${{ steps.builder.outputs.builder-name }}
+          BUILDER_GID: ${{ steps.builder.outputs.builder-gid }}
+          BUILDER_UID: ${{ steps.builder.outputs.builder-uid }}
+          COREPACK_SYSTEM_DIGEST: ${{ steps.builder.outputs.corepack-digest }}
+          COREPACK_SYSTEM_PATH: ${{ steps.builder.outputs.corepack-path }}
+          COREPACK_SYSTEM_REAL: ${{ steps.builder.outputs.corepack-real }}
+          NODE_BIN: ${{ steps.builder.outputs.node-bin }}
+          PNPM_SHIM_DIGEST: ${{ steps.builder.outputs.pnpm-shim-digest }}
+          PNPM_SHIM_PATH: ${{ steps.builder.outputs.pnpm-shim-path }}
+          PNPM_SHIM_REAL: ${{ steps.builder.outputs.pnpm-shim-real }}
+          RELEASE_TOOLS_MANIFEST_DIGEST: ${{ steps.release-tools.outputs.manifest-digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node_path="$(readlink -f "$NODE_BIN/node")"
+          case "$node_path" in
+            /opt/hostedtoolcache/node/22.*/*/bin/node) ;;
+            *)
+              echo "BUILDER_NODE_PATH_INVALID" >&2
+              exit 1
+              ;;
+          esac
+          node_bin="$(dirname "$node_path")"
+          test "$node_bin" = "$NODE_BIN"
+          corepack_path="$COREPACK_SYSTEM_PATH"
+          test "$(readlink -f "$(command -v corepack)")" = \
+            "$COREPACK_SYSTEM_REAL"
+          test "$(readlink -f "$corepack_path")" = "$COREPACK_SYSTEM_REAL"
+          test "$(sha256sum "$COREPACK_SYSTEM_REAL" | cut -d ' ' -f1)" = \
+            "$COREPACK_SYSTEM_DIGEST"
+          pnpm_shim_dir="/var/lib/imtegrale-build/tooling/bin"
+          pnpm_shim_path="$pnpm_shim_dir/pnpm"
+          test "$pnpm_shim_path" = "$PNPM_SHIM_PATH"
+          test -L "$pnpm_shim_path"
+          test "$(readlink -f "$pnpm_shim_path")" = "$PNPM_SHIM_REAL"
+          test "$(sha256sum "$PNPM_SHIM_REAL" | cut -d ' ' -f1)" = \
+            "$PNPM_SHIM_DIGEST"
+          builder_path="$pnpm_shim_dir:$node_bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+          case "$builder_path" in
+            *home/runner* | *setup-pnpm* | *PNPM_HOME*)
+              echo "BUILDER_PATH_AUTHORITY_INVALID" >&2
+              exit 1
+              ;;
+          esac
+          sudo -n systemd-run \
+            --unit=imtegrale-release-build \
+            --service-type=exec \
+            --uid="$BUILDER_UID" \
+            --gid="$BUILDER_GID" \
+            --working-directory=/var/lib/imtegrale-build/source \
+            --setenv="PATH=$builder_path" \
+            --setenv=HOME=/var/lib/imtegrale-build \
+            --setenv=XDG_CACHE_HOME=/var/lib/imtegrale-build/cache \
+            --setenv=XDG_CONFIG_HOME=/var/lib/imtegrale-build/cache/config \
+            --setenv=XDG_DATA_HOME=/var/lib/imtegrale-build/cache/data \
+            --setenv=XDG_STATE_HOME=/var/lib/imtegrale-build/cache/state \
+            --setenv=COREPACK_HOME=/var/lib/imtegrale-build/tooling/corepack \
+            --setenv=COREPACK_ENABLE_NETWORK=0 \
+            --setenv=COREPACK_DEFAULT_TO_LATEST=0 \
+            --setenv=COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+            --setenv="COREPACK_SYSTEM_PATH=$corepack_path" \
+            --setenv="COREPACK_SYSTEM_REAL=$COREPACK_SYSTEM_REAL" \
+            --setenv="COREPACK_SYSTEM_DIGEST=$COREPACK_SYSTEM_DIGEST" \
+            --setenv="PNPM_SHIM_PATH=$pnpm_shim_path" \
+            --setenv="PNPM_SHIM_REAL=$PNPM_SHIM_REAL" \
+            --setenv="PNPM_SHIM_DIGEST=$PNPM_SHIM_DIGEST" \
+            --setenv=CI=true \
+            --setenv="BUILDER_UID=$BUILDER_UID" \
+            --setenv="BUILDER_GID=$BUILDER_GID" \
+            --property=ProtectSystem=strict \
+            --property=ProtectHome=read-only \
+            --property=InaccessiblePaths=/home/runner \
+            --property="ReadWritePaths=/var/lib/imtegrale-build/source /var/lib/imtegrale-build/cache" \
+            --property=PrivateTmp=true \
+            --property=PrivateDevices=true \
+            --property=ProtectProc=invisible \
+            --property=ProcSubset=pid \
+            --property=NoNewPrivileges=true \
+            --property=RestrictSUIDSGID=true \
+            --property=RestrictNamespaces=true \
+            --property=ProtectKernelTunables=true \
+            --property=ProtectKernelModules=true \
+            --property=ProtectKernelLogs=true \
+            --property=ProtectControlGroups=true \
+            --property=ProtectClock=true \
+            --property=LockPersonality=true \
+            --property=KeyringMode=private \
+            --property=RemoveIPC=true \
+            --property=RestrictRealtime=true \
+            --property=SystemCallArchitectures=native \
+            --property="RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6" \
+            --property=KillMode=control-group \
+            --property=TimeoutStopSec=5s \
+            --property=RuntimeMaxSec=15min \
+            --property=UMask=0077 \
+            --wait \
+            --pipe \
+            --collect \
+            --quiet \
+            /bin/bash -ceu '
+              test "$(id -u)" = "$BUILDER_UID"
+              test "$(id -g)" = "$BUILDER_GID"
+              test "$(id -G)" = "$BUILDER_GID"
+              id
+              grep -E "^Cap(Prm|Eff|Bnd):" /proc/self/status
+              grep -Eq "^CapPrm:[[:space:]]+0{16}$" /proc/self/status
+              grep -Eq "^CapEff:[[:space:]]+0{16}$" /proc/self/status
+              grep -Eq "^NoNewPrivs:[[:space:]]+1$" /proc/self/status
+              test ! -w /opt
+              test ! -w /usr/share
+              test ! -w /home/runner
+              test ! -x /home/runner
+              test ! -w /var/lib/imtegrale-build
+              test -w /var/lib/imtegrale-build/source
+              test -w /var/lib/imtegrale-build/cache
+              test ! -w /var/lib/imtegrale-build/tooling
+              if sudo -n true 2>/dev/null; then exit 91; fi
+              if docker info >/dev/null 2>&1; then exit 92; fi
+              if unshare -Ur true 2>/dev/null; then exit 93; fi
+              test -z "${PNPM_HOME+x}"
+              test "$COREPACK_HOME" = \
+                /var/lib/imtegrale-build/tooling/corepack
+              test "$(stat -c "%u:%g:%a" "$COREPACK_HOME")" = \
+                "0:0:555"
+              test ! -w "$COREPACK_HOME"
+              test "$(command -v corepack)" = "$COREPACK_SYSTEM_PATH"
+              test "$(command -v pnpm)" = "$PNPM_SHIM_PATH"
+              test "${PATH%%:*}" = "$(dirname "$PNPM_SHIM_PATH")"
+              test ! -w "$PNPM_SHIM_PATH"
+              test ! -w "$(dirname "$PNPM_SHIM_PATH")"
+              test "$(readlink -f "$PNPM_SHIM_PATH")" = "$PNPM_SHIM_REAL"
+              test ! -w "$PNPM_SHIM_REAL"
+              test "$(sha256sum "$PNPM_SHIM_REAL" | cut -d " " -f1)" = \
+                "$PNPM_SHIM_DIGEST"
+              test ! -w "$COREPACK_SYSTEM_REAL"
+              test "$(sha256sum "$COREPACK_SYSTEM_REAL" | cut -d " " -f1)" = \
+                "$COREPACK_SYSTEM_DIGEST"
+              test "$(pnpm --version)" = "11.9.0"
+              test "$(corepack pnpm --version)" = "11.9.0"
+              python -m venv .venv
+              .venv/bin/python -m pip install --disable-pip-version-check \
+                -r deploy/requirements.lock
+              pnpm --dir frontend install --frozen-lockfile
+              mkdir -p artifacts/wheel
+              .venv/bin/python -m pip wheel --no-deps --wheel-dir artifacts/wheel .
+              pnpm --dir frontend build
+              .venv/bin/python scripts/generate_sbom.py \
+                --output artifacts/imtegrale.cdx.json
+              cp -R frontend/dist artifacts/frontend
+              test "$(sha256sum "$PNPM_SHIM_REAL" | cut -d " " -f1)" = \
+                "$PNPM_SHIM_DIGEST"
+              test "$(sha256sum "$COREPACK_SYSTEM_REAL" | cut -d " " -f1)" = \
+                "$COREPACK_SYSTEM_DIGEST"
+            '
+          test "$(sha256sum "$COREPACK_SYSTEM_REAL" | cut -d ' ' -f1)" = \
+            "$COREPACK_SYSTEM_DIGEST"
+          test "$(sha256sum "$PNPM_SHIM_REAL" | cut -d ' ' -f1)" = \
+            "$PNPM_SHIM_DIGEST"
+          if pgrep -u "$BUILDER_UID" >/dev/null; then
+            echo "BUILDER_PROCESS_REMAINS" >&2
+            exit 1
+          fi
+          if find /var/lib/imtegrale-build/source/artifacts \
+            ! -user "$BUILDER_UID" -print -quit | grep -q .; then
+            echo "BUILDER_OUTPUT_OWNER_INVALID" >&2
+            exit 1
+          fi
+          release_tools_dir="/usr/local/libexec/imtegrale-release-tools"
+          test "$(sha256sum "$release_tools_dir/tools.sha256" | cut -d ' ' -f1)" = \
+            "$RELEASE_TOOLS_MANIFEST_DIGEST"
+          (
+            cd "$release_tools_dir"
+            sha256sum --strict -c tools.sha256
+          )
+          test "$(stat -c '%u:%g:%a' "$release_tools_dir")" = "0:0:555"
+          test -z "$(find "$release_tools_dir" -mindepth 1 \
+            ! -user root -print -quit)"
+          test -z "$(find "$release_tools_dir" -mindepth 1 \
+            ! -group root -print -quit)"
+          test -z "$(find "$release_tools_dir" -mindepth 1 \
+            -type l -print -quit)"
+          test -z "$(find "$release_tools_dir" -type f \
+            -links +1 -print -quit)"
+          sudo -n -u "$BUILDER_NAME" test ! -w /usr/local/libexec
+          sudo -n -u "$BUILDER_NAME" test ! -w "$release_tools_dir"
+          while IFS= read -r tool; do
+            sudo -n -u "$BUILDER_NAME" test ! -w "$release_tools_dir/$tool"
+          done < <(find "$release_tools_dir" -mindepth 1 -maxdepth 1 \
+            -printf '%f\n' | LC_ALL=C sort)
+      - name: Seal release artifact from separated builder
+        id: seal
+        env:
+          BUILDER_NAME: ${{ steps.builder.outputs.builder-name }}
+          BUILDER_UID: ${{ steps.builder.outputs.builder-uid }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          seal_digest="$(sudo -n /usr/local/libexec/imtegrale-seal-release \
+            --source /var/lib/imtegrale-build/source/artifacts \
+            --destination /var/lib/imtegrale-validated-release/artifact \
+            --source-commit "$GITHUB_SHA" \
+            --builder-uid "$BUILDER_UID")"
+          [[ "$seal_digest" =~ ^[0-9a-f]{64}$ ]]
+          test ! -w /var/lib/imtegrale-validated-release
+          test ! -w /var/lib/imtegrale-validated-release/artifact
+          if sudo -n -u "$BUILDER_NAME" -H sudo -n true 2>/dev/null; then
+            echo "BUILDER_SUDO_AVAILABLE_AFTER_SEAL" >&2
+            exit 1
+          fi
+          if sudo -n -u "$BUILDER_NAME" -H docker info >/dev/null 2>&1; then
+            echo "BUILDER_DOCKER_AVAILABLE_AFTER_SEAL" >&2
+            exit 1
+          fi
+          sudo -n true
+          echo "uploader-authority: runner passwordless-sudo=true trusted=true"
+          echo "seal-digest=$seal_digest" >> "$GITHUB_OUTPUT"
+      - name: Probe sealed release against build-UID mutations
+        env:
+          BUILDER_NAME: ${{ steps.builder.outputs.builder-name }}
+          BUILDER_GID: ${{ steps.builder.outputs.builder-gid }}
+          BUILDER_UID: ${{ steps.builder.outputs.builder-uid }}
+          RELEASE_TOOLS_MANIFEST_DIGEST: ${{ steps.release-tools.outputs.manifest-digest }}
+          SEAL_DIGEST: ${{ steps.seal.outputs.seal-digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_tools_dir="/usr/local/libexec/imtegrale-release-tools"
+          python_path="$(command -v python)"
+          case "$(readlink -f "$python_path")" in
+            /opt/hostedtoolcache/Python/3.12.*/*/bin/python*) ;;
+            *)
+              echo "RELEASE_PROBE_PYTHON_INVALID" >&2
+              exit 1
+              ;;
+          esac
+          test "$(sha256sum "$release_tools_dir/tools.sha256" | cut -d ' ' -f1)" = \
+            "$RELEASE_TOOLS_MANIFEST_DIGEST"
+          (
+            cd "$release_tools_dir"
+            sha256sum --strict -c tools.sha256
+          )
+          test "$(stat -c '%u:%g:%a' "$release_tools_dir")" = "0:0:555"
+          sudo -n -u "$BUILDER_NAME" test ! -w /usr/local/libexec
+          sudo -n -u "$BUILDER_NAME" test ! -w "$release_tools_dir"
+          while IFS= read -r tool; do
+            sudo -n -u "$BUILDER_NAME" test ! -w "$release_tools_dir/$tool"
+          done < <(find "$release_tools_dir" -mindepth 1 -maxdepth 1 \
+            -printf '%f\n' | LC_ALL=C sort)
+          sudo -n systemd-run \
+            --unit=imtegrale-release-probe \
+            --service-type=exec \
+            --uid="$BUILDER_UID" \
+            --gid="$BUILDER_GID" \
+            --working-directory=/var/lib/imtegrale-build \
+            --setenv=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            --setenv=HOME=/var/lib/imtegrale-build \
+            --setenv=PYTHONDONTWRITEBYTECODE=1 \
+            --setenv="PYTHON_PATH=$python_path" \
+            --setenv="RELEASE_TOOLS_DIR=$release_tools_dir" \
+            --setenv="RELEASE_TOOLS_MANIFEST_DIGEST=$RELEASE_TOOLS_MANIFEST_DIGEST" \
+            --setenv="SEAL_DIGEST=$SEAL_DIGEST" \
+            --setenv="SOURCE_COMMIT=$GITHUB_SHA" \
+            --setenv="BUILDER_UID=$BUILDER_UID" \
+            --setenv="BUILDER_GID=$BUILDER_GID" \
+            --property=ProtectSystem=strict \
+            --property=ProtectHome=read-only \
+            --property=InaccessiblePaths=/home/runner \
+            --property=PrivateTmp=true \
+            --property=PrivateNetwork=true \
+            --property=PrivateDevices=true \
+            --property=ProtectProc=invisible \
+            --property=ProcSubset=pid \
+            --property=NoNewPrivileges=true \
+            --property=RestrictSUIDSGID=true \
+            --property=RestrictNamespaces=true \
+            --property=ProtectKernelTunables=true \
+            --property=ProtectKernelModules=true \
+            --property=ProtectKernelLogs=true \
+            --property=ProtectControlGroups=true \
+            --property=LockPersonality=true \
+            --property=RestrictAddressFamilies=AF_UNIX \
+            --property=KillMode=control-group \
+            --property=TimeoutStopSec=5s \
+            --property=RuntimeMaxSec=2min \
+            --property=UMask=0077 \
+            --wait \
+            --pipe \
+            --collect \
+            --quiet \
+            /bin/bash -ceu '
+              test "$(id -u)" = "$BUILDER_UID"
+              test "$(id -g)" = "$BUILDER_GID"
+              test "$(id -G)" = "$BUILDER_GID"
+              grep -Eq "^CapPrm:[[:space:]]+0{16}$" /proc/self/status
+              grep -Eq "^CapEff:[[:space:]]+0{16}$" /proc/self/status
+              grep -Eq "^NoNewPrivs:[[:space:]]+1$" /proc/self/status
+              test ! -w /opt
+              test ! -w /usr/local/libexec
+              test ! -w "$RELEASE_TOOLS_DIR"
+              test ! -w "$RELEASE_TOOLS_DIR/tools.sha256"
+              test ! -x /home/runner
+              if sudo -n true 2>/dev/null; then exit 91; fi
+              if docker info >/dev/null 2>&1; then exit 92; fi
+              if unshare -Ur true 2>/dev/null; then exit 93; fi
+              test "$(sha256sum "$RELEASE_TOOLS_DIR/tools.sha256" | cut -d " " -f1)" = \
+                "$RELEASE_TOOLS_MANIFEST_DIGEST"
+              (
+                cd "$RELEASE_TOOLS_DIR"
+                sha256sum --strict -c tools.sha256
+              )
+              exec "$PYTHON_PATH" \
+                "$RELEASE_TOOLS_DIR/probe_release_artifact_readonly.py" \
+                /var/lib/imtegrale-validated-release/artifact \
+                --expected-seal-digest "$SEAL_DIGEST" \
+                --expected-source-commit "$SOURCE_COMMIT"
+            '
+          if pgrep -u "$BUILDER_UID" >/dev/null; then
+            echo "BUILDER_PROCESS_REMAINS_AFTER_PROBE" >&2
+            exit 1
+          fi
+      - name: Audit sealed release artifact
+        env:
+          SEALED_ROOT: /var/lib/imtegrale-validated-release/artifact
+          SEAL_DIGEST: ${{ steps.seal.outputs.seal-digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t wheels < <(find "$SEALED_ROOT/wheel" -maxdepth 1 -type f -name '*.whl' -print)
           test "${#wheels[@]}" -eq 1
-          python scripts/check_content_boundary.py --wheel "${wheels[0]}" --dist frontend/dist
+          python scripts/check_content_boundary.py \
+            --wheel "${wheels[0]}" \
+            --dist "$SEALED_ROOT/frontend"
           python scripts/audit_release.py \
             --wheel "${wheels[0]}" \
-            --dist frontend/dist \
-            --sbom artifacts/imtegrale.cdx.json \
-            --output artifacts/release-manifest.json
-          python scripts/smoke_release.py --wheel "${wheels[0]}" --dist frontend/dist
-          cp -R frontend/dist artifacts/frontend
-          python scripts/verify_release_artifact.py artifacts
-          sha256sum "${wheels[0]}" artifacts/imtegrale.cdx.json artifacts/release-manifest.json
+            --dist "$SEALED_ROOT/frontend" \
+            --sbom "$SEALED_ROOT/imtegrale.cdx.json" \
+            --check-manifest "$SEALED_ROOT/release-manifest.json" \
+            --expected-seal-digest "$SEAL_DIGEST" \
+            --expected-source-commit "$GITHUB_SHA" \
+            --require-sealed
+          mapfile -d '' artifact_files < <(find "$SEALED_ROOT" -type f -print0)
+          python scripts/check_secrets.py \
+            --repo-root "$SEALED_ROOT" \
+            "${artifact_files[@]}"
+          test "$(sha256sum "$SEALED_ROOT/release-manifest.json" | cut -d ' ' -f1)" = \
+            "$SEAL_DIGEST"
+      - name: Smoke-test sealed release under non-privileged build UID
+        env:
+          BUILDER_GID: ${{ steps.builder.outputs.builder-gid }}
+          BUILDER_UID: ${{ steps.builder.outputs.builder-uid }}
+          RELEASE_TOOLS_MANIFEST_DIGEST: ${{ steps.release-tools.outputs.manifest-digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_tools_dir="/usr/local/libexec/imtegrale-release-tools"
+          smoke_python="/var/lib/imtegrale-build/source/.venv/bin/python"
+          mapfile -t wheels < <(find \
+            /var/lib/imtegrale-validated-release/artifact/wheel \
+            -maxdepth 1 -type f -name '*.whl' -print)
+          test "${#wheels[@]}" -eq 1
+          test "$(sha256sum "$release_tools_dir/tools.sha256" | cut -d ' ' -f1)" = \
+            "$RELEASE_TOOLS_MANIFEST_DIGEST"
+          (
+            cd "$release_tools_dir"
+            sha256sum --strict -c tools.sha256
+          )
+          sudo -n systemd-run \
+            --unit=imtegrale-release-smoke \
+            --service-type=exec \
+            --uid="$BUILDER_UID" \
+            --gid="$BUILDER_GID" \
+            --working-directory=/var/lib/imtegrale-build \
+            --setenv=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            --setenv=HOME=/var/lib/imtegrale-build \
+            --setenv=PYTHONDONTWRITEBYTECODE=1 \
+            --setenv="SMOKE_PYTHON=$smoke_python" \
+            --setenv="RELEASE_TOOLS_DIR=$release_tools_dir" \
+            --setenv="RELEASE_TOOLS_MANIFEST_DIGEST=$RELEASE_TOOLS_MANIFEST_DIGEST" \
+            --setenv="WHEEL_PATH=${wheels[0]}" \
+            --setenv=DIST_PATH=/var/lib/imtegrale-validated-release/artifact/frontend \
+            --setenv="BUILDER_UID=$BUILDER_UID" \
+            --setenv="BUILDER_GID=$BUILDER_GID" \
+            --property=ProtectSystem=strict \
+            --property=ProtectHome=read-only \
+            --property=InaccessiblePaths=/home/runner \
+            --property=PrivateTmp=true \
+            --property=PrivateNetwork=true \
+            --property=PrivateDevices=true \
+            --property=ProtectProc=invisible \
+            --property=ProcSubset=pid \
+            --property=NoNewPrivileges=true \
+            --property=RestrictSUIDSGID=true \
+            --property=RestrictNamespaces=true \
+            --property=ProtectControlGroups=true \
+            --property=KillMode=control-group \
+            --property=TimeoutStopSec=5s \
+            --property=RuntimeMaxSec=2min \
+            --wait \
+            --pipe \
+            --collect \
+            --quiet \
+            /bin/bash -ceu '
+              test "$(id -u)" = "$BUILDER_UID"
+              test "$(id -g)" = "$BUILDER_GID"
+              test "$(id -G)" = "$BUILDER_GID"
+              grep -Eq "^CapPrm:[[:space:]]+0{16}$" /proc/self/status
+              grep -Eq "^CapEff:[[:space:]]+0{16}$" /proc/self/status
+              grep -Eq "^NoNewPrivs:[[:space:]]+1$" /proc/self/status
+              test ! -w /opt
+              test ! -w /usr/local/libexec
+              test ! -w "$RELEASE_TOOLS_DIR"
+              test ! -w "$RELEASE_TOOLS_DIR/tools.sha256"
+              test ! -x /home/runner
+              if sudo -n true 2>/dev/null; then exit 91; fi
+              if docker info >/dev/null 2>&1; then exit 92; fi
+              if unshare -Ur true 2>/dev/null; then exit 93; fi
+              test "$(sha256sum "$RELEASE_TOOLS_DIR/tools.sha256" | cut -d " " -f1)" = \
+                "$RELEASE_TOOLS_MANIFEST_DIGEST"
+              (
+                cd "$RELEASE_TOOLS_DIR"
+                sha256sum --strict -c tools.sha256
+              )
+              exec "$SMOKE_PYTHON" "$RELEASE_TOOLS_DIR/smoke_release.py" \
+                --wheel "$WHEEL_PATH" \
+                --dist "$DIST_PATH"
+            '
+          if pgrep -u "$BUILDER_UID" >/dev/null; then
+            echo "BUILDER_PROCESS_REMAINS_AFTER_SMOKE" >&2
+            exit 1
+          fi
+      - name: Verify seal immediately before upload
+        env:
+          SEAL_DIGEST: ${{ steps.seal.outputs.seal-digest }}
+        run: >-
+          python scripts/verify_release_artifact.py
+          /var/lib/imtegrale-validated-release/artifact
+          --expected-seal-digest "$SEAL_DIGEST"
+          --expected-source-commit "$GITHUB_SHA"
+          --require-sealed
       - name: Retain audited release bundle
+        id: upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: imtegrale-${{ github.sha }}
-          path: artifacts/
+          name: imtegrale-${{ github.sha }}-${{ steps.seal.outputs.seal-digest }}
+          path: /var/lib/imtegrale-validated-release/artifact/
           if-no-files-found: error
           retention-days: 30
           include-hidden-files: true
@@ -236,14 +1187,22 @@ jobs:
       - name: Download the exact uploaded release bundle
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: imtegrale-${{ github.sha }}
+          name: imtegrale-${{ github.sha }}-${{ needs.release-artifact.outputs.seal-digest }}
           path: downloaded-artifact
           digest-mismatch: error
       - name: Verify the downloaded release bundle
+        env:
+          SEAL_DIGEST: ${{ needs.release-artifact.outputs.seal-digest }}
         run: |
           test -f downloaded-artifact/frontend/.vite/manifest.json
-          python scripts/verify_release_artifact.py downloaded-artifact
+          test "$(sha256sum downloaded-artifact/release-manifest.json | cut -d ' ' -f1)" = \
+            "$SEAL_DIGEST"
+          python scripts/verify_release_artifact.py downloaded-artifact \
+            --expected-seal-digest "$SEAL_DIGEST" \
+            --expected-source-commit "$GITHUB_SHA"
       - name: Re-run release boundaries on the download
+        env:
+          SEAL_DIGEST: ${{ needs.release-artifact.outputs.seal-digest }}
         shell: bash
         run: |
           mapfile -t wheels < <(find downloaded-artifact/wheel -maxdepth 1 -type f -name '*.whl' -print)
@@ -255,6 +1214,13 @@ jobs:
           python scripts/check_secrets.py \
             --repo-root downloaded-artifact \
             "${artifact_files[@]}"
+          python scripts/audit_release.py \
+            --wheel "${wheels[0]}" \
+            --dist downloaded-artifact/frontend \
+            --sbom downloaded-artifact/imtegrale.cdx.json \
+            --check-manifest downloaded-artifact/release-manifest.json \
+            --expected-seal-digest "$SEAL_DIGEST" \
+            --expected-source-commit "$GITHUB_SHA"
       - name: Smoke-test the downloaded release bundle
         shell: bash
         run: |
