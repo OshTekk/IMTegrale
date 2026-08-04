@@ -47,3 +47,11 @@ identifiants restent dans le répertoire credential complet lu par le seul
 chargeur d'identifiants. Il n'existe ni copie, ni transformation, ni fallback
 vers une valeur d'environnement.
 `operations-check` charge un profil distinct, sans secret et sans identifiant.
+
+## Dépendances cryptographiques
+
+`CVE-2026-69247` concernait uniquement les fonctions de déchiffrement PKCS7,
+qui ne sont pas utilisées par IMTégrale. `cryptography==50.0.0` corrige cette
+CVE et `pyOpenSSL==26.4.0` est requis pour sa compatibilité avec
+`cryptography` 50.x. Aucune exception `pip-audit` n'a été ajoutée et aucune
+primitive HPKE n'a été modifiée.
