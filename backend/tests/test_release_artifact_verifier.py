@@ -67,7 +67,7 @@ def _artifact(tmp_path: Path, auditor: ModuleType) -> Path:
         encoding="utf-8",
     )
     wheel = wheel_dir / "botnote_fictive-1.0.0-py3-none-any.whl"
-    with zipfile.ZipFile(wheel, "w") as archive:
+    with zipfile.ZipFile(wheel, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("app/__init__.py", '"""Synthetic release fixture."""\n')
     sbom = root / "imtegrale.cdx.json"
     sbom.write_text(
@@ -368,6 +368,23 @@ def test_fictional_forbidden_learning_marker_is_refused(
     _denied(verifier, root, "CONTENT_BOUNDARY_FAILED")
 
 
+def test_structurally_forbidden_wheel_metadata_is_refused(
+    tmp_path: Path,
+    auditor: ModuleType,
+    verifier: ModuleType,
+) -> None:
+    root = _artifact(tmp_path, auditor)
+    wheel = root / "wheel/botnote_fictive-1.0.0-py3-none-any.whl"
+    with zipfile.ZipFile(wheel, "a") as archive:
+        archive.comment = b"synthetic metadata is forbidden"
+    manifest = _manifest(root)
+    manifest["wheel"]["sha256"] = hashlib.sha256(wheel.read_bytes()).hexdigest()
+    manifest["wheel"]["size"] = wheel.stat().st_size
+    _write_manifest(root, manifest)
+
+    _denied(verifier, root, "CONTENT_BOUNDARY_FAILED")
+
+
 def test_ci_roundtrip_downloads_without_rebuilding_or_repairing() -> None:
     root = Path(__file__).resolve().parents[2]
     workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
@@ -379,6 +396,8 @@ def test_ci_roundtrip_downloads_without_rebuilding_or_repairing() -> None:
     assert "name: imtegrale-${{ github.sha }}" in roundtrip
     assert "digest-mismatch: error" in roundtrip
     assert "python scripts/verify_release_artifact.py downloaded-artifact" in roundtrip
+    assert "python scripts/check_content_boundary.py" in roundtrip
+    assert '--wheel "${wheels[0]}"' in roundtrip
     assert "downloaded-artifact/frontend/.vite/manifest.json" in roundtrip
     assert "python scripts/smoke_release.py" in roundtrip
     for forbidden in ("pnpm build", "pip wheel", "cp ", "manifest.json artifacts"):
