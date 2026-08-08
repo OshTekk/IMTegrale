@@ -17,7 +17,7 @@ from app.api_models import (
 from app.config import Settings, get_settings
 from app.database import get_db, utcnow
 from app.learning.access import learning_session_view
-from app.models import Account, PasskeyCredential, ShareToken, WebSession, new_id
+from app.models import Account, PasskeyCredential, ShareToken, WebSession
 from app.schemas import (
     ImtLoginRequest,
     PasskeyAuthenticationVerify,
@@ -47,6 +47,12 @@ from app.security import (
 from app.services.auth_protection import AuthProtectionRejected
 from app.services.events import record_event
 from app.services.imt import ImtAuthenticationError, ImtFetchError
+from app.services.imt_login import (
+    ImtLoginFinalizationRejected,
+    capture_imt_login_authority,
+    finalize_imt_login,
+    lock_imt_login_account,
+)
 from app.services.login_rate_limits import _rate_key as _shared_rate_key
 from app.services.login_rate_limits import check_login_limits
 from app.services.pass_gateway import (
@@ -68,8 +74,7 @@ from app.services.passkeys import (
     register_passkey,
     registration_options,
 )
-from app.services.sync import apply_competency_ues, apply_pass_entries, apply_pass_profile
-from app.services.sync_control import set_login_sync_cooldown
+from app.services.sync import apply_pass_profile
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 _rate_key = _shared_rate_key
@@ -149,27 +154,26 @@ async def login_imt(
     pass_session_sealer: PassSessionSealer = Depends(_pass_session_sealer),
 ) -> Response:
     limiter = check_login_limits(request, kind="imt", settings=settings)
-    account = db.scalar(select(Account).where(Account.imt_username == payload.username))
-    is_new = account is None
-    if account is not None and account.is_disabled:
+    try:
+        authority = capture_imt_login_authority(
+            db,
+            imt_username=payload.username,
+            allow_signup=settings.allow_imt_signup,
+        )
+    except ImtLoginFinalizationRejected as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=_GENERIC_IMT_LOGIN_ERROR,
-        )
-    if is_new and not settings.allow_imt_signup:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=_GENERIC_IMT_LOGIN_ERROR,
-        )
+        ) from exc
 
     try:
         gateway = await run_in_threadpool(
             perform_login_operation,
             username=payload.username,
             password=payload.password,
-            account_id=account.id if account is not None else None,
+            account_id=authority.account_id,
             raw_client_identity=client_identity(request, settings),
-            initial_import=is_new,
+            initial_import=authority.initial_import,
         )
     except AuthProtectionRejected as exc:
         raise HTTPException(
@@ -194,65 +198,59 @@ async def login_imt(
             detail="L'authentification IMT est indisponible pour le moment.",
         ) from exc
 
-    if is_new:
-        account_id = new_id()
-        account = Account(
-            id=account_id,
-            imt_username=payload.username,
-            display_name=payload.username.split("@", 1)[0],
-        )
-        db.add(account)
-        db.flush()
-
-    now = utcnow()
-    account.last_login_at = now
-    account.student_status_verified_at = now
-    if is_new:
-        set_login_sync_cooldown(account, now)
-        apply_pass_entries(
-            db,
-            account,
-            gateway.entries,
-            actor="owner",
-            initial_import=True,
-        )
-        apply_competency_ues(db, account, gateway.competency_ues, actor="owner")
-    apply_pass_profile(account, gateway.profile)
     try:
+        if (
+            gateway.authenticated_username is None
+            or gateway.profile_fetched != (gateway.profile is not None)
+        ):
+            raise ImtLoginFinalizationRejected
+        locked_login = lock_imt_login_account(
+            db,
+            authority=authority,
+            authenticated_username=gateway.authenticated_username,
+        )
+        finalization_now = utcnow()
         stored_session = store_service_session_if_reusable(
             db,
-            account,
+            locked_login.account,
             gateway.session_snapshot,
             sealer=pass_session_sealer,
             hub_attempted=gateway.hub_attempted,
             hub_succeeded=gateway.hub_succeeded,
+            now=finalization_now,
         )
+        finalized = finalize_imt_login(
+            db,
+            locked_login=locked_login,
+            entries=gateway.entries,
+            profile=gateway.profile,
+            competency_ues=gateway.competency_ues,
+            service_session_stored=stored_session is not None,
+            user_agent=request.headers.get("user-agent", ""),
+            settings=settings,
+            now=finalization_now,
+        )
+    except ImtLoginFinalizationRejected as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=_GENERIC_IMT_LOGIN_ERROR,
+        ) from exc
     except PassSessionStorageUnavailable as exc:
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"code": exc.code, "message": exc.message},
         ) from exc
-    if stored_session is None and account.auto_sync_enabled:
-        account.auto_sync_paused_reason = "reauth_required"
-        account.auto_sync_paused_at = now
-    cleanup_sessions(db)
-    web_session, session_token, csrf_token = create_web_session(
-        db,
-        account=account,
-        role="owner",
-        auth_method="imt",
-        user_agent=request.headers.get("user-agent", ""),
-        settings=settings,
-    )
-    record_event(db, account_id=account.id, kind="auth:login", actor="owner", payload={"method": "imt"})
-    db.commit()
-    attach_operation_account(gateway.operation_id, account.id)
+    except Exception:
+        db.rollback()
+        raise
+    attach_operation_account(gateway.operation_id, finalized.account.id)
     limiter.reset_after_success()
 
     session_payload = await run_in_threadpool(
         _session_payload,
-        AuthContext(account=account, session=web_session),
+        AuthContext(account=finalized.account, session=finalized.web_session),
         db,
         settings,
         request,
@@ -262,7 +260,12 @@ async def login_imt(
             mode="json",
         )
     )
-    set_session_cookies(response, session_token, csrf_token, settings)
+    set_session_cookies(
+        response,
+        finalized.session_token,
+        finalized.csrf_token,
+        settings,
+    )
     return response
 
 
