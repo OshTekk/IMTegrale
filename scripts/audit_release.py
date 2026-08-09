@@ -40,6 +40,20 @@ def _digest_bytes(value: bytes, *, manifest_path: str) -> dict[str, object]:
     }
 
 
+def _package_sources(package_source: Path) -> dict[str, Path]:
+    if not package_source.is_dir() or package_source.name != "app":
+        raise ValueError("Backend package source is missing")
+    sources: dict[str, Path] = {}
+    for path in sorted(package_source.rglob("*.py")):
+        if path.is_symlink() or not path.is_file() or "__pycache__" in path.parts:
+            raise ValueError("Backend package source inventory is invalid")
+        member = path.relative_to(package_source.parent).as_posix()
+        sources[member] = path
+    if "app/__init__.py" not in sources:
+        raise ValueError("Backend package source inventory is invalid")
+    return sources
+
+
 def audit(
     wheel: Path,
     dist: Path,
@@ -49,6 +63,7 @@ def audit(
     source_sha: str,
     openapi: Path,
     migration: Path,
+    package_source: Path,
     operator_source: Path,
     helper_source: Path,
 ) -> dict[str, object]:
@@ -70,6 +85,8 @@ def audit(
         raise ValueError("Migration artifact is missing")
     if not operator_source.is_file() or not helper_source.is_file():
         raise ValueError("Sequence operator sources are missing")
+    package_sources = _package_sources(package_source)
+    expected_python_members = sorted(package_sources)
     with zipfile.ZipFile(wheel) as archive:
         entries = archive.infolist()
         names = [entry.filename for entry in entries]
@@ -90,6 +107,20 @@ def audit(
                 continue
             if scan_text(Path(name), content):
                 raise ValueError("Wheel secret scan failed")
+        wheel_python_members = sorted(
+            entry.filename
+            for entry in entries
+            if not entry.is_dir()
+            and entry.filename.startswith("app/")
+            and entry.filename.endswith(".py")
+        )
+        if wheel_python_members != expected_python_members:
+            raise ValueError("Wheel Python source inventory is invalid")
+        if any(
+            archive.read(member) != package_sources[member].read_bytes()
+            for member in expected_python_members
+        ):
+            raise ValueError("Wheel Python source differs from source")
         if names.count(OPERATOR_MEMBER) != 1 or names.count(HELPER_MEMBER) != 1:
             raise ValueError("Wheel sequence operator inventory is invalid")
         operator_payload = archive.read(OPERATOR_MEMBER)
@@ -104,7 +135,7 @@ def audit(
     if findings:
         raise ValueError("Release artifact secret scan failed")
     manifest = {
-        "schema_version": 2,
+        "schema_version": 3,
         "source": {"sha": source_sha},
         "wheel": _digest(wheel),
         "sbom": _digest(sbom),
@@ -124,6 +155,7 @@ def audit(
             "frontend_files": len(frontend_files),
             "operator_modes": OPERATOR_MODES,
             "wheel_members": sum(not entry.is_dir() for entry in entries),
+            "wheel_python_members": expected_python_members,
         },
     }
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -139,6 +171,7 @@ def main() -> None:
     parser.add_argument("--source-sha", required=True)
     parser.add_argument("--openapi", type=Path, required=True)
     parser.add_argument("--migration", type=Path, required=True)
+    parser.add_argument("--package-source", type=Path, required=True)
     parser.add_argument("--operator-source", type=Path, required=True)
     parser.add_argument("--helper-source", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -151,6 +184,7 @@ def main() -> None:
         source_sha=args.source_sha,
         openapi=args.openapi,
         migration=args.migration,
+        package_source=args.package_source,
         operator_source=args.operator_source,
         helper_source=args.helper_source,
     )

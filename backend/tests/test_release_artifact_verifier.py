@@ -51,12 +51,13 @@ def _artifact(tmp_path: Path, auditor: ModuleType) -> Path:
     openapi_dir = root / "openapi"
     migrations_dir = root / "migrations"
     source_dir = tmp_path / "source"
+    package_source = source_dir / "app"
     assets.mkdir(parents=True)
     vite.mkdir()
     wheel_dir.mkdir()
     openapi_dir.mkdir()
     migrations_dir.mkdir()
-    source_dir.mkdir()
+    package_source.mkdir(parents=True)
 
     (frontend / "index.html").write_text('<div id="root"></div>\n', encoding="utf-8")
     (assets / "app-fictive.js").write_text("export const demo = true;\n", encoding="utf-8")
@@ -80,13 +81,15 @@ def _artifact(tmp_path: Path, auditor: ModuleType) -> Path:
     wheel = wheel_dir / "botnote_fictive-1.0.0-py3-none-any.whl"
     operator_payload = b'"""Synthetic operator."""\nMODES = ("check", "apply")\n'
     helper_payload = b'"""Synthetic reconciliation helper."""\n'
+    init_payload = b'"""Synthetic release fixture."""\n'
     with zipfile.ZipFile(wheel, "w") as archive:
-        archive.writestr("app/__init__.py", '"""Synthetic release fixture."""\n')
+        archive.writestr("app/__init__.py", init_payload)
         archive.writestr("app/operational_sequence_tool.py", operator_payload)
         archive.writestr("app/operational_sequence_reconciliation_v1.py", helper_payload)
-    operator_source = source_dir / "operational_sequence_tool.py"
+    (package_source / "__init__.py").write_bytes(init_payload)
+    operator_source = package_source / "operational_sequence_tool.py"
     operator_source.write_bytes(operator_payload)
-    helper_source = source_dir / "operational_sequence_reconciliation_v1.py"
+    helper_source = package_source / "operational_sequence_reconciliation_v1.py"
     helper_source.write_bytes(helper_payload)
     sbom = root / "imtegrale.cdx.json"
     sbom.write_text(
@@ -105,6 +108,7 @@ def _artifact(tmp_path: Path, auditor: ModuleType) -> Path:
         source_sha="a" * 40,
         openapi=openapi,
         migration=migration,
+        package_source=package_source,
         operator_source=operator_source,
         helper_source=helper_source,
     )
@@ -152,9 +156,14 @@ def test_complete_artifact_is_verified(
     assert result.frontend_files == 5
     assert result.wheel.name == "botnote_fictive-1.0.0-py3-none-any.whl"
     manifest = _manifest(root)
-    assert manifest["schema_version"] == 2
+    assert manifest["schema_version"] == 3
     assert manifest["source"] == {"sha": "a" * 40}
     assert manifest["inventory"]["operator_modes"] == ["check", "apply"]
+    assert manifest["inventory"]["wheel_python_members"] == [
+        "app/__init__.py",
+        "app/operational_sequence_reconciliation_v1.py",
+        "app/operational_sequence_tool.py",
+    ]
     assert manifest["migration"]["path"] == "migrations/0029_operational_sequence_reconciliation.py"
     assert manifest["operator_tool"]["path"] == "app/operational_sequence_tool.py"
     assert manifest["reconciliation_helper"]["path"] == (
@@ -192,6 +201,19 @@ def test_invalid_source_sha_is_refused(
     _write_manifest(root, manifest)
 
     _denied(verifier, root, "RELEASE_MANIFEST_SCHEMA_INVALID")
+
+
+def test_wheel_python_inventory_must_match_the_audited_manifest(
+    tmp_path: Path,
+    auditor: ModuleType,
+    verifier: ModuleType,
+) -> None:
+    root = _artifact(tmp_path, auditor)
+    manifest = _manifest(root)
+    manifest["inventory"]["wheel_python_members"].pop()
+    _write_manifest(root, manifest)
+
+    _denied(verifier, root, "WHEEL_INVENTORY_MISMATCH")
 
 
 def test_missing_vite_manifest_is_refused(
@@ -457,3 +479,17 @@ def test_ci_roundtrip_downloads_without_rebuilding_or_repairing() -> None:
     assert "python scripts/smoke_release.py" in roundtrip
     for forbidden in ("pnpm build", "pip wheel", "cp ", "manifest.json artifacts"):
         assert forbidden not in roundtrip
+
+
+def test_ci_release_build_removes_stale_build_and_audits_source_inventory() -> None:
+    root = Path(__file__).resolve().parents[2]
+    workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    release = workflow.split("\n  release-artifact:\n", maxsplit=1)[1].split(
+        "\n  release-artifact-roundtrip:\n",
+        maxsplit=1,
+    )[0]
+
+    assert "rm -rf -- build" in release
+    assert "test ! -e build" in release
+    assert "--package-source backend/app" in release
+    assert release.index("rm -rf -- build") < release.index("pip wheel --no-deps")

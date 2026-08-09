@@ -194,6 +194,8 @@ jobs:
       - name: Build exact release artifacts
         run: |
           mkdir -p artifacts/wheel artifacts/openapi artifacts/migrations
+          rm -rf -- build
+          test ! -e build
           python -m pip wheel --no-deps --wheel-dir artifacts/wheel .
           pnpm --dir frontend build
           python scripts/generate_sbom.py --output artifacts/imtegrale.cdx.json
@@ -213,6 +215,7 @@ jobs:
             --source-sha "${{ github.sha }}" \
             --openapi artifacts/openapi/imtegrale.openapi.json \
             --migration artifacts/migrations/0029_operational_sequence_reconciliation.py \
+            --package-source backend/app \
             --operator-source backend/app/operational_sequence_tool.py \
             --helper-source backend/app/operational_sequence_reconciliation_v1.py \
             --output artifacts/release-manifest.json
