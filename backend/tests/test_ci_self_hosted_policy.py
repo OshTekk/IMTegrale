@@ -1,180 +1,146 @@
-import re
+from __future__ import annotations
+
+import importlib.util
+import json
+import shutil
+from collections.abc import Callable
 from pathlib import Path
+from types import ModuleType
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-WORKFLOW_PATH = ROOT / ".github/workflows/ci.yml"
-
-EXPECTED_JOBS = (
-    "content-boundary",
-    "backend",
-    "postgres-backend",
-    "frontend",
-    "release-artifact",
-    "release-artifact-roundtrip",
-)
-EXPECTED_RUNS_ON = "[self-hosted, linux, x64, pve-mini, IMTegrale]"
-HOSTED_RUNNER_MARKERS = (
-    "ubuntu-latest",
-    "ubuntu-22.04",
-    "ubuntu-24.04",
-    "windows-latest",
-    "macos-latest",
-    "runs-on: windows-",
-    "runs-on: macos-",
-)
-FORBIDDEN_GLOBAL_OPERATIONS = (
-    "apt-get ",
-    "sudo ",
-    "docker system prune",
-    "docker volume prune",
-    "docker network prune",
-    "killall ",
-    "pkill ",
-    "systemctl ",
-    "flock ",
-    "rm -rf /opt",
-    "rm -rf /var/lib",
-)
-HISTORICAL_CONTROLS = (
-    "python scripts/check_content_boundary.py",
-    "ruff check backend scripts",
-    "ruff check --select S backend/app",
-    "python scripts/check_secrets.py",
-    "python scripts/export_openapi.py",
-    "pytest --cov=app --cov-branch",
-    "python scripts/check_coverage.py coverage.json",
-    "python -m pip wheel --no-deps",
-    "pip-audit",
-    "alembic upgrade head",
-    "pytest backend/postgres_tests",
-    "alembic downgrade base",
-    "pnpm install --frozen-lockfile",
-    "pnpm check:api",
-    "pnpm lint",
-    "pnpm format:check",
-    "pnpm validate:learning-math",
-    "pnpm test",
-    "pnpm build",
-    "pnpm test:e2e:ci",
-    "pnpm audit --prod",
-    "python scripts/generate_sbom.py",
-    "python scripts/audit_release.py",
-    "python scripts/verify_release_artifact.py",
-    "python scripts/smoke_release.py",
-    "actions/upload-artifact@",
-    "actions/download-artifact@",
+POLICY_PATH = ROOT / "scripts" / "ci" / "validate_ci_policy.py"
+CI_FILES = (
+    Path(".github/workflows/ci.yml"),
+    Path("scripts/ci/pipeline_spec.json"),
+    Path("scripts/ci/run_full_pipeline.py"),
+    Path("scripts/ci/validate_ci_policy.py"),
+    Path("frontend/playwright.config.ts"),
 )
 
 
-def _workflow() -> str:
-    return WORKFLOW_PATH.read_text(encoding="utf-8")
+def _load_module(name: str, path: Path) -> ModuleType:
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
-def _job_blocks(workflow: str) -> dict[str, str]:
-    jobs = workflow.split("\njobs:\n", maxsplit=1)[1]
-    headers = list(re.finditer(r"(?m)^  ([a-z][a-z0-9-]*):\n", jobs))
-    blocks: dict[str, str] = {}
-    for index, header in enumerate(headers):
-        end = headers[index + 1].start() if index + 1 < len(headers) else len(jobs)
-        blocks[header.group(1)] = jobs[header.start() : end]
-    return blocks
+POLICY = _load_module("imtegrale_ci_policy", POLICY_PATH)
 
 
-def test_all_historical_jobs_use_only_the_dedicated_runner() -> None:
-    workflow = _workflow()
-    blocks = _job_blocks(workflow)
-
-    assert tuple(blocks) == EXPECTED_JOBS
-    for name, block in blocks.items():
-        assert re.findall(r"(?m)^    runs-on: (.+)$", block) == [EXPECTED_RUNS_ON], name
-        assert re.findall(r"(?m)^    timeout-minutes: (.+)$", block) == ["360"], name
-        assert block.count("- name: Verify the assigned repository runner") == 1, name
-        assert block.index("Verify the assigned repository runner") < block.index(
-            "uses: actions/checkout@"
-        ), name
-        assert 'test "$ACTUAL_RUNNER_NAME" = "pve-mini-IMTegrale"' in block, name
-        assert 'test "$ACTUAL_RUNNER_OS" = "Linux"' in block, name
-        assert 'test "$ACTUAL_RUNNER_ARCH" = "X64"' in block, name
-        assert 'test "$ACTUAL_REPOSITORY" = "OshTekk/IMTegrale"' in block, name
+def _copy_ci_tree(tmp_path: Path) -> Path:
+    root = tmp_path / "repository-copy"
+    for relative in CI_FILES:
+        destination = root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / relative, destination)
+    return root
 
 
-def test_checkout_is_clean_shallow_and_does_not_persist_credentials() -> None:
-    blocks = _job_blocks(_workflow())
-
-    for name, block in blocks.items():
-        assert block.count("uses: actions/checkout@") == 1, name
-        checkout = block.split("uses: actions/checkout@", maxsplit=1)[1].split(
-            "\n      - ", maxsplit=1
-        )[0]
-        assert "persist-credentials: false" in checkout, name
-        assert "clean: true" in checkout, name
-        assert "fetch-depth: 1" in checkout, name
+def _rewrite(path: Path, old: str, new: str) -> None:
+    source = path.read_text(encoding="utf-8")
+    assert old in source
+    path.write_text(source.replace(old, new, 1), encoding="utf-8")
 
 
-def test_workflow_keeps_minimal_permissions_and_pinned_actions() -> None:
-    workflow = _workflow()
-    permissions = workflow.split("\npermissions:\n", maxsplit=1)[1].split("\n\n", maxsplit=1)[0]
-
-    assert permissions == "  contents: read"
-    assert "\n  pull_request:\n" in workflow
-    assert "\n  push:\n    branches: [main]\n" in workflow
-    assert "group: ci-${{ github.workflow }}-${{ github.ref }}" in workflow
-    assert "cancel-in-progress: true" in workflow
-
-    action_lines = [
-        line.strip().removeprefix("- uses: ")
-        for line in workflow.splitlines()
-        if "- uses: " in line
-    ]
-    assert action_lines
-    for action in action_lines:
-        reference = action.split(" #", maxsplit=1)[0]
-        assert re.fullmatch(r"[^@\s]+@[0-9a-f]{40}", reference), reference
+def _remove_phase(root: Path, phase_id: str) -> None:
+    path = root / "scripts/ci/pipeline_spec.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["phases"] = [phase for phase in payload["phases"] if phase["id"] != phase_id]
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
-def test_workflow_rejects_hosted_runners_secrets_and_global_cleanup() -> None:
-    workflow = _workflow()
+def _remove_frontend_audit(root: Path) -> None:
+    path = root / "scripts/ci/pipeline_spec.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    frontend = next(phase for phase in payload["phases"] if phase["id"] == "frontend")
+    frontend["controls"].remove("frontend-production-audit")
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
-    for marker in HOSTED_RUNNER_MARKERS:
-        assert marker not in workflow
-    for command in FORBIDDEN_GLOBAL_OPERATIONS:
-        assert command not in workflow
-    assert "pull_request_target" not in workflow
-    assert "${{ secrets." not in workflow
-    assert "playwright install --with-deps" not in workflow
-    assert "pnpm exec playwright install-deps --dry-run chromium" in workflow
-    assert "pnpm exec playwright install chromium" in workflow
 
-    frontend = _job_blocks(workflow)["frontend"]
-    assert frontend.index("playwright install-deps --dry-run chromium") < frontend.index(
-        "playwright install chromium"
+def _add_roundtrip_rebuild(root: Path) -> None:
+    path = root / "scripts/ci/pipeline_spec.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    roundtrip = next(
+        phase for phase in payload["phases"] if phase["id"] == "release-artifact-roundtrip"
     )
-    assert frontend.index("playwright install chromium") < frontend.index(
-        "pnpm test:e2e:ci"
+    roundtrip["controls"].insert(0, "rebuild-artifact-roundtrip")
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def _ignore_command_error(root: Path) -> None:
+    _rewrite(
+        root / "scripts/ci/run_full_pipeline.py",
+        "if return_code != 0:\n            raise CommandFailed(control, return_code)",
+        "if False and return_code != 0:\n            raise CommandFailed(control, return_code)",
     )
 
 
-def test_persistent_python_environment_is_refreshed_within_project_constraints() -> None:
-    workflow = _workflow()
-    install = (
-        "python -m pip install --disable-pip-version-check --upgrade\n"
-        "          --upgrade-strategy eager -e '.[dev]'"
+def _declare_report_success_despite_failure(root: Path) -> None:
+    _rewrite(
+        root / "scripts/ci/run_full_pipeline.py",
+        'all(phase["status"] == "success" for phase in phases)',
+        "all(True for phase in phases)",
     )
 
-    assert workflow.count(install) == 2
+
+def _modify_runner_labels(root: Path) -> None:
+    _rewrite(
+        root / ".github/workflows/ci.yml",
+        "[self-hosted, linux, x64, pve-mini, IMTegrale]",
+        "[self-hosted, linux, x64, pve-other, IMTegrale]",
+    )
 
 
-def test_all_historical_dependencies_services_and_controls_remain() -> None:
-    workflow = _workflow()
-    blocks = _job_blocks(workflow)
+def _add_hosted_runner(root: Path) -> None:
+    _rewrite(
+        root / ".github/workflows/ci.yml",
+        "runs-on: [self-hosted, linux, x64, pve-mini, IMTegrale]",
+        "runs-on: ubuntu-latest",
+    )
 
-    for name in ("backend", "postgres-backend", "frontend"):
-        assert "needs: content-boundary" in blocks[name]
-    assert "needs: [backend, postgres-backend, frontend]" in blocks["release-artifact"]
-    assert "needs: release-artifact" in blocks["release-artifact-roundtrip"]
-    assert "image: postgres:17-alpine" in blocks["postgres-backend"]
-    assert "- 5432:5432" in blocks["postgres-backend"]
-    assert "--health-cmd" in blocks["postgres-backend"]
 
-    for control in HISTORICAL_CONTROLS:
-        assert control in workflow, control
+def _persist_checkout_credentials(root: Path) -> None:
+    _rewrite(root / ".github/workflows/ci.yml", "persist-credentials: false", "persist-credentials: true")
+
+
+def _add_playwright_retry(root: Path) -> None:
+    _rewrite(root / "frontend/playwright.config.ts", "retries: 0", "retries: ci ? 1 : 0")
+
+
+MUTATIONS: tuple[tuple[str, Callable[[Path], None]], ...] = (
+    ("backend phase removed", lambda root: _remove_phase(root, "backend")),
+    ("PostgreSQL phase removed", lambda root: _remove_phase(root, "postgres-backend")),
+    ("frontend phase removed", lambda root: _remove_phase(root, "frontend")),
+    ("artifact phase removed", lambda root: _remove_phase(root, "release-artifact")),
+    (
+        "round trip phase removed",
+        lambda root: _remove_phase(root, "release-artifact-roundtrip"),
+    ),
+    ("command error ignored", _ignore_command_error),
+    ("report lies about failure", _declare_report_success_despite_failure),
+    ("runner labels modified", _modify_runner_labels),
+    ("hosted runner added", _add_hosted_runner),
+    ("checkout credentials persisted", _persist_checkout_credentials),
+    ("production audit removed", _remove_frontend_audit),
+    ("Playwright retry added", _add_playwright_retry),
+    ("artifact rebuilt before round trip", _add_roundtrip_rebuild),
+)
+
+
+def test_current_ci_tree_satisfies_the_single_job_policy() -> None:
+    assert POLICY.validate_tree(ROOT) == []
+
+
+@pytest.mark.parametrize(("name", "mutate"), MUTATIONS, ids=[item[0] for item in MUTATIONS])
+def test_required_mutations_are_rejected(
+    tmp_path: Path,
+    name: str,
+    mutate: Callable[[Path], None],
+) -> None:
+    root = _copy_ci_tree(tmp_path)
+    mutate(root)
+    assert POLICY.validate_tree(root), name

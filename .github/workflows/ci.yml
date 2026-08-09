@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,136 +15,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  content-boundary:
-    runs-on: [self-hosted, linux, x64, pve-mini, IMTegrale]
-    timeout-minutes: 360
-    steps:
-      - name: Verify the assigned repository runner
-        shell: bash
-        working-directory: ${{ github.workspace }}
-        env:
-          ACTUAL_RUNNER_NAME: ${{ runner.name }}
-          ACTUAL_RUNNER_OS: ${{ runner.os }}
-          ACTUAL_RUNNER_ARCH: ${{ runner.arch }}
-          ACTUAL_REPOSITORY: ${{ github.repository }}
-          ACTUAL_EVENT_NAME: ${{ github.event_name }}
-          EXPECTED_WORKSPACE: ${{ github.workspace }}
-        run: |
-          set -euo pipefail
-          test "$ACTUAL_RUNNER_NAME" = "pve-mini-IMTegrale"
-          test "$ACTUAL_RUNNER_OS" = "Linux"
-          test "$ACTUAL_RUNNER_ARCH" = "X64"
-          test "$ACTUAL_REPOSITORY" = "OshTekk/IMTegrale"
-          case "$ACTUAL_EVENT_NAME" in
-            push|pull_request) ;;
-            *) exit 1 ;;
-          esac
-          test "${GITHUB_ACTIONS:-}" = "true"
-          test -n "${GITHUB_JOB:-}"
-          test -n "${GITHUB_WORKSPACE:-}"
-          test -d "$GITHUB_WORKSPACE"
-          test "$GITHUB_WORKSPACE" = "$EXPECTED_WORKSPACE"
-          test "$(pwd -P)" = "$(cd "$GITHUB_WORKSPACE" && pwd -P)"
-          test "$(basename "$GITHUB_WORKSPACE")" = "IMTegrale"
-          printf 'Runner name: %s\n' "$ACTUAL_RUNNER_NAME"
-          printf 'Runner OS: %s\n' "$ACTUAL_RUNNER_OS"
-          printf 'Runner arch: %s\n' "$ACTUAL_RUNNER_ARCH"
-          printf 'Repository: %s\n' "$ACTUAL_REPOSITORY"
-          printf 'Event name: %s\n' "$ACTUAL_EVENT_NAME"
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-        with:
-          persist-credentials: false
-          clean: true
-          fetch-depth: 1
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: "3.12"
-      - name: Verify public content boundary
-        run: python scripts/check_content_boundary.py
-
-  backend:
-    needs: content-boundary
-    runs-on: [self-hosted, linux, x64, pve-mini, IMTegrale]
-    timeout-minutes: 360
-    steps:
-      - name: Verify the assigned repository runner
-        shell: bash
-        working-directory: ${{ github.workspace }}
-        env:
-          ACTUAL_RUNNER_NAME: ${{ runner.name }}
-          ACTUAL_RUNNER_OS: ${{ runner.os }}
-          ACTUAL_RUNNER_ARCH: ${{ runner.arch }}
-          ACTUAL_REPOSITORY: ${{ github.repository }}
-          ACTUAL_EVENT_NAME: ${{ github.event_name }}
-          EXPECTED_WORKSPACE: ${{ github.workspace }}
-        run: |
-          set -euo pipefail
-          test "$ACTUAL_RUNNER_NAME" = "pve-mini-IMTegrale"
-          test "$ACTUAL_RUNNER_OS" = "Linux"
-          test "$ACTUAL_RUNNER_ARCH" = "X64"
-          test "$ACTUAL_REPOSITORY" = "OshTekk/IMTegrale"
-          case "$ACTUAL_EVENT_NAME" in
-            push|pull_request) ;;
-            *) exit 1 ;;
-          esac
-          test "${GITHUB_ACTIONS:-}" = "true"
-          test -n "${GITHUB_JOB:-}"
-          test -n "${GITHUB_WORKSPACE:-}"
-          test -d "$GITHUB_WORKSPACE"
-          test "$GITHUB_WORKSPACE" = "$EXPECTED_WORKSPACE"
-          test "$(pwd -P)" = "$(cd "$GITHUB_WORKSPACE" && pwd -P)"
-          test "$(basename "$GITHUB_WORKSPACE")" = "IMTegrale"
-          printf 'Runner name: %s\n' "$ACTUAL_RUNNER_NAME"
-          printf 'Runner OS: %s\n' "$ACTUAL_RUNNER_OS"
-          printf 'Runner arch: %s\n' "$ACTUAL_RUNNER_ARCH"
-          printf 'Repository: %s\n' "$ACTUAL_REPOSITORY"
-          printf 'Event name: %s\n' "$ACTUAL_EVENT_NAME"
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-        with:
-          persist-credentials: false
-          clean: true
-          fetch-depth: 1
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: "3.12"
-          cache: pip
-      - name: Install
-        run: >-
-          python -m pip install --disable-pip-version-check --upgrade
-          --upgrade-strategy eager -e '.[dev]'
-      - name: Lint
-        run: ruff check backend scripts
-      - name: Security static analysis
-        run: ruff check --select S backend/app
-      - name: Secret-shaped material scan
-        run: python scripts/check_secrets.py
-      - name: Verify OpenAPI artifact
-        run: PYTHONPATH=backend python scripts/export_openapi.py openapi/imtegrale.openapi.json --check
-      - name: Tests
-        run: pytest --cov=app --cov-branch --cov-report=term-missing --cov-report=json:coverage.json
-      - name: Enforce line and branch coverage floors
-        run: >-
-          python scripts/check_coverage.py coverage.json
-          --min-lines 87.4
-          --min-branches 68.5
-          --module-floor backend/app/calculations.py:90:85
-      - name: Build and verify backend wheel boundary
-        shell: bash
-        run: |
-          wheel_out="$(mktemp -d)"
-          python -m pip wheel --no-deps --wheel-dir "$wheel_out" .
-          mapfile -t wheels < <(find "$wheel_out" -maxdepth 1 -type f -name '*.whl' -print)
-          test "${#wheels[@]}" -eq 1
-          python scripts/check_content_boundary.py --wheel "${wheels[0]}"
-      - name: Dependency audit
-        run: pip-audit
-
-  postgres-backend:
-    needs: content-boundary
+  ci:
+    name: CI full
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     runs-on: [self-hosted, linux, x64, pve-mini, IMTegrale]
     timeout-minutes: 360
     services:
-      postgres:
+      imtegrale-postgres:
         image: postgres:17-alpine
         env:
           POSTGRES_DB: botnote_test
@@ -177,7 +56,7 @@ jobs:
           test "$ACTUAL_RUNNER_ARCH" = "X64"
           test "$ACTUAL_REPOSITORY" = "OshTekk/IMTegrale"
           case "$ACTUAL_EVENT_NAME" in
-            push|pull_request) ;;
+            push|pull_request|workflow_dispatch) ;;
             *) exit 1 ;;
           esac
           test "${GITHUB_ACTIONS:-}" = "true"
@@ -201,157 +80,9 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - name: Install
-        run: >-
-          python -m pip install --disable-pip-version-check --upgrade
-          --upgrade-strategy eager -e '.[dev]'
-      - name: Create schema from migrations
-        run: alembic upgrade head
-      - name: PostgreSQL constraints and concurrency
-        run: pytest backend/postgres_tests
-      - name: Verify migration rollback and replay
-        run: |
-          alembic downgrade base
-          alembic upgrade head
-
-  frontend:
-    needs: content-boundary
-    runs-on: [self-hosted, linux, x64, pve-mini, IMTegrale]
-    timeout-minutes: 360
-    defaults:
-      run:
-        working-directory: frontend
-    steps:
-      - name: Verify the assigned repository runner
-        shell: bash
-        working-directory: ${{ github.workspace }}
-        env:
-          ACTUAL_RUNNER_NAME: ${{ runner.name }}
-          ACTUAL_RUNNER_OS: ${{ runner.os }}
-          ACTUAL_RUNNER_ARCH: ${{ runner.arch }}
-          ACTUAL_REPOSITORY: ${{ github.repository }}
-          ACTUAL_EVENT_NAME: ${{ github.event_name }}
-          EXPECTED_WORKSPACE: ${{ github.workspace }}
-        run: |
-          set -euo pipefail
-          test "$ACTUAL_RUNNER_NAME" = "pve-mini-IMTegrale"
-          test "$ACTUAL_RUNNER_OS" = "Linux"
-          test "$ACTUAL_RUNNER_ARCH" = "X64"
-          test "$ACTUAL_REPOSITORY" = "OshTekk/IMTegrale"
-          case "$ACTUAL_EVENT_NAME" in
-            push|pull_request) ;;
-            *) exit 1 ;;
-          esac
-          test "${GITHUB_ACTIONS:-}" = "true"
-          test -n "${GITHUB_JOB:-}"
-          test -n "${GITHUB_WORKSPACE:-}"
-          test -d "$GITHUB_WORKSPACE"
-          test "$GITHUB_WORKSPACE" = "$EXPECTED_WORKSPACE"
-          test "$(pwd -P)" = "$(cd "$GITHUB_WORKSPACE" && pwd -P)"
-          test "$(basename "$GITHUB_WORKSPACE")" = "IMTegrale"
-          printf 'Runner name: %s\n' "$ACTUAL_RUNNER_NAME"
-          printf 'Runner OS: %s\n' "$ACTUAL_RUNNER_OS"
-          printf 'Runner arch: %s\n' "$ACTUAL_RUNNER_ARCH"
-          printf 'Repository: %s\n' "$ACTUAL_REPOSITORY"
-          printf 'Event name: %s\n' "$ACTUAL_EVENT_NAME"
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-        with:
-          persist-credentials: false
-          clean: true
-          fetch-depth: 1
-      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
-        with:
-          version: 11.9.0
-          run_install: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: "3.12"
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
-        with:
-          node-version: "22"
-          cache: pnpm
-          cache-dependency-path: frontend/pnpm-lock.yaml
-      - name: Install
-        run: pnpm install --frozen-lockfile
-      - name: Verify generated API client
-        run: pnpm check:api
-      - name: Lint and format
-        run: |
-          pnpm lint
-          pnpm format:check
-      - name: Tests
-        run: |
-          pnpm validate:learning-math
-          pnpm test
-      - name: Build and typecheck
-        run: pnpm build
-      - name: Verify E2E system dependencies
-        run: pnpm exec playwright install-deps --dry-run chromium
-      - name: Install E2E browser
-        run: pnpm exec playwright install chromium
-      - name: Parcours E2E (synthetic fixtures only)
-        run: pnpm test:e2e:ci
-      - name: Retain synthetic E2E diagnostics
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: frontend-e2e-${{ github.sha }}
-          path: |
-            frontend/test-results/
-            frontend/e2e/__screenshots__/
-          if-no-files-found: error
-          retention-days: 7
-      - name: Verify built content boundary
-        run: python ../scripts/check_content_boundary.py --repo-root .. --dist frontend/dist
-      - name: Dependency audit
-        run: pnpm audit --prod
-
-  release-artifact:
-    needs: [backend, postgres-backend, frontend]
-    runs-on: [self-hosted, linux, x64, pve-mini, IMTegrale]
-    timeout-minutes: 360
-    steps:
-      - name: Verify the assigned repository runner
-        shell: bash
-        working-directory: ${{ github.workspace }}
-        env:
-          ACTUAL_RUNNER_NAME: ${{ runner.name }}
-          ACTUAL_RUNNER_OS: ${{ runner.os }}
-          ACTUAL_RUNNER_ARCH: ${{ runner.arch }}
-          ACTUAL_REPOSITORY: ${{ github.repository }}
-          ACTUAL_EVENT_NAME: ${{ github.event_name }}
-          EXPECTED_WORKSPACE: ${{ github.workspace }}
-        run: |
-          set -euo pipefail
-          test "$ACTUAL_RUNNER_NAME" = "pve-mini-IMTegrale"
-          test "$ACTUAL_RUNNER_OS" = "Linux"
-          test "$ACTUAL_RUNNER_ARCH" = "X64"
-          test "$ACTUAL_REPOSITORY" = "OshTekk/IMTegrale"
-          case "$ACTUAL_EVENT_NAME" in
-            push|pull_request) ;;
-            *) exit 1 ;;
-          esac
-          test "${GITHUB_ACTIONS:-}" = "true"
-          test -n "${GITHUB_JOB:-}"
-          test -n "${GITHUB_WORKSPACE:-}"
-          test -d "$GITHUB_WORKSPACE"
-          test "$GITHUB_WORKSPACE" = "$EXPECTED_WORKSPACE"
-          test "$(pwd -P)" = "$(cd "$GITHUB_WORKSPACE" && pwd -P)"
-          test "$(basename "$GITHUB_WORKSPACE")" = "IMTegrale"
-          printf 'Runner name: %s\n' "$ACTUAL_RUNNER_NAME"
-          printf 'Runner OS: %s\n' "$ACTUAL_RUNNER_OS"
-          printf 'Runner arch: %s\n' "$ACTUAL_RUNNER_ARCH"
-          printf 'Repository: %s\n' "$ACTUAL_REPOSITORY"
-          printf 'Event name: %s\n' "$ACTUAL_EVENT_NAME"
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-        with:
-          persist-credentials: false
-          clean: true
-          fetch-depth: 1
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: "3.12"
-          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            deploy/requirements.lock
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
         with:
           version: 11.9.0
@@ -361,32 +92,15 @@ jobs:
           node-version: "22"
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
-      - name: Install production locks
-        run: |
-          python -m pip install --disable-pip-version-check -r deploy/requirements.lock
-          pnpm --dir frontend install --frozen-lockfile
-      - name: Build exact release artifacts
-        run: |
-          mkdir -p artifacts/wheel
-          python -m pip wheel --no-deps --wheel-dir artifacts/wheel .
-          pnpm --dir frontend build
-          python scripts/generate_sbom.py --output artifacts/imtegrale.cdx.json
-      - name: Audit manifest and smoke-test built artifacts
-        shell: bash
-        run: |
-          mapfile -t wheels < <(find artifacts/wheel -maxdepth 1 -type f -name '*.whl' -print)
-          test "${#wheels[@]}" -eq 1
-          python scripts/check_content_boundary.py --wheel "${wheels[0]}" --dist frontend/dist
-          python scripts/audit_release.py \
-            --wheel "${wheels[0]}" \
-            --dist frontend/dist \
-            --sbom artifacts/imtegrale.cdx.json \
-            --output artifacts/release-manifest.json
-          python scripts/smoke_release.py --wheel "${wheels[0]}" --dist frontend/dist
-          cp -R frontend/dist artifacts/frontend
-          python scripts/verify_release_artifact.py artifacts
-          sha256sum "${wheels[0]}" artifacts/imtegrale.cdx.json artifacts/release-manifest.json
-      - name: Retain audited release bundle
+      - name: Run repository-native full pipeline
+        env:
+          CI_SOURCE_SHA: ${{ github.sha }}
+          CI_RUNNER_NAME: ${{ runner.name }}
+          CI_RUNNER_OS: ${{ runner.os }}
+          CI_RUNNER_ARCH: ${{ runner.arch }}
+        run: python scripts/ci/run_full_pipeline.py run --write-github-summary
+      - name: Upload the exact audited artifact
+        id: upload-release
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: imtegrale-${{ github.sha }}
@@ -394,82 +108,20 @@ jobs:
           if-no-files-found: error
           retention-days: 30
           include-hidden-files: true
-
-  release-artifact-roundtrip:
-    needs: release-artifact
-    runs-on: [self-hosted, linux, x64, pve-mini, IMTegrale]
-    timeout-minutes: 360
-    steps:
-      - name: Verify the assigned repository runner
-        shell: bash
-        working-directory: ${{ github.workspace }}
-        env:
-          ACTUAL_RUNNER_NAME: ${{ runner.name }}
-          ACTUAL_RUNNER_OS: ${{ runner.os }}
-          ACTUAL_RUNNER_ARCH: ${{ runner.arch }}
-          ACTUAL_REPOSITORY: ${{ github.repository }}
-          ACTUAL_EVENT_NAME: ${{ github.event_name }}
-          EXPECTED_WORKSPACE: ${{ github.workspace }}
-        run: |
-          set -euo pipefail
-          test "$ACTUAL_RUNNER_NAME" = "pve-mini-IMTegrale"
-          test "$ACTUAL_RUNNER_OS" = "Linux"
-          test "$ACTUAL_RUNNER_ARCH" = "X64"
-          test "$ACTUAL_REPOSITORY" = "OshTekk/IMTegrale"
-          case "$ACTUAL_EVENT_NAME" in
-            push|pull_request) ;;
-            *) exit 1 ;;
-          esac
-          test "${GITHUB_ACTIONS:-}" = "true"
-          test -n "${GITHUB_JOB:-}"
-          test -n "${GITHUB_WORKSPACE:-}"
-          test -d "$GITHUB_WORKSPACE"
-          test "$GITHUB_WORKSPACE" = "$EXPECTED_WORKSPACE"
-          test "$(pwd -P)" = "$(cd "$GITHUB_WORKSPACE" && pwd -P)"
-          test "$(basename "$GITHUB_WORKSPACE")" = "IMTegrale"
-          printf 'Runner name: %s\n' "$ACTUAL_RUNNER_NAME"
-          printf 'Runner OS: %s\n' "$ACTUAL_RUNNER_OS"
-          printf 'Runner arch: %s\n' "$ACTUAL_RUNNER_ARCH"
-          printf 'Repository: %s\n' "$ACTUAL_REPOSITORY"
-          printf 'Event name: %s\n' "$ACTUAL_EVENT_NAME"
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-        with:
-          persist-credentials: false
-          clean: true
-          fetch-depth: 1
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: "3.12"
-          cache: pip
-      - name: Install locked runtime for the downloaded smoke-test
-        run: python -m pip install --disable-pip-version-check -r deploy/requirements.lock
-      - name: Download the exact uploaded release bundle
+      - name: Download the same artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: imtegrale-${{ github.sha }}
           path: downloaded-artifact
           digest-mismatch: error
-      - name: Verify the downloaded release bundle
-        run: |
-          test -f downloaded-artifact/frontend/.vite/manifest.json
-          python scripts/verify_release_artifact.py downloaded-artifact
-      - name: Re-run release boundaries on the download
-        shell: bash
-        run: |
-          mapfile -t wheels < <(find downloaded-artifact/wheel -maxdepth 1 -type f -name '*.whl' -print)
-          test "${#wheels[@]}" -eq 1
-          python scripts/check_content_boundary.py \
-            --wheel "${wheels[0]}" \
-            --dist downloaded-artifact/frontend
-          mapfile -d '' artifact_files < <(find downloaded-artifact -type f -print0)
-          python scripts/check_secrets.py \
-            --repo-root downloaded-artifact \
-            "${artifact_files[@]}"
-      - name: Smoke-test the downloaded release bundle
-        shell: bash
-        run: |
-          mapfile -t wheels < <(find downloaded-artifact/wheel -maxdepth 1 -type f -name '*.whl' -print)
-          test "${#wheels[@]}" -eq 1
-          python scripts/smoke_release.py \
-            --wheel "${wheels[0]}" \
-            --dist downloaded-artifact/frontend
+      - name: Verify GitHub artifact round trip
+        env:
+          CI_GITHUB_ARTIFACT_DIGEST: ${{ steps.upload-release.outputs.artifact-digest }}
+        run: >-
+          .ci-venv/bin/python scripts/ci/run_full_pipeline.py verify-transport
+          --original artifacts
+          --downloaded downloaded-artifact
+          --write-github-summary
+      - name: Clean repository-local CI runtime
+        if: always()
+        run: python scripts/ci/run_full_pipeline.py cleanup

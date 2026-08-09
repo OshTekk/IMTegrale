@@ -11,7 +11,7 @@ export default defineConfig({
   // can otherwise look like application failures instead of test failures.
   fullyParallel: false,
   forbidOnly: ci,
-  retries: ci ? 1 : 0,
+  retries: 0,
   workers: 1,
   reporter: ci ? "line" : [["list"], ["html", { open: "never" }]],
   use: {

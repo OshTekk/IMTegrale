@@ -1,3 +1,4 @@
+import json
 import re
 from pathlib import Path
 
@@ -177,24 +178,27 @@ def test_parcours_deep_links_do_not_fall_through_to_the_global_uri_log() -> None
     assert "botnote_learning_no_uri" in block
 
 
-def test_ci_builds_and_scans_one_backend_wheel_outside_dist() -> None:
-    workflow = read(".github/workflows/ci.yml")
+def test_ci_builds_and_scans_one_backend_wheel_outside_frontend_dist() -> None:
+    orchestrator = read("scripts/ci/run_full_pipeline.py")
+    spec = json.loads(read("scripts/ci/pipeline_spec.json"))
+    controls = [control for phase in spec["phases"] for control in phase["controls"]]
 
-    assert 'wheel_out="$(mktemp -d)"' in workflow
-    assert '--wheel-dir "$wheel_out"' in workflow
-    assert "python scripts/check_content_boundary.py --wheel" in workflow
-    assert "--wheel-dir dist" not in workflow
+    assert controls.count("build-wheel") == 1
+    assert controls.count("wheel-content-boundary") == 1
+    assert 'wheel_directory = self.release / "wheel"' in orchestrator
+    assert 'wheel_directory = self.release / "dist"' not in orchestrator
+    assert 'os.fspath(self._single_wheel())' in orchestrator
 
 
-def test_frontend_ci_scans_dist_from_its_working_directory() -> None:
-    workflow = read(".github/workflows/ci.yml")
+def test_frontend_ci_scans_the_built_dist_from_the_repository_root() -> None:
+    orchestrator = read("scripts/ci/run_full_pipeline.py")
+    frontend_boundary = orchestrator.split(
+        "    def _frontend_content_boundary",
+        maxsplit=1,
+    )[1].split("\n    # Release artifact controls.", maxsplit=1)[0]
 
-    assert "working-directory: frontend" in workflow
-    assert (
-        "python ../scripts/check_content_boundary.py --repo-root .. --dist frontend/dist"
-        in workflow
-    )
-    assert "python ../scripts/check_content_boundary.py --repo-root .. --dist dist" not in workflow
+    assert '"--dist",\n            "frontend/dist"' in frontend_boundary
+    assert '"--dist",\n            "dist"' not in frontend_boundary
 
 
 def test_private_release_process_is_atomic_and_kept_out_of_public_artifacts() -> None:

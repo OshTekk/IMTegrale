@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "preparation": [
+    "create-python-virtual-environment",
+    "install-python-dependencies",
+    "install-frontend-dependencies",
+    "verify-playwright-system-dependencies",
+    "install-playwright-browser"
+  ],
+  "phases": [
+    {
+      "id": "content-boundary",
+      "name": "content boundary",
+      "controls": [
+        "content-boundary-source",
+        "ruff-sast",
+        "secret-scan-source",
+        "workflow-policy"
+      ]
+    },
+    {
+      "id": "backend",
+      "name": "backend",
+      "controls": [
+        "ruff",
+        "openapi",
+        "backend-tests-with-coverage",
+        "coverage-floors",
+        "build-wheel",
+        "wheel-content-boundary",
+        "python-dependency-audit"
+      ]
+    },
+    {
+      "id": "postgres-backend",
+      "name": "PostgreSQL",
+      "controls": [
+        "postgres-migrate-upgrade",
+        "postgres-constraints-and-concurrency",
+        "postgres-migrate-downgrade",
+        "postgres-migrate-replay"
+      ]
+    },
+    {
+      "id": "frontend",
+      "name": "frontend",
+      "controls": [
+        "frontend-production-audit",
+        "generated-api-client",
+        "eslint",
+        "prettier",
+        "learning-math",
+        "vitest",
+        "frontend-build-typecheck-budgets",
+        "playwright-axe",
+        "frontend-content-boundary"
+      ]
+    },
+    {
+      "id": "release-artifact",
+      "name": "release artifact",
+      "controls": [
+        "generate-sbom",
+        "release-content-boundary",
+        "release-manifest-and-scans",
+        "release-smoke-test",
+        "stage-frontend-artifact",
+        "verify-release-artifact",
+        "compute-release-digest"
+      ]
+    },
+    {
+      "id": "release-artifact-roundtrip",
+      "name": "release artifact round trip",
+      "controls": [
+        "package-existing-release",
+        "safe-extract-existing-release",
+        "compare-roundtrip-manifest-and-digests",
+        "verify-roundtrip-release",
+        "roundtrip-content-boundary",
+        "roundtrip-secret-scan",
+        "roundtrip-smoke-test"
+      ]
+    }
+  ]
+}
