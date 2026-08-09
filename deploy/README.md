@@ -16,13 +16,32 @@ La production utilise deux liens atomiques :
 
 ### Artefact GitHub vérifié
 
-Le seul bundle déployable est l'artefact `imtegrale-<sha>` produit par le job
+Le seul bundle déployable est l'artefact
+`imtegrale-<sha>-<seal-digest>` produit par le job
 `release-artifact`, puis retéléchargé et accepté par
 `release-artifact-roundtrip`. L'upload inclut explicitement les fichiers cachés,
 mais le vérificateur n'en autorise qu'un :
 `frontend/.vite/manifest.json`. Tout autre fichier caché, lien, hardlink, fichier
 spécial, permission dangereuse, fichier supplémentaire ou digest incohérent fait
 échouer la CI.
+
+Le build de release n'est pas exécuté sous l'UID `runner`. La CI crée un UID
+éphémère sans sudo ni groupe Docker et l'exécute dans une unité systemd
+transitoire : système hôte en lecture seule, seul workspace de build inscriptible,
+`NoNewPrivileges`, namespaces interdits et `KillMode=control-group`. Le helper
+installé préalablement en `root:root 0500` refuse de publier tant qu'un processus
+de cet UID subsiste. Il copie ensuite les fichiers par descripteurs sans suivre
+les liens, refuse les changements concurrents et crée un manifest canonique v2
+lié au SHA source. Le manifest et chaque fichier sont `root:root 0444`, les
+dossiers et leur parent ancré sous `/var/lib` sont `0555`.
+
+Les scans, l'audit, le smoke-test isolé et la dernière vérification relisent ce
+même arbre ; `upload-artifact` reçoit uniquement son pathname absolu. L'UID
+`runner` conserve le sudo sans mot de passe fourni par le runner GitHub, mais il
+est ici l'autorité uploader de confiance et n'exécute ni build, ni lifecycle de
+dépendance, ni code du wheel avant l'upload. Un workflow ou uploader malveillant,
+un processus déjà root et une compromission du noyau ou de l'hyperviseur restent
+hors de cette frontière.
 
 Le manifest Vite n'est actuellement pas chargé par FastAPI en production. Il est
 néanmoins généré volontairement par Vite, utilisé pendant le contrôle des budgets
@@ -34,14 +53,17 @@ répertoire de staging vide, puis exécuter avant toute installation :
 
 ```bash
 gh run download <run-id> \
-  --name "imtegrale-<sha>" \
+  --name "imtegrale-<sha>-<seal-digest>" \
   --dir /var/tmp/imtegrale-<sha>
-python scripts/verify_release_artifact.py /var/tmp/imtegrale-<sha>
+python scripts/verify_release_artifact.py /var/tmp/imtegrale-<sha> \
+  --expected-seal-digest <seal-digest> \
+  --expected-source-commit <sha>
 ```
 
 Le vérificateur relit `release-manifest.json`, contrôle le wheel unique, le SBOM,
 chaque fichier frontend, le manifest Vite, les SHA-256, les tailles, les secrets
-et la frontière pédagogique. Il refuse aussi tout fichier non inventorié. Le
+et la frontière pédagogique. Il refuse aussi tout fichier non inventorié et
+vérifie que le SHA-256 du manifest canonique est le seal digest annoncé. Le
 smoke-test doit ensuite utiliser directement le wheel et le dossier `frontend`
 de ce même répertoire.
 

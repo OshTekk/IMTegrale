@@ -1,5 +1,11 @@
 # Changements
 
+## À venir
+
+- publication CI liée aux octets effectivement validés : builder isolé sous un
+  UID sans élévation, manifest canonique scellé et upload exclusif de l'arbre
+  root-owned vérifié.
+
 ## 4.8.0 - 23 juillet 2026
 
 - espace unique **Résultats** avec vues Par UE, Évaluations et Nouveautés ;
