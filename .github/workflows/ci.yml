@@ -285,6 +285,8 @@ jobs:
           pnpm test
       - name: Build and typecheck
         run: pnpm build
+      - name: Verify E2E system dependencies
+        run: pnpm exec playwright install-deps --dry-run chromium
       - name: Install E2E browser
         run: pnpm exec playwright install chromium
       - name: Parcours E2E (synthetic fixtures only)

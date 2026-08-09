@@ -23,6 +23,8 @@ HOSTED_RUNNER_MARKERS = (
     "runs-on: macos-",
 )
 FORBIDDEN_GLOBAL_OPERATIONS = (
+    "apt-get ",
+    "sudo ",
     "docker system prune",
     "docker volume prune",
     "docker network prune",
@@ -140,7 +142,16 @@ def test_workflow_rejects_hosted_runners_secrets_and_global_cleanup() -> None:
     assert "pull_request_target" not in workflow
     assert "${{ secrets." not in workflow
     assert "playwright install --with-deps" not in workflow
+    assert "pnpm exec playwright install-deps --dry-run chromium" in workflow
     assert "pnpm exec playwright install chromium" in workflow
+
+    frontend = _job_blocks(workflow)["frontend"]
+    assert frontend.index("playwright install-deps --dry-run chromium") < frontend.index(
+        "playwright install chromium"
+    )
+    assert frontend.index("playwright install chromium") < frontend.index(
+        "pnpm test:e2e:ci"
+    )
 
 
 def test_persistent_python_environment_is_refreshed_within_project_constraints() -> None:

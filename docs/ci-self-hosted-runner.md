@@ -28,8 +28,10 @@ d'un runner neuf sans modifier les spécifications de dépendances.
 Le workflow ne lance aucun nettoyage Docker global, ne redémarre aucun service
 et n'installe aucun paquet système. L'installation Playwright sans
 `--with-deps` réutilise le navigateur en cache ou télécharge uniquement le
-navigateur demandé. Une dépendance système manquante constitue un blocage
-d'infrastructure, pas une autorisation d'utiliser `sudo` dans le workflow.
+navigateur demandé. Un préflight `install-deps --dry-run` vérifie les
+dépendances Linux sans modifier le système. Une dépendance manquante constitue
+un blocage d'infrastructure, pas une autorisation d'utiliser `sudo` dans le
+workflow.
 
 ## Frontière d'administration
 
