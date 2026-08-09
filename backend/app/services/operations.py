@@ -31,7 +31,7 @@ from app.pass_session_contract import PASS_SERVICE_SESSION_ENVELOPE_BYTES
 from app.services.autonomous_sync_availability import autonomous_runtime_status
 from app.services.sync_control import ensure_utc
 
-EXPECTED_DATABASE_REVISION = "0028"
+EXPECTED_DATABASE_REVISION = "0029"
 REQUIRED_RUNTIME_COMPONENTS = ("scheduler", "sync", "calendar", "outbox")
 ISOLATED_SYNC_PROFILE = {
     "runtime_profile": "isolated-sync-v3",
