@@ -328,7 +328,7 @@ def _scan_wheel_secrets(wheel: Path) -> None:
 def _run_scans(root: Path, files: dict[str, Path], wheel: Path, frontend: Path) -> None:
     boundary = ScanResult()
     boundary.merge(scan_wheel(wheel))
-    boundary.merge(scan_directory(frontend))
+    boundary.merge(scan_directory(frontend, require_pdfjs_worker=True))
     if not boundary.ok:
         _fail("CONTENT_BOUNDARY_FAILED")
     if scan_paths(list(files.values()), root=root):
