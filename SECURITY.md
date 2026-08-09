@@ -55,6 +55,12 @@ Avant toute exposition Internet, l'administrateur doit adapter les exemples de `
 
 Le [modèle de menace](docs/security/threat-model.md), la [procédure de rotation](docs/security/key-rotation.md) et les [niveaux d'assurance](docs/security/authentication-assurance.md) font partie de la politique maintenue.
 
+Les wheels de release suivent en plus un
+[profil ZIP structurel strict](docs/security/release-wheel-zip-profile.md). Le
+scanner lit l'EOCD, le central directory et chaque local header depuis le même
+descripteur, refuse toute région non prévue et vérifie CRC et tailles avant
+d'appliquer la frontière de contenu existante aux payloads.
+
 ## Niveaux d'assurance propriétaire
 
 Une session `owner` n'est pas nécessairement une authentification primaire. Une connexion par token reste une délégation liée au token qui l'a créée, même si ce token possède le rôle `owner`.
