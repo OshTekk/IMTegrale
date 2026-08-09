@@ -46,6 +46,17 @@ def test_postgres_migration_backfills_existing_boolean_modes() -> None:
     engine.dispose()
     command.downgrade(configuration, "0024")
     engine.dispose()
+    command.upgrade(configuration, "0028")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO pass_system_state "
+                "(id, circuit_state, circuit_failure_count, updated_at) "
+                "VALUES (1, 'closed', 0, CURRENT_TIMESTAMP) "
+                "ON CONFLICT (id) DO NOTHING"
+            )
+        )
+    engine.dispose()
     command.upgrade(configuration, "head")
 
     with engine.connect() as connection:

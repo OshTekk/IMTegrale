@@ -48,9 +48,15 @@ def _artifact(tmp_path: Path, auditor: ModuleType) -> Path:
     assets = frontend / "assets"
     vite = frontend / ".vite"
     wheel_dir = root / "wheel"
+    openapi_dir = root / "openapi"
+    migrations_dir = root / "migrations"
+    source_dir = tmp_path / "source"
     assets.mkdir(parents=True)
     vite.mkdir()
     wheel_dir.mkdir()
+    openapi_dir.mkdir()
+    migrations_dir.mkdir()
+    source_dir.mkdir()
 
     (frontend / "index.html").write_text('<div id="root"></div>\n', encoding="utf-8")
     (assets / "app-fictive.js").write_text("export const demo = true;\n", encoding="utf-8")
@@ -72,14 +78,36 @@ def _artifact(tmp_path: Path, auditor: ModuleType) -> Path:
         encoding="utf-8",
     )
     wheel = wheel_dir / "botnote_fictive-1.0.0-py3-none-any.whl"
+    operator_payload = b'"""Synthetic operator."""\nMODES = ("check", "apply")\n'
+    helper_payload = b'"""Synthetic reconciliation helper."""\n'
     with zipfile.ZipFile(wheel, "w") as archive:
         archive.writestr("app/__init__.py", '"""Synthetic release fixture."""\n')
+        archive.writestr("app/operational_sequence_tool.py", operator_payload)
+        archive.writestr("app/operational_sequence_reconciliation_v1.py", helper_payload)
+    operator_source = source_dir / "operational_sequence_tool.py"
+    operator_source.write_bytes(operator_payload)
+    helper_source = source_dir / "operational_sequence_reconciliation_v1.py"
+    helper_source.write_bytes(helper_payload)
     sbom = root / "imtegrale.cdx.json"
     sbom.write_text(
         json.dumps({"bomFormat": "CycloneDX", "specVersion": "1.6", "components": []}),
         encoding="utf-8",
     )
-    auditor.audit(wheel, frontend, sbom, root / "release-manifest.json")
+    openapi = openapi_dir / "imtegrale.openapi.json"
+    openapi.write_text(json.dumps({"openapi": "3.1.0", "paths": {}}), encoding="utf-8")
+    migration = migrations_dir / "0029_operational_sequence_reconciliation.py"
+    migration.write_text('revision = "0029"\ndown_revision = "0028"\n', encoding="utf-8")
+    auditor.audit(
+        wheel,
+        frontend,
+        sbom,
+        root / "release-manifest.json",
+        source_sha="a" * 40,
+        openapi=openapi,
+        migration=migration,
+        operator_source=operator_source,
+        helper_source=helper_source,
+    )
     return root
 
 
@@ -120,9 +148,50 @@ def test_complete_artifact_is_verified(
 
     result = verifier.verify(root)
 
-    assert result.files == 8
+    assert result.files == 10
     assert result.frontend_files == 5
     assert result.wheel.name == "botnote_fictive-1.0.0-py3-none-any.whl"
+    manifest = _manifest(root)
+    assert manifest["schema_version"] == 2
+    assert manifest["source"] == {"sha": "a" * 40}
+    assert manifest["inventory"]["operator_modes"] == ["check", "apply"]
+    assert manifest["migration"]["path"] == "migrations/0029_operational_sequence_reconciliation.py"
+    assert manifest["operator_tool"]["path"] == "app/operational_sequence_tool.py"
+    assert manifest["reconciliation_helper"]["path"] == (
+        "app/operational_sequence_reconciliation_v1.py"
+    )
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "openapi/imtegrale.openapi.json",
+        "migrations/0029_operational_sequence_reconciliation.py",
+    ],
+)
+def test_missing_bound_provenance_file_is_refused(
+    tmp_path: Path,
+    auditor: ModuleType,
+    verifier: ModuleType,
+    relative: str,
+) -> None:
+    root = _artifact(tmp_path, auditor)
+    (root / relative).unlink()
+
+    _denied(verifier, root, "ARTIFACT_INVENTORY_MISMATCH")
+
+
+def test_invalid_source_sha_is_refused(
+    tmp_path: Path,
+    auditor: ModuleType,
+    verifier: ModuleType,
+) -> None:
+    root = _artifact(tmp_path, auditor)
+    manifest = _manifest(root)
+    manifest["source"]["sha"] = "not-a-source-sha"
+    _write_manifest(root, manifest)
+
+    _denied(verifier, root, "RELEASE_MANIFEST_SCHEMA_INVALID")
 
 
 def test_missing_vite_manifest_is_refused(

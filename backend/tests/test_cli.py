@@ -197,6 +197,70 @@ def test_schema_rotation_and_operations_commands_are_dispatchable(monkeypatch, c
     assert "TEST_ALERT" in capsys.readouterr().out
 
 
+def test_operational_sequence_command_defaults_to_check_and_requires_explicit_apply(
+    monkeypatch,
+    capsys,
+) -> None:  # noqa: ANN001
+    from app import operational_sequence_tool
+
+    calls: list[dict[str, object]] = []
+
+    def execute(_engine, **options):  # noqa: ANN001,ANN202
+        calls.append(options)
+        return {
+            "schema_version": 1,
+            "logical_sequence": "SEQ OP 01",
+            "mode": options["mode"],
+            "ok": True,
+            "status": "safe",
+            "contract_valid": True,
+            "candidate_safe": True,
+            "is_called": True,
+            "relation_unique": True,
+            "singleton": True,
+            "mutation_state": "none",
+            "setval_count": 0,
+            "nextval_count": 0,
+            "revision_unchanged": True,
+            "quiescent": options["quiescent_attested"],
+            "error_code": None,
+        }
+
+    monkeypatch.setattr(cli, "get_settings", StubSettings)
+    monkeypatch.setattr(
+        operational_sequence_tool,
+        "execute_operational_sequence_operator",
+        execute,
+    )
+    monkeypatch.setattr("sys.argv", ["botnote", "operational-sequence"])
+    cli.main()
+    assert calls[-1] == {
+        "mode": "check",
+        "confirmation": None,
+        "quiescent_attested": False,
+    }
+    assert '"logical_sequence":"SEQ OP 01"' in capsys.readouterr().out
+    assert StubSettings.validated_roles[-1] is RuntimeRole.OPERATIONS
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "botnote",
+            "operational-sequence",
+            "apply",
+            "--quiescent",
+            "--confirm",
+            "RECONCILE-SEQ-OP-01",
+        ],
+    )
+    cli.main()
+    assert calls[-1] == {
+        "mode": "apply",
+        "confirmation": "RECONCILE-SEQ-OP-01",
+        "quiescent_attested": True,
+    }
+
+
 def test_pass_session_migration_and_restore_revocation_commands_are_dispatchable(
     monkeypatch,
     capsys,

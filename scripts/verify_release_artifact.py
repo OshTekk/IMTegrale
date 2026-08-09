@@ -26,6 +26,7 @@ MAX_ARTIFACT_FILES = 20_000
 MAX_ARTIFACT_FILE_BYTES = 512 * 1024 * 1024
 MAX_ARTIFACT_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+SOURCE_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 ARTIFACT_PATH_PATTERN = re.compile(r"^[A-Za-z0-9._/-]+$")
 VITE_REFERENCE_PATTERN = re.compile(r"^[A-Za-z0-9._@+~/-]+$")
 VITE_ENTRY_KEYS = frozenset(
@@ -41,6 +42,11 @@ VITE_ENTRY_KEYS = frozenset(
         "src",
     }
 )
+OPENAPI_PATH = "openapi/imtegrale.openapi.json"
+MIGRATION_PATH = "migrations/0029_operational_sequence_reconciliation.py"
+OPERATOR_MEMBER = "app/operational_sequence_tool.py"
+HELPER_MEMBER = "app/operational_sequence_reconciliation_v1.py"
+OPERATOR_MODES = ["check", "apply"]
 
 
 class ReleaseArtifactError(ValueError):
@@ -68,6 +74,21 @@ class VerificationResult:
     frontend: Path
     files: int
     frontend_files: int
+
+
+@dataclass(frozen=True, slots=True)
+class ReleaseManifest:
+    source_sha: str
+    wheel: DigestRecord
+    sbom: DigestRecord
+    openapi: DigestRecord
+    migration: DigestRecord
+    operator_tool: DigestRecord
+    reconciliation_helper: DigestRecord
+    frontend: list[DigestRecord]
+    artifact_files: int
+    frontend_files: int
+    wheel_members: int
 
 
 def _fail(code: str) -> None:
@@ -217,17 +238,44 @@ def _digest_record(value: object, *, allow_subdirectories: bool) -> DigestRecord
     return DigestRecord(path=path, sha256=sha256, size=size)
 
 
-def _parse_release_manifest(path: Path) -> tuple[DigestRecord, DigestRecord, list[DigestRecord]]:
+def _parse_release_manifest(path: Path) -> ReleaseManifest:
     value = _read_json(path, limit=MAX_RELEASE_MANIFEST_BYTES, code="RELEASE_MANIFEST_INVALID")
+    expected_keys = {
+        "frontend",
+        "inventory",
+        "migration",
+        "openapi",
+        "operator_tool",
+        "reconciliation_helper",
+        "sbom",
+        "schema_version",
+        "source",
+        "wheel",
+    }
     if (
         not isinstance(value, dict)
-        or set(value) != {"frontend", "sbom", "schema_version", "wheel"}
+        or set(value) != expected_keys
         or type(value["schema_version"]) is not int
-        or value["schema_version"] != 1
+        or value["schema_version"] != 2
+    ):
+        _fail("RELEASE_MANIFEST_SCHEMA_INVALID")
+    source = value["source"]
+    if (
+        not isinstance(source, dict)
+        or set(source) != {"sha"}
+        or not isinstance(source["sha"], str)
+        or not SOURCE_SHA_PATTERN.fullmatch(source["sha"])
     ):
         _fail("RELEASE_MANIFEST_SCHEMA_INVALID")
     wheel = _digest_record(value["wheel"], allow_subdirectories=False)
     sbom = _digest_record(value["sbom"], allow_subdirectories=False)
+    openapi = _digest_record(value["openapi"], allow_subdirectories=True)
+    migration = _digest_record(value["migration"], allow_subdirectories=True)
+    operator_tool = _digest_record(value["operator_tool"], allow_subdirectories=True)
+    reconciliation_helper = _digest_record(
+        value["reconciliation_helper"],
+        allow_subdirectories=True,
+    )
     frontend_value = value["frontend"]
     if not isinstance(frontend_value, list) or not frontend_value or len(frontend_value) > MAX_ARTIFACT_FILES:
         _fail("RELEASE_MANIFEST_SCHEMA_INVALID")
@@ -239,9 +287,42 @@ def _parse_release_manifest(path: Path) -> tuple[DigestRecord, DigestRecord, lis
         _fail("RELEASE_MANIFEST_SCHEMA_INVALID")
     if sbom.path != "imtegrale.cdx.json":
         _fail("RELEASE_MANIFEST_SCHEMA_INVALID")
+    if (
+        openapi.path != OPENAPI_PATH
+        or migration.path != MIGRATION_PATH
+        or operator_tool.path != OPERATOR_MEMBER
+        or reconciliation_helper.path != HELPER_MEMBER
+    ):
+        _fail("RELEASE_MANIFEST_SCHEMA_INVALID")
     if ".vite/manifest.json" not in frontend_paths or "index.html" not in frontend_paths:
         _fail("RELEASE_MANIFEST_INCOMPLETE")
-    return wheel, sbom, frontend
+    inventory = value["inventory"]
+    if (
+        not isinstance(inventory, dict)
+        or set(inventory)
+        != {"artifact_files", "frontend_files", "operator_modes", "wheel_members"}
+        or inventory["operator_modes"] != OPERATOR_MODES
+        or type(inventory["artifact_files"]) is not int
+        or type(inventory["frontend_files"]) is not int
+        or type(inventory["wheel_members"]) is not int
+        or inventory["artifact_files"] != len(frontend) + 5
+        or inventory["frontend_files"] != len(frontend)
+        or not 1 <= inventory["wheel_members"] <= MAX_ARTIFACT_FILES
+    ):
+        _fail("RELEASE_MANIFEST_SCHEMA_INVALID")
+    return ReleaseManifest(
+        source_sha=source["sha"],
+        wheel=wheel,
+        sbom=sbom,
+        openapi=openapi,
+        migration=migration,
+        operator_tool=operator_tool,
+        reconciliation_helper=reconciliation_helper,
+        frontend=frontend,
+        artifact_files=inventory["artifact_files"],
+        frontend_files=inventory["frontend_files"],
+        wheel_members=inventory["wheel_members"],
+    )
 
 
 def _sha256(path: Path) -> str:
@@ -264,6 +345,29 @@ def _verify_digest(path: Path, record: DigestRecord) -> None:
         _fail("ARTIFACT_SIZE_MISMATCH")
     if _sha256(path) != record.sha256:
         _fail("ARTIFACT_DIGEST_MISMATCH")
+
+
+def _verify_wheel_members(
+    wheel: Path,
+    *,
+    operator_tool: DigestRecord,
+    reconciliation_helper: DigestRecord,
+    expected_members: int,
+) -> None:
+    try:
+        with zipfile.ZipFile(wheel) as archive:
+            entries = archive.infolist()
+            names = [entry.filename for entry in entries]
+            if sum(not entry.is_dir() for entry in entries) != expected_members:
+                _fail("WHEEL_INVENTORY_MISMATCH")
+            for record in (operator_tool, reconciliation_helper):
+                if names.count(record.path) != 1:
+                    _fail("WHEEL_INVENTORY_MISMATCH")
+                payload = archive.read(record.path)
+                if len(payload) != record.size or hashlib.sha256(payload).hexdigest() != record.sha256:
+                    _fail("ARTIFACT_DIGEST_MISMATCH")
+    except (OSError, RuntimeError, zipfile.BadZipFile):
+        _fail("WHEEL_INVALID")
 
 
 def _vite_list(entry: dict[str, object], key: str) -> list[str]:
@@ -344,26 +448,36 @@ def verify(root: Path) -> VerificationResult:
     manifest_path = files.get(RELEASE_MANIFEST)
     if manifest_path is None:
         _fail("RELEASE_MANIFEST_MISSING")
-    wheel_record, sbom_record, frontend_records = _parse_release_manifest(manifest_path)
+    manifest = _parse_release_manifest(manifest_path)
 
-    wheel_relative = f"wheel/{wheel_record.path}"
-    sbom_relative = sbom_record.path
-    frontend_by_path = {record.path: record for record in frontend_records}
+    wheel_relative = f"wheel/{manifest.wheel.path}"
+    sbom_relative = manifest.sbom.path
+    frontend_by_path = {record.path: record for record in manifest.frontend}
     expected_files = {
         RELEASE_MANIFEST,
         wheel_relative,
         sbom_relative,
+        manifest.openapi.path,
+        manifest.migration.path,
         *(f"frontend/{path}" for path in frontend_by_path),
     }
-    if set(files) != expected_files:
+    if set(files) != expected_files or len(expected_files) != manifest.artifact_files:
         _fail("ARTIFACT_INVENTORY_MISMATCH")
 
     wheel = files[wheel_relative]
     frontend = root / "frontend"
-    _verify_digest(wheel, wheel_record)
-    _verify_digest(files[sbom_relative], sbom_record)
+    _verify_digest(wheel, manifest.wheel)
+    _verify_digest(files[sbom_relative], manifest.sbom)
+    _verify_digest(files[manifest.openapi.path], manifest.openapi)
+    _verify_digest(files[manifest.migration.path], manifest.migration)
     for relative, record in frontend_by_path.items():
         _verify_digest(files[f"frontend/{relative}"], record)
+    _verify_wheel_members(
+        wheel,
+        operator_tool=manifest.operator_tool,
+        reconciliation_helper=manifest.reconciliation_helper,
+        expected_members=manifest.wheel_members,
+    )
 
     _validate_vite_manifest(files[VITE_MANIFEST], set(frontend_by_path))
     _run_scans(root, files, wheel, frontend)
@@ -371,7 +485,7 @@ def verify(root: Path) -> VerificationResult:
         wheel=wheel,
         frontend=frontend,
         files=len(files),
-        frontend_files=len(frontend_records),
+        frontend_files=len(manifest.frontend),
     )
 
 

@@ -25,6 +25,8 @@ def _runtime_role(command: str, worker_kind: str | None = None) -> RuntimeRole:
         return RuntimeRole.SCHEDULER
     if command == "operations-check":
         return RuntimeRole.OPERATIONS
+    if command == "operational-sequence":
+        return RuntimeRole.OPERATIONS
     if command == "pass-sessions-migrate-hpke":
         return RuntimeRole.SYNC_MIGRATION
     if command == "hpke-rotate-envelopes":
@@ -98,6 +100,15 @@ def main() -> None:
     key_rotation.add_argument("--dry-run", action="store_true")
     key_rotation.add_argument("--limit", type=int)
     subparsers.add_parser("operations-check")
+    operational_sequence = subparsers.add_parser("operational-sequence")
+    operational_sequence.add_argument(
+        "mode",
+        nargs="?",
+        choices=("check", "apply"),
+        default="check",
+    )
+    operational_sequence.add_argument("--confirm")
+    operational_sequence.add_argument("--quiescent", action="store_true")
     session_migration = subparsers.add_parser("pass-sessions-migrate-hpke")
     session_migration.add_argument("--dry-run", action="store_true")
     session_migration.add_argument("--verify-only", action="store_true")
@@ -236,6 +247,18 @@ def main() -> None:
             alerts = operational_alert_codes(db, settings)
         print(json.dumps({"ok": not alerts, "alerts": alerts}, sort_keys=True))
         if alerts:
+            raise SystemExit(1)
+    elif args.command == "operational-sequence":
+        from app.operational_sequence_tool import execute_operational_sequence_operator
+
+        receipt = execute_operational_sequence_operator(
+            engine,
+            mode=args.mode,
+            confirmation=args.confirm,
+            quiescent_attested=args.quiescent,
+        )
+        print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
+        if not receipt["ok"]:
             raise SystemExit(1)
     elif args.command == "pass-sessions-migrate-hpke":
         from app.services.legacy_pass_session_migration import (

@@ -55,6 +55,17 @@ def test_float_data_is_rounded_deterministically_during_migration() -> None:
             setting_id = setting.id
     finally:
         engine.dispose()
+        command.upgrade(config, "0028")
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO pass_system_state "
+                    "(id, circuit_state, circuit_failure_count, updated_at) "
+                    "VALUES (1, 'closed', 0, CURRENT_TIMESTAMP) "
+                    "ON CONFLICT (id) DO NOTHING"
+                )
+            )
+        engine.dispose()
         command.upgrade(config, "head")
 
     with SessionLocal() as session:
