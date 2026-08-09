@@ -161,6 +161,8 @@ jobs:
           retention-days: 7
       - name: Verify built content boundary
         run: python ../scripts/check_content_boundary.py --repo-root .. --dist frontend/dist
+      - name: Verify dependency audit policy
+        run: python ../scripts/check_frontend_audit_policy.py --repo-root ..
       - name: Dependency audit
         run: pnpm audit --prod
 

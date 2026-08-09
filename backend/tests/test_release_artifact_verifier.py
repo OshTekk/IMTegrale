@@ -12,6 +12,8 @@ from types import ModuleType
 
 import pytest
 
+SYNTHETIC_PDFJS_WORKER = b"/** synthetic PDF.js 6.2.108 worker */const header='%PDF-';"
+
 
 def _load_script(name: str) -> ModuleType:
     scripts = Path(__file__).resolve().parents[2] / "scripts"
@@ -28,7 +30,8 @@ def _load_script(name: str) -> ModuleType:
 
 @pytest.fixture(scope="module")
 def verifier() -> ModuleType:
-    _load_script("check_content_boundary")
+    boundary = _load_script("check_content_boundary")
+    boundary.PINNED_PDFJS_WORKER_SHA256 = hashlib.sha256(SYNTHETIC_PDFJS_WORKER).hexdigest()
     _load_script("check_secrets")
     return _load_script("verify_release_artifact")
 
@@ -52,6 +55,7 @@ def _artifact(tmp_path: Path, auditor: ModuleType) -> Path:
     (frontend / "index.html").write_text('<div id="root"></div>\n', encoding="utf-8")
     (assets / "app-fictive.js").write_text("export const demo = true;\n", encoding="utf-8")
     (assets / "app-fictive.css").write_text(":root { color: black; }\n", encoding="utf-8")
+    (assets / "pdf.worker.min-fic12345.mjs").write_bytes(SYNTHETIC_PDFJS_WORKER)
     (vite / "manifest.json").write_text(
         json.dumps(
             {
@@ -61,6 +65,7 @@ def _artifact(tmp_path: Path, auditor: ModuleType) -> Path:
                     "src": "index.html",
                     "isEntry": True,
                     "css": ["assets/app-fictive.css"],
+                    "assets": ["assets/pdf.worker.min-fic12345.mjs"],
                 }
             }
         ),
@@ -115,8 +120,8 @@ def test_complete_artifact_is_verified(
 
     result = verifier.verify(root)
 
-    assert result.files == 7
-    assert result.frontend_files == 4
+    assert result.files == 8
+    assert result.frontend_files == 5
     assert result.wheel.name == "botnote_fictive-1.0.0-py3-none-any.whl"
 
 
