@@ -89,6 +89,7 @@ class ReleaseManifest:
     artifact_files: int
     frontend_files: int
     wheel_members: int
+    wheel_python_members: list[str]
 
 
 def _fail(code: str) -> None:
@@ -256,7 +257,7 @@ def _parse_release_manifest(path: Path) -> ReleaseManifest:
         not isinstance(value, dict)
         or set(value) != expected_keys
         or type(value["schema_version"]) is not int
-        or value["schema_version"] != 2
+        or value["schema_version"] != 3
     ):
         _fail("RELEASE_MANIFEST_SCHEMA_INVALID")
     source = value["source"]
@@ -300,7 +301,13 @@ def _parse_release_manifest(path: Path) -> ReleaseManifest:
     if (
         not isinstance(inventory, dict)
         or set(inventory)
-        != {"artifact_files", "frontend_files", "operator_modes", "wheel_members"}
+        != {
+            "artifact_files",
+            "frontend_files",
+            "operator_modes",
+            "wheel_members",
+            "wheel_python_members",
+        }
         or inventory["operator_modes"] != OPERATOR_MODES
         or type(inventory["artifact_files"]) is not int
         or type(inventory["frontend_files"]) is not int
@@ -308,6 +315,22 @@ def _parse_release_manifest(path: Path) -> ReleaseManifest:
         or inventory["artifact_files"] != len(frontend) + 5
         or inventory["frontend_files"] != len(frontend)
         or not 1 <= inventory["wheel_members"] <= MAX_ARTIFACT_FILES
+    ):
+        _fail("RELEASE_MANIFEST_SCHEMA_INVALID")
+    wheel_python_value = inventory["wheel_python_members"]
+    if not isinstance(wheel_python_value, list) or not wheel_python_value:
+        _fail("RELEASE_MANIFEST_SCHEMA_INVALID")
+    wheel_python_members = [
+        _safe_relative_path(member) for member in wheel_python_value
+    ]
+    if (
+        len(wheel_python_members) > MAX_ARTIFACT_FILES
+        or wheel_python_members != sorted(set(wheel_python_members))
+        or any(
+            not member.startswith("app/") or not member.endswith(".py")
+            for member in wheel_python_members
+        )
+        or "app/__init__.py" not in wheel_python_members
     ):
         _fail("RELEASE_MANIFEST_SCHEMA_INVALID")
     return ReleaseManifest(
@@ -322,6 +345,7 @@ def _parse_release_manifest(path: Path) -> ReleaseManifest:
         artifact_files=inventory["artifact_files"],
         frontend_files=inventory["frontend_files"],
         wheel_members=inventory["wheel_members"],
+        wheel_python_members=wheel_python_members,
     )
 
 
@@ -353,12 +377,22 @@ def _verify_wheel_members(
     operator_tool: DigestRecord,
     reconciliation_helper: DigestRecord,
     expected_members: int,
+    expected_python_members: list[str],
 ) -> None:
     try:
         with zipfile.ZipFile(wheel) as archive:
             entries = archive.infolist()
             names = [entry.filename for entry in entries]
             if sum(not entry.is_dir() for entry in entries) != expected_members:
+                _fail("WHEEL_INVENTORY_MISMATCH")
+            python_members = sorted(
+                entry.filename
+                for entry in entries
+                if not entry.is_dir()
+                and entry.filename.startswith("app/")
+                and entry.filename.endswith(".py")
+            )
+            if python_members != expected_python_members:
                 _fail("WHEEL_INVENTORY_MISMATCH")
             for record in (operator_tool, reconciliation_helper):
                 if names.count(record.path) != 1:
@@ -477,6 +511,7 @@ def verify(root: Path) -> VerificationResult:
         operator_tool=manifest.operator_tool,
         reconciliation_helper=manifest.reconciliation_helper,
         expected_members=manifest.wheel_members,
+        expected_python_members=manifest.wheel_python_members,
     )
 
     _validate_vite_manifest(files[VITE_MANIFEST], set(frontend_by_path))
