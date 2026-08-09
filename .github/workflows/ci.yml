@@ -9,12 +9,15 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # A workflow-level lock is acquired before any job, including service
+  # container creation, so the single self-hosted runner is never shared by
+  # overlapping CI runs.
+  group: imtegrale-self-hosted-ci
+  cancel-in-progress: false
 
 jobs:
   content-boundary:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, pve-mini, IMTegrale]
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -28,7 +31,7 @@ jobs:
 
   backend:
     needs: content-boundary
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, pve-mini, IMTegrale]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -69,7 +72,7 @@ jobs:
 
   postgres-backend:
     needs: content-boundary
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, pve-mini, IMTegrale]
     timeout-minutes: 15
     services:
       postgres:
@@ -110,7 +113,7 @@ jobs:
 
   frontend:
     needs: content-boundary
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, pve-mini, IMTegrale]
     timeout-minutes: 15
     defaults:
       run:
@@ -166,7 +169,7 @@ jobs:
 
   release-artifact:
     needs: [backend, postgres-backend, frontend]
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, pve-mini, IMTegrale]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -221,7 +224,7 @@ jobs:
 
   release-artifact-roundtrip:
     needs: release-artifact
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, pve-mini, IMTegrale]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
