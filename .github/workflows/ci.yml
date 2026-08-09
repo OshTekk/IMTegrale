@@ -9,20 +9,51 @@ permissions:
   contents: read
 
 concurrency:
-  # A workflow-level lock is acquired before any job, including service
-  # container creation, so the single self-hosted runner is never shared by
-  # overlapping CI runs.
-  group: imtegrale-self-hosted-ci
-  cancel-in-progress: false
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   content-boundary:
-    runs-on: [self-hosted, Linux, X64, pve-mini, IMTegrale]
-    timeout-minutes: 5
+    runs-on: [self-hosted, linux, x64, pve-mini, IMTegrale]
+    timeout-minutes: 360
     steps:
+      - name: Verify the assigned repository runner
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          ACTUAL_RUNNER_NAME: ${{ runner.name }}
+          ACTUAL_RUNNER_OS: ${{ runner.os }}
+          ACTUAL_RUNNER_ARCH: ${{ runner.arch }}
+          ACTUAL_REPOSITORY: ${{ github.repository }}
+          ACTUAL_EVENT_NAME: ${{ github.event_name }}
+          EXPECTED_WORKSPACE: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          test "$ACTUAL_RUNNER_NAME" = "pve-mini-IMTegrale"
+          test "$ACTUAL_RUNNER_OS" = "Linux"
+          test "$ACTUAL_RUNNER_ARCH" = "X64"
+          test "$ACTUAL_REPOSITORY" = "OshTekk/IMTegrale"
+          case "$ACTUAL_EVENT_NAME" in
+            push|pull_request) ;;
+            *) exit 1 ;;
+          esac
+          test "${GITHUB_ACTIONS:-}" = "true"
+          test -n "${GITHUB_JOB:-}"
+          test -n "${GITHUB_WORKSPACE:-}"
+          test -d "$GITHUB_WORKSPACE"
+          test "$GITHUB_WORKSPACE" = "$EXPECTED_WORKSPACE"
+          test "$(pwd -P)" = "$(cd "$GITHUB_WORKSPACE" && pwd -P)"
+          test "$(basename "$GITHUB_WORKSPACE")" = "IMTegrale"
+          printf 'Runner name: %s\n' "$ACTUAL_RUNNER_NAME"
+          printf 'Runner OS: %s\n' "$ACTUAL_RUNNER_OS"
+          printf 'Runner arch: %s\n' "$ACTUAL_RUNNER_ARCH"
+          printf 'Repository: %s\n' "$ACTUAL_REPOSITORY"
+          printf 'Event name: %s\n' "$ACTUAL_EVENT_NAME"
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
+          clean: true
+          fetch-depth: 1
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
@@ -31,18 +62,54 @@ jobs:
 
   backend:
     needs: content-boundary
-    runs-on: [self-hosted, Linux, X64, pve-mini, IMTegrale]
-    timeout-minutes: 15
+    runs-on: [self-hosted, linux, x64, pve-mini, IMTegrale]
+    timeout-minutes: 360
     steps:
+      - name: Verify the assigned repository runner
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          ACTUAL_RUNNER_NAME: ${{ runner.name }}
+          ACTUAL_RUNNER_OS: ${{ runner.os }}
+          ACTUAL_RUNNER_ARCH: ${{ runner.arch }}
+          ACTUAL_REPOSITORY: ${{ github.repository }}
+          ACTUAL_EVENT_NAME: ${{ github.event_name }}
+          EXPECTED_WORKSPACE: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          test "$ACTUAL_RUNNER_NAME" = "pve-mini-IMTegrale"
+          test "$ACTUAL_RUNNER_OS" = "Linux"
+          test "$ACTUAL_RUNNER_ARCH" = "X64"
+          test "$ACTUAL_REPOSITORY" = "OshTekk/IMTegrale"
+          case "$ACTUAL_EVENT_NAME" in
+            push|pull_request) ;;
+            *) exit 1 ;;
+          esac
+          test "${GITHUB_ACTIONS:-}" = "true"
+          test -n "${GITHUB_JOB:-}"
+          test -n "${GITHUB_WORKSPACE:-}"
+          test -d "$GITHUB_WORKSPACE"
+          test "$GITHUB_WORKSPACE" = "$EXPECTED_WORKSPACE"
+          test "$(pwd -P)" = "$(cd "$GITHUB_WORKSPACE" && pwd -P)"
+          test "$(basename "$GITHUB_WORKSPACE")" = "IMTegrale"
+          printf 'Runner name: %s\n' "$ACTUAL_RUNNER_NAME"
+          printf 'Runner OS: %s\n' "$ACTUAL_RUNNER_OS"
+          printf 'Runner arch: %s\n' "$ACTUAL_RUNNER_ARCH"
+          printf 'Repository: %s\n' "$ACTUAL_REPOSITORY"
+          printf 'Event name: %s\n' "$ACTUAL_EVENT_NAME"
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
+          clean: true
+          fetch-depth: 1
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
           cache: pip
       - name: Install
-        run: python -m pip install --disable-pip-version-check -e '.[dev]'
+        run: >-
+          python -m pip install --disable-pip-version-check --upgrade
+          --upgrade-strategy eager -e '.[dev]'
       - name: Lint
         run: ruff check backend scripts
       - name: Security static analysis
@@ -72,8 +139,8 @@ jobs:
 
   postgres-backend:
     needs: content-boundary
-    runs-on: [self-hosted, Linux, X64, pve-mini, IMTegrale]
-    timeout-minutes: 15
+    runs-on: [self-hosted, linux, x64, pve-mini, IMTegrale]
+    timeout-minutes: 360
     services:
       postgres:
         image: postgres:17-alpine
@@ -93,15 +160,51 @@ jobs:
       BOTNOTE_DATABASE_URL: postgresql+psycopg://botnote_ci:postgres-ci-only@127.0.0.1:5432/botnote_test
       BOTNOTE_POSTGRES_TEST_URL: postgresql+psycopg://botnote_ci:postgres-ci-only@127.0.0.1:5432/botnote_test
     steps:
+      - name: Verify the assigned repository runner
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          ACTUAL_RUNNER_NAME: ${{ runner.name }}
+          ACTUAL_RUNNER_OS: ${{ runner.os }}
+          ACTUAL_RUNNER_ARCH: ${{ runner.arch }}
+          ACTUAL_REPOSITORY: ${{ github.repository }}
+          ACTUAL_EVENT_NAME: ${{ github.event_name }}
+          EXPECTED_WORKSPACE: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          test "$ACTUAL_RUNNER_NAME" = "pve-mini-IMTegrale"
+          test "$ACTUAL_RUNNER_OS" = "Linux"
+          test "$ACTUAL_RUNNER_ARCH" = "X64"
+          test "$ACTUAL_REPOSITORY" = "OshTekk/IMTegrale"
+          case "$ACTUAL_EVENT_NAME" in
+            push|pull_request) ;;
+            *) exit 1 ;;
+          esac
+          test "${GITHUB_ACTIONS:-}" = "true"
+          test -n "${GITHUB_JOB:-}"
+          test -n "${GITHUB_WORKSPACE:-}"
+          test -d "$GITHUB_WORKSPACE"
+          test "$GITHUB_WORKSPACE" = "$EXPECTED_WORKSPACE"
+          test "$(pwd -P)" = "$(cd "$GITHUB_WORKSPACE" && pwd -P)"
+          test "$(basename "$GITHUB_WORKSPACE")" = "IMTegrale"
+          printf 'Runner name: %s\n' "$ACTUAL_RUNNER_NAME"
+          printf 'Runner OS: %s\n' "$ACTUAL_RUNNER_OS"
+          printf 'Runner arch: %s\n' "$ACTUAL_RUNNER_ARCH"
+          printf 'Repository: %s\n' "$ACTUAL_REPOSITORY"
+          printf 'Event name: %s\n' "$ACTUAL_EVENT_NAME"
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
+          clean: true
+          fetch-depth: 1
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
           cache: pip
       - name: Install
-        run: python -m pip install --disable-pip-version-check -e '.[dev]'
+        run: >-
+          python -m pip install --disable-pip-version-check --upgrade
+          --upgrade-strategy eager -e '.[dev]'
       - name: Create schema from migrations
         run: alembic upgrade head
       - name: PostgreSQL constraints and concurrency
@@ -113,15 +216,49 @@ jobs:
 
   frontend:
     needs: content-boundary
-    runs-on: [self-hosted, Linux, X64, pve-mini, IMTegrale]
-    timeout-minutes: 15
+    runs-on: [self-hosted, linux, x64, pve-mini, IMTegrale]
+    timeout-minutes: 360
     defaults:
       run:
         working-directory: frontend
     steps:
+      - name: Verify the assigned repository runner
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          ACTUAL_RUNNER_NAME: ${{ runner.name }}
+          ACTUAL_RUNNER_OS: ${{ runner.os }}
+          ACTUAL_RUNNER_ARCH: ${{ runner.arch }}
+          ACTUAL_REPOSITORY: ${{ github.repository }}
+          ACTUAL_EVENT_NAME: ${{ github.event_name }}
+          EXPECTED_WORKSPACE: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          test "$ACTUAL_RUNNER_NAME" = "pve-mini-IMTegrale"
+          test "$ACTUAL_RUNNER_OS" = "Linux"
+          test "$ACTUAL_RUNNER_ARCH" = "X64"
+          test "$ACTUAL_REPOSITORY" = "OshTekk/IMTegrale"
+          case "$ACTUAL_EVENT_NAME" in
+            push|pull_request) ;;
+            *) exit 1 ;;
+          esac
+          test "${GITHUB_ACTIONS:-}" = "true"
+          test -n "${GITHUB_JOB:-}"
+          test -n "${GITHUB_WORKSPACE:-}"
+          test -d "$GITHUB_WORKSPACE"
+          test "$GITHUB_WORKSPACE" = "$EXPECTED_WORKSPACE"
+          test "$(pwd -P)" = "$(cd "$GITHUB_WORKSPACE" && pwd -P)"
+          test "$(basename "$GITHUB_WORKSPACE")" = "IMTegrale"
+          printf 'Runner name: %s\n' "$ACTUAL_RUNNER_NAME"
+          printf 'Runner OS: %s\n' "$ACTUAL_RUNNER_OS"
+          printf 'Runner arch: %s\n' "$ACTUAL_RUNNER_ARCH"
+          printf 'Repository: %s\n' "$ACTUAL_REPOSITORY"
+          printf 'Event name: %s\n' "$ACTUAL_EVENT_NAME"
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
+          clean: true
+          fetch-depth: 1
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
         with:
           version: 11.9.0
@@ -149,7 +286,7 @@ jobs:
       - name: Build and typecheck
         run: pnpm build
       - name: Install E2E browser
-        run: pnpm exec playwright install --with-deps chromium
+        run: pnpm exec playwright install chromium
       - name: Parcours E2E (synthetic fixtures only)
         run: pnpm test:e2e:ci
       - name: Retain synthetic E2E diagnostics
@@ -169,12 +306,46 @@ jobs:
 
   release-artifact:
     needs: [backend, postgres-backend, frontend]
-    runs-on: [self-hosted, Linux, X64, pve-mini, IMTegrale]
-    timeout-minutes: 20
+    runs-on: [self-hosted, linux, x64, pve-mini, IMTegrale]
+    timeout-minutes: 360
     steps:
+      - name: Verify the assigned repository runner
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          ACTUAL_RUNNER_NAME: ${{ runner.name }}
+          ACTUAL_RUNNER_OS: ${{ runner.os }}
+          ACTUAL_RUNNER_ARCH: ${{ runner.arch }}
+          ACTUAL_REPOSITORY: ${{ github.repository }}
+          ACTUAL_EVENT_NAME: ${{ github.event_name }}
+          EXPECTED_WORKSPACE: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          test "$ACTUAL_RUNNER_NAME" = "pve-mini-IMTegrale"
+          test "$ACTUAL_RUNNER_OS" = "Linux"
+          test "$ACTUAL_RUNNER_ARCH" = "X64"
+          test "$ACTUAL_REPOSITORY" = "OshTekk/IMTegrale"
+          case "$ACTUAL_EVENT_NAME" in
+            push|pull_request) ;;
+            *) exit 1 ;;
+          esac
+          test "${GITHUB_ACTIONS:-}" = "true"
+          test -n "${GITHUB_JOB:-}"
+          test -n "${GITHUB_WORKSPACE:-}"
+          test -d "$GITHUB_WORKSPACE"
+          test "$GITHUB_WORKSPACE" = "$EXPECTED_WORKSPACE"
+          test "$(pwd -P)" = "$(cd "$GITHUB_WORKSPACE" && pwd -P)"
+          test "$(basename "$GITHUB_WORKSPACE")" = "IMTegrale"
+          printf 'Runner name: %s\n' "$ACTUAL_RUNNER_NAME"
+          printf 'Runner OS: %s\n' "$ACTUAL_RUNNER_OS"
+          printf 'Runner arch: %s\n' "$ACTUAL_RUNNER_ARCH"
+          printf 'Repository: %s\n' "$ACTUAL_REPOSITORY"
+          printf 'Event name: %s\n' "$ACTUAL_EVENT_NAME"
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
+          clean: true
+          fetch-depth: 1
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
@@ -224,12 +395,46 @@ jobs:
 
   release-artifact-roundtrip:
     needs: release-artifact
-    runs-on: [self-hosted, Linux, X64, pve-mini, IMTegrale]
-    timeout-minutes: 10
+    runs-on: [self-hosted, linux, x64, pve-mini, IMTegrale]
+    timeout-minutes: 360
     steps:
+      - name: Verify the assigned repository runner
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          ACTUAL_RUNNER_NAME: ${{ runner.name }}
+          ACTUAL_RUNNER_OS: ${{ runner.os }}
+          ACTUAL_RUNNER_ARCH: ${{ runner.arch }}
+          ACTUAL_REPOSITORY: ${{ github.repository }}
+          ACTUAL_EVENT_NAME: ${{ github.event_name }}
+          EXPECTED_WORKSPACE: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          test "$ACTUAL_RUNNER_NAME" = "pve-mini-IMTegrale"
+          test "$ACTUAL_RUNNER_OS" = "Linux"
+          test "$ACTUAL_RUNNER_ARCH" = "X64"
+          test "$ACTUAL_REPOSITORY" = "OshTekk/IMTegrale"
+          case "$ACTUAL_EVENT_NAME" in
+            push|pull_request) ;;
+            *) exit 1 ;;
+          esac
+          test "${GITHUB_ACTIONS:-}" = "true"
+          test -n "${GITHUB_JOB:-}"
+          test -n "${GITHUB_WORKSPACE:-}"
+          test -d "$GITHUB_WORKSPACE"
+          test "$GITHUB_WORKSPACE" = "$EXPECTED_WORKSPACE"
+          test "$(pwd -P)" = "$(cd "$GITHUB_WORKSPACE" && pwd -P)"
+          test "$(basename "$GITHUB_WORKSPACE")" = "IMTegrale"
+          printf 'Runner name: %s\n' "$ACTUAL_RUNNER_NAME"
+          printf 'Runner OS: %s\n' "$ACTUAL_RUNNER_OS"
+          printf 'Runner arch: %s\n' "$ACTUAL_RUNNER_ARCH"
+          printf 'Repository: %s\n' "$ACTUAL_REPOSITORY"
+          printf 'Event name: %s\n' "$ACTUAL_EVENT_NAME"
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
+          clean: true
+          fetch-depth: 1
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
