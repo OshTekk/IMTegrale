@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import inspect
 import io
 import json
 import lzma
@@ -490,6 +491,23 @@ def test_cli_artifact_errors_do_not_disclose_argument_paths(
     assert private_argument not in output
 
 
+def test_cli_cannot_skip_the_built_frontend_scan(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+):
+    repo = _repository(tmp_path)
+    _stage(repo, "safe.py", b"SYNTHETIC = True\n")
+    dist = repo / "frontend/dist/assets"
+    dist.mkdir(parents=True)
+    (dist / SYNTHETIC_PDFJS_WORKER_NAME).write_bytes(SYNTHETIC_PDFJS_WORKER + b"tampered")
+
+    exit_code = main(["--repo-root", str(repo), "--dist", "frontend/dist"])
+    output = capsys.readouterr().out
+
+    assert exit_code == 1
+    assert "PDFJS_WORKER_INTEGRITY_INVALID" in output
+
+
 def test_built_frontend_directory_is_scanned_for_private_sentinels(tmp_path: Path):
     dist = tmp_path / "dist"
     (dist / "assets").mkdir(parents=True)
@@ -582,28 +600,175 @@ def test_built_frontend_rejects_disguised_katex_font(tmp_path: Path):
     assert result.violations["MAGIC_PDF"] == 1
 
 
-def test_built_frontend_accepts_only_the_pinned_pdfjs_worker(
+SYNTHETIC_PDFJS_WORKER = b"/** synthetic PDF.js 6.2.108 worker */const header='%PDF-';"
+SYNTHETIC_PDFJS_WORKER_NAME = "pdf.worker.min-fic12345.mjs"
+LEGACY_PDFJS_WORKER_SHA256 = "2ab9e09667296dab1a618868b3ce6e6c23d5b8f48120ae7c5b34e7e335ed01fa"
+
+
+def _pinned_pdfjs_dist(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> tuple[Path, Path]:
     dist = tmp_path / "dist"
     (dist / "assets").mkdir(parents=True)
-    payload = b"/** synthetic PDF.js worker */const header='%PDF-';"
     monkeypatch.setattr(
         content_boundary_checker,
         "PINNED_PDFJS_WORKER_SHA256",
-        hashlib.sha256(payload).hexdigest(),
+        hashlib.sha256(SYNTHETIC_PDFJS_WORKER).hexdigest(),
     )
-    (dist / "assets" / "pdf.worker.min-fic12345.mjs").write_bytes(payload)
+    worker = dist / "assets" / SYNTHETIC_PDFJS_WORKER_NAME
+    worker.write_bytes(SYNTHETIC_PDFJS_WORKER)
+    return dist, worker
 
-    result = scan_directory(dist)
+
+def test_built_frontend_accepts_exactly_one_pinned_pdfjs_worker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    dist, _worker = _pinned_pdfjs_dist(tmp_path, monkeypatch)
+
+    result = scan_directory(dist, require_pdfjs_worker=True)
 
     assert result.ok, format_result(result)
 
-    (dist / "assets" / "pdf.worker.min-fic12345.mjs").write_bytes(payload + b"tampered")
-    tampered = scan_directory(dist)
+
+@pytest.mark.parametrize(
+    "tampered_payload",
+    [
+        SYNTHETIC_PDFJS_WORKER[:-1] + b"?",
+        SYNTHETIC_PDFJS_WORKER + b"added",
+        SYNTHETIC_PDFJS_WORKER[:-1],
+    ],
+    ids=["one-byte-modified", "bytes-added", "truncated"],
+)
+def test_built_frontend_rejects_every_worker_digest_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tampered_payload: bytes,
+):
+    dist, worker = _pinned_pdfjs_dist(tmp_path, monkeypatch)
+    worker.write_bytes(tampered_payload)
+
+    tampered = scan_directory(dist, require_pdfjs_worker=True)
+
     assert tampered.violations["PDFJS_WORKER_INTEGRITY_INVALID"] == 1
     assert tampered.violations["MAGIC_PDF"] == 1
+
+
+def test_legacy_pdfjs_6_1_200_worker_digest_is_not_allowlisted():
+    assert content_boundary_checker.PINNED_PDFJS_WORKER_SHA256 != LEGACY_PDFJS_WORKER_SHA256
+
+
+def test_production_pdfjs_pin_is_one_full_sha256_equality():
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+    implementation = inspect.getsource(content_boundary_checker._is_pinned_pdfjs_worker)
+
+    assert content_boundary_checker.PINNED_PDFJS_WORKER_SHA256 == (
+        "0613f41490dd6aaceed7a93fbbd38c85e6d6aa60474b6588c6e7709cfbe18cb3"
+    )
+    assert LEGACY_PDFJS_WORKER_SHA256 not in source
+    assert "hashlib.sha256(data).hexdigest() == PINNED_PDFJS_WORKER_SHA256" in implementation
+    assert ".startswith(" not in implementation
+    assert "len(data)" not in implementation
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "assets/pdf.worker-fic12345.mjs",
+        "chunks/pdf.worker.min-fic12345.mjs",
+    ],
+    ids=["wrong-name", "wrong-path"],
+)
+def test_built_frontend_rejects_pinned_bytes_at_the_wrong_worker_location(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    relative_path: str,
+):
+    dist = tmp_path / "dist"
+    target = dist / relative_path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(SYNTHETIC_PDFJS_WORKER)
+    monkeypatch.setattr(
+        content_boundary_checker,
+        "PINNED_PDFJS_WORKER_SHA256",
+        hashlib.sha256(SYNTHETIC_PDFJS_WORKER).hexdigest(),
+    )
+
+    result = scan_directory(dist, require_pdfjs_worker=True)
+
+    assert result.violations["PDFJS_WORKER_COUNT_INVALID"] == 1
+    assert result.violations["MAGIC_PDF"] == 1
+
+
+def test_built_frontend_rejects_a_second_pinned_pdfjs_worker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    dist, _worker = _pinned_pdfjs_dist(tmp_path, monkeypatch)
+    (dist / "assets" / "pdf.worker.min-fic67890.mjs").write_bytes(SYNTHETIC_PDFJS_WORKER)
+
+    result = scan_directory(dist, require_pdfjs_worker=True)
+
+    assert result.violations["PDFJS_WORKER_COUNT_INVALID"] == 1
+
+
+def test_built_frontend_rejects_a_worker_source_map(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    dist, worker = _pinned_pdfjs_dist(tmp_path, monkeypatch)
+    worker.with_suffix(".mjs.map").write_text('{"synthetic":true}', encoding="utf-8")
+
+    result = scan_directory(dist, require_pdfjs_worker=True)
+
+    assert result.violations["FRONTEND_BUILD_DATA_FILE"] == 1
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "expected_rule"),
+    [
+        ("assets/unexpected-fictive.pdf", "SENSITIVE_FILE_TYPE"),
+        ("assets/unexpected-fictive.js", "MAGIC_PDF"),
+    ],
+    ids=["unexpected-pdf", "pdf-marker-in-another-bundle"],
+)
+def test_built_frontend_rejects_unexpected_pdf_content_next_to_the_worker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    relative_path: str,
+    expected_rule: str,
+):
+    dist, _worker = _pinned_pdfjs_dist(tmp_path, monkeypatch)
+    (dist / relative_path).write_bytes(b"%PDF-1.7\nFICTITIOUS")
+
+    result = scan_directory(dist, require_pdfjs_worker=True)
+
+    assert result.violations[expected_rule] == 1
+
+
+@pytest.mark.parametrize("invalid_pin", ["", "0" * 64], ids=["pin-removed", "generic-digest"])
+def test_built_frontend_refuses_a_missing_or_generic_pdfjs_pin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    invalid_pin: str,
+):
+    dist, _worker = _pinned_pdfjs_dist(tmp_path, monkeypatch)
+    monkeypatch.setattr(content_boundary_checker, "PINNED_PDFJS_WORKER_SHA256", invalid_pin)
+
+    result = scan_directory(dist, require_pdfjs_worker=True)
+
+    assert result.violations["PDFJS_WORKER_INTEGRITY_INVALID"] == 1
+    assert result.violations["MAGIC_PDF"] == 1
+
+
+def test_built_frontend_refuses_a_missing_pdfjs_worker(tmp_path: Path):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+
+    result = scan_directory(dist, require_pdfjs_worker=True)
+
+    assert result.violations["PDFJS_WORKER_COUNT_INVALID"] == 1
 
 
 def test_wheel_entries_are_scanned_without_extraction_or_path_disclosure(tmp_path: Path):

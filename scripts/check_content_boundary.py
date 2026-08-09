@@ -68,9 +68,9 @@ STATIC_ASSET_ALLOWLIST = frozenset(
 VITE_BUILD_MANIFEST = "frontend/dist/.vite/manifest.json"
 _KATEX_BUILD_FONT_RE = re.compile(r"^frontend/dist/assets/katex_[a-z0-9_-]+-[a-z0-9_-]{8}\.(?:ttf|woff2?)$")
 _PDFJS_WORKER_RE = re.compile(r"^frontend/dist/assets/pdf\.worker\.min-[a-z0-9_-]{8}\.mjs$")
-# pdfjs-dist 6.1.200. Pinning the emitted worker digest prevents the scanner
+# pdfjs-dist 6.2.108. Pinning the emitted worker digest prevents the scanner
 # exception for PDF.js' own "%PDF-" parser literal from becoming a file-smuggling bypass.
-PINNED_PDFJS_WORKER_SHA256 = "2ab9e09667296dab1a618868b3ce6e6c23d5b8f48120ae7c5b34e7e335ed01fa"
+PINNED_PDFJS_WORKER_SHA256 = "0613f41490dd6aaceed7a93fbbd38c85e6d6aa60474b6588c6e7709cfbe18cb3"
 GENERIC_CODE_EXTENSIONS = frozenset(
     {"cjs", "css", "htm", "html", "js", "jsx", "mjs", "py", "pyi", "scss", "ts", "tsx"}
 )
@@ -735,7 +735,12 @@ def _read_limited(stream: BinaryIO, limit: int) -> tuple[bytes | None, str | Non
     return data, None
 
 
-def scan_directory(directory: Path, *, logical_root: str = "frontend/dist") -> ScanResult:
+def scan_directory(
+    directory: Path,
+    *,
+    logical_root: str = "frontend/dist",
+    require_pdfjs_worker: bool = False,
+) -> ScanResult:
     """Optionally scan a built directory without following any symbolic link."""
 
     result = ScanResult()
@@ -752,6 +757,7 @@ def scan_directory(directory: Path, *, logical_root: str = "frontend/dist") -> S
         return result
 
     normalized_paths: set[str] = set()
+    pdfjs_worker_count = 0
     stack: list[tuple[Path, str]] = [(directory, "")]
     while stack:
         current, relative_parent = stack.pop()
@@ -787,6 +793,8 @@ def scan_directory(directory: Path, *, logical_root: str = "frontend/dist") -> S
             if normalized_path in normalized_paths:
                 result.add("PATH_NORMALIZATION_COLLISION")
             normalized_paths.add(normalized_path)
+            if _is_pdfjs_worker(normalized_path):
+                pdfjs_worker_count += 1
             for rule_id in _path_rules(normalized_path, force_sensitive=True):
                 result.add(rule_id)
 
@@ -805,6 +813,8 @@ def scan_directory(directory: Path, *, logical_root: str = "frontend/dist") -> S
             assert data is not None
             for rule_id in _content_rules(normalized_path, data, force_sensitive=True):
                 result.add(rule_id)
+    if require_pdfjs_worker and pdfjs_worker_count != 1:
+        result.add("PDFJS_WORKER_COUNT_INVALID")
     return result
 
 
@@ -930,7 +940,12 @@ def main(argv: Iterable[str] | None = None) -> int:
         repo_root = Path(arguments.repo_root).resolve()
         result = scan_repository(repo_root)
         if arguments.dist:
-            result.merge(scan_directory(_resolved_from_repo(repo_root, arguments.dist)))
+            result.merge(
+                scan_directory(
+                    _resolved_from_repo(repo_root, arguments.dist),
+                    require_pdfjs_worker=True,
+                )
+            )
         for wheel in arguments.wheel:
             result.merge(scan_wheel(_resolved_from_repo(repo_root, wheel)))
     # A traceback can disclose a caller-supplied artifact path.  The CLI therefore

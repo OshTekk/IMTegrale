@@ -17,6 +17,7 @@ export interface FakeLearningState {
   progress: Map<string, Record<string, unknown>>;
   searchQueries: string[];
   synthetic: true;
+  workerRequests: string[];
 }
 
 const baseUrl = "http://127.0.0.1:4173";
@@ -149,6 +150,76 @@ const dashboard = {
   grade_scale: [],
   notes: [],
   events: [],
+};
+
+const syntheticSettings = {
+  access: {
+    auth_method: "imt",
+    passkey_count: 0,
+    role: "owner",
+    security_setup_completed: true,
+    sync_setup_completed: true,
+  },
+  account: {
+    academic_source: "synthetic",
+    academic_verified_at: null,
+    campus: "rennes",
+    campus_source: "synthetic",
+    display_name: "Étudiante fictive",
+    imt_username: "synthetic.user",
+    official_first_name: "Étudiante",
+    official_identity_at: null,
+    official_last_name: "FICTIVE",
+    official_name: "Étudiante FICTIVE",
+    profile_refreshed_at: null,
+    program: "FICTIF",
+    promotion_year: 2099,
+    timezone: "Europe/Paris",
+  },
+  sync: {
+    adaptive: false,
+    allowed_intervals: [2, 4, 6, 8, 12, 24],
+    autonomous: {
+      activation_pending: false,
+      available: false,
+      configured: false,
+      consent_version: null,
+      consented_at: null,
+      enrollment_available: false,
+      last_failure_at: null,
+      last_success_at: null,
+      last_used_at: null,
+      needs_reenrollment: false,
+      runtime_ready: false,
+      state: null,
+      unavailable_reason: "unavailable",
+      verified_at: null,
+    },
+    available_modes: ["manual"],
+    business_hours: {
+      weekdays: "monday-friday",
+      start: "08:00",
+      end: "20:00",
+      timezone: "Europe/Paris",
+    },
+    consented_at: null,
+    current_interval_hours: 2,
+    enabled: false,
+    interval_hours: 2,
+    mode: "manual",
+    next_eligible_at: null,
+    no_change_streak: 0,
+    pass_access: null,
+    paused_at: null,
+    paused_reason: null,
+    service_session: null,
+  },
+  telegram: {
+    configured: false,
+    enabled: false,
+    last_test_at: null,
+    last_test_status: null,
+  },
 };
 
 type FixtureSection = "course" | "practice" | "exam" | "summary" | "glossary" | "sources";
@@ -572,6 +643,7 @@ export async function installFakeLearningApi(
     ]),
     searchQueries: [],
     synthetic: SYNTHETIC_FIXTURE_ONLY,
+    workerRequests: [],
   };
   await page.context().addCookies([{ name: "botnote_csrf", value: csrfToken, url: baseUrl, sameSite: "Lax" }]);
 
@@ -582,6 +654,9 @@ export async function installFakeLearningApi(
       state.externalRequests.push(request.url());
       await route.abort("blockedbyclient");
       return;
+    }
+    if (/^\/assets\/pdf\.worker\.min-[A-Za-z0-9_-]{8}\.mjs$/.test(url.pathname)) {
+      state.workerRequests.push(url.pathname);
     }
     if (!url.pathname.startsWith("/api/v1/")) {
       await route.continue();
@@ -598,6 +673,10 @@ export async function installFakeLearningApi(
     }
     if (url.pathname === "/api/v1/dashboard") {
       await json(route, dashboard);
+      return;
+    }
+    if (url.pathname === "/api/v1/settings" && request.method() === "GET") {
+      await json(route, syntheticSettings);
       return;
     }
     if (url.pathname === "/api/v1/learning/access") {

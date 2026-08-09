@@ -18,6 +18,39 @@ async function expectNoSeriousA11yViolations(page: Page) {
   ).toEqual([]);
 }
 
+test("la baseline BrowserRouter conserve navigation, historique, lazy routes et garde-fous", async ({ page }) => {
+  const state = await installFakeAppApi(page, "imt");
+  await installFakeEventSource(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+
+  await expect(page.getByRole("heading", { name: "Vue d'ensemble" })).toBeVisible();
+  await expect(page).toHaveTitle("Vue d'ensemble · IMTégrale");
+  const resultsLink = page.getByRole("link", { name: "Résultats" }).first();
+  await resultsLink.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("heading", { name: "Résultats", exact: true })).toBeVisible();
+  await expect(page.locator("#main-content")).toBeFocused();
+  await expect(page).toHaveTitle("Résultats · IMTégrale");
+
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Résultats", exact: true })).toBeVisible();
+  await page.goBack();
+  await expect(page.getByRole("heading", { name: "Vue d'ensemble" })).toBeVisible();
+  await page.goForward();
+  await expect(page.getByRole("heading", { name: "Résultats", exact: true })).toBeVisible();
+
+  await page.goto("/notes?semester=S6");
+  await expect(page).toHaveURL(/\/results\?semester=S6&view=evaluations$/);
+  await expect(page.getByRole("heading", { name: "Évaluations", exact: true })).toBeVisible();
+  await page.goto("/parcours");
+  await expect(page).toHaveURL("/");
+  await page.goto("/route-fictive-absente");
+  await expect(page).toHaveURL("/");
+  await expect(page.getByRole("heading", { name: "Vue d'ensemble" })).toBeVisible();
+  expect(state.externalRequests).toEqual([]);
+});
+
 test("la connexion IMT fictive ouvre une session primaire sans appel externe", async ({ page }) => {
   const state = await installFakeAppApi(page, "anonymous");
   await installFakeEventSource(page);

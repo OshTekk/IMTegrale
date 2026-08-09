@@ -201,7 +201,26 @@ test("la recherche serveur ouvre un résultat nettoyé", async ({ page }) => {
   expect(state.externalRequests).toEqual([]);
 });
 
+test("une route Parcours inconnue reste dans la SPA et affiche la page introuvable", async ({ page }) => {
+  const state = await installFakeLearningApi(page);
+  await page.goto("/parcours/route-fictive-absente");
+
+  await expect(page).toHaveURL("/parcours/route-fictive-absente");
+  await expect(page.getByRole("heading", { name: "Page introuvable" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Retour au parcours" })).toBeVisible();
+  await expectNoSeriousA11yViolations(page);
+  expect(state.externalRequests).toEqual([]);
+});
+
 test("une référence ouvre la page exacte dans PDF.js et le lecteur reste pilotable au clavier", async ({ page }) => {
+  const consoleErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") {
+      const location = message.location().url;
+      consoleErrors.push(location ? `${message.text()} (${location})` : message.text());
+    }
+  });
+  await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
   const state = await installFakeLearningApi(page);
   await page.goto("/parcours/lecons/lesson-fictive");
 
@@ -209,7 +228,11 @@ test("une référence ouvre la page exacte dans PDF.js et le lecteur reste pilot
   await expect(page).toHaveURL(/\/parcours\/sources\/source-fictive\?page=2$/);
   const viewer = page.getByRole("region", { name: "Lecteur PDF : Carnet synthétique" });
   await expect(viewer).toBeVisible();
-  await expect(viewer.locator("canvas")).toBeVisible();
+  const canvas = viewer.locator("canvas");
+  await expect(canvas).toBeVisible();
+  await expect(viewer.locator(".textLayer")).toContainText("DEMO FICTIVE PAGE 2");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  expect(await page.evaluate(() => window.matchMedia("(prefers-reduced-motion: reduce)").matches)).toBe(true);
   const pageInput = viewer.getByRole("spinbutton", { name: "Page" });
   await expect(pageInput).toHaveValue("2");
   await expect(viewer).toContainText("sur 2");
@@ -224,14 +247,23 @@ test("une référence ouvre la page exacte dans PDF.js et le lecteur reste pilot
   await viewer.getByRole("button", { name: "Rechercher" }).click();
   await expect(pageInput).toHaveValue("2");
   await expect(viewer).toContainText("1 page");
+  const fittedWidth = await canvas.evaluate((element) => element.style.width);
+  await viewer.getByRole("button", { name: "Réduire le zoom" }).click();
+  await expect.poll(() => canvas.evaluate((element) => element.style.width)).not.toBe(fittedWidth);
+  const reducedWidth = await canvas.evaluate((element) => element.style.width);
+  await viewer.getByRole("button", { name: "Augmenter le zoom" }).click();
+  await expect.poll(() => canvas.evaluate((element) => element.style.width)).not.toBe(reducedWidth);
   await expectCleanReaderCopy(page);
   await expectNoSeriousA11yViolations(page);
   expect(state.assetRequests).toBeGreaterThan(0);
   expect(state.assetRequestIds).toContain("asset-pdf-fictif");
+  expect(state.workerRequests).toHaveLength(1);
   expect(state.externalRequests).toEqual([]);
+  expect(consoleErrors).toEqual([]);
 });
 
 test("un document consultable sans droit de téléchargement reste lisible", async ({ page }) => {
+  await page.emulateMedia({ colorScheme: "light" });
   const state = await installFakeLearningApi(page);
   await page.goto("/parcours/modules/module-fictif");
 
@@ -239,6 +271,7 @@ test("un document consultable sans droit de téléchargement reste lisible", asy
   await expect(page).toHaveURL(/\/parcours\/sources\/source-memo-fictif$/);
   const viewer = page.getByRole("region", { name: "Lecteur PDF : Mémo visuel fictif" });
   await expect(viewer.locator("canvas")).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await expect(viewer.getByRole("link", { name: /Télécharger/ })).toHaveCount(0);
   await expect(viewer.getByRole("button", { name: /Télécharger/ })).toHaveCount(0);
   expect(state.assetRequestIds).toContain("asset-pdf-inline-fictif");

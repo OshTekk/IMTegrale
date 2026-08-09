@@ -197,6 +197,18 @@ def test_frontend_ci_scans_dist_from_its_working_directory() -> None:
     assert "python ../scripts/check_content_boundary.py --repo-root .. --dist dist" not in workflow
 
 
+def test_frontend_ci_enforces_the_zero_waiver_audit_policy() -> None:
+    workflow = read(".github/workflows/ci.yml")
+
+    assert (ROOT / "scripts/check_frontend_audit_policy.py").is_file()
+    assert (ROOT / "backend/tests/test_frontend_audit_policy.py").is_file()
+    policy_command = "python ../scripts/check_frontend_audit_policy.py --repo-root .."
+    audit_command = "run: pnpm audit --prod"
+    assert workflow.count(policy_command) == 1
+    assert workflow.count(audit_command) == 1
+    assert workflow.index(policy_command) < workflow.index(audit_command)
+
+
 def test_private_release_process_is_atomic_and_kept_out_of_public_artifacts() -> None:
     deployment = read("deploy/README.md")
     contributing = read("CONTRIBUTING.md")

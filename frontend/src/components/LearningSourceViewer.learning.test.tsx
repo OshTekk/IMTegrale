@@ -5,10 +5,63 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { expectNoSeriousLearningViolations } from "../test/learningTestA11y";
 import { LearningSourceViewer } from "./LearningSourceViewer";
 
+const pdfjsMocks = vi.hoisted(() => ({
+  destroy: vi.fn(),
+  getDocument: vi.fn(),
+}));
+
+vi.mock("pdfjs-dist", () => ({
+  GlobalWorkerOptions: { workerSrc: "" },
+  TextLayer: class {},
+  getDocument: pdfjsMocks.getDocument,
+}));
+
+vi.mock("pdfjs-dist/build/pdf.worker.min.mjs?url", () => ({
+  default: "/assets/pdf.worker.min-fic12345.mjs",
+}));
+
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   vi.clearAllMocks();
+});
+
+describe("LearningSourceViewer PDF security", () => {
+  it("passes the fail-closed scripting option to PDF.js and destroys the loading task", async () => {
+    pdfjsMocks.destroy.mockResolvedValue(undefined);
+    pdfjsMocks.getDocument.mockReturnValue({
+      destroy: pdfjsMocks.destroy,
+      onProgress: null,
+      promise: new Promise(() => undefined),
+    });
+
+    const { unmount } = render(
+      <LearningSourceViewer
+        assetId="asset-pdf-fictif"
+        assetUrl="/api/v1/learning/assets/asset-pdf-fictif"
+        downloadUrl={null}
+        mimeType="application/pdf"
+        title="[FICTIF] PDF synthétique"
+        page={1}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(pdfjsMocks.getDocument).toHaveBeenCalledWith({
+        url: "/api/v1/learning/assets/asset-pdf-fictif",
+        withCredentials: true,
+        rangeChunkSize: 64 * 1024,
+        disableRange: false,
+        disableStream: false,
+        disableAutoFetch: false,
+        stopAtErrors: true,
+        enableScripting: false,
+      }),
+    );
+
+    unmount();
+    await waitFor(() => expect(pdfjsMocks.destroy).toHaveBeenCalledOnce());
+  });
 });
 
 describe("LearningSourceViewer protected images", () => {

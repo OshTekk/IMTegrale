@@ -92,7 +92,7 @@ export function LearningSourceViewer({
         if (cancelled) return;
         pdfModuleRef.current = pdfjs;
         pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
-        loadingTask = pdfjs.getDocument({
+        const documentOptions = {
           url: assetUrl,
           withCredentials: true,
           rangeChunkSize: 64 * 1024,
@@ -100,7 +100,9 @@ export function LearningSourceViewer({
           disableStream: false,
           disableAutoFetch: false,
           stopAtErrors: true,
-        });
+          enableScripting: false,
+        } as const;
+        loadingTask = pdfjs.getDocument(documentOptions);
         loadingTask.onProgress = ({ loaded, total }: { loaded: number; total: number }) => {
           if (!cancelled && total > 0) setLoadProgress(clamp(Math.round((loaded / total) * 100), 0, 100));
         };
