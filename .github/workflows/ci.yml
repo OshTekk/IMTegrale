@@ -193,10 +193,13 @@ jobs:
           pnpm --dir frontend install --frozen-lockfile
       - name: Build exact release artifacts
         run: |
-          mkdir -p artifacts/wheel
+          mkdir -p artifacts/wheel artifacts/openapi artifacts/migrations
           python -m pip wheel --no-deps --wheel-dir artifacts/wheel .
           pnpm --dir frontend build
           python scripts/generate_sbom.py --output artifacts/imtegrale.cdx.json
+          cp openapi/imtegrale.openapi.json artifacts/openapi/imtegrale.openapi.json
+          cp backend/alembic/versions/0029_operational_sequence_reconciliation.py \
+            artifacts/migrations/0029_operational_sequence_reconciliation.py
       - name: Audit manifest and smoke-test built artifacts
         shell: bash
         run: |
@@ -207,6 +210,11 @@ jobs:
             --wheel "${wheels[0]}" \
             --dist frontend/dist \
             --sbom artifacts/imtegrale.cdx.json \
+            --source-sha "${{ github.sha }}" \
+            --openapi artifacts/openapi/imtegrale.openapi.json \
+            --migration artifacts/migrations/0029_operational_sequence_reconciliation.py \
+            --operator-source backend/app/operational_sequence_tool.py \
+            --helper-source backend/app/operational_sequence_reconciliation_v1.py \
             --output artifacts/release-manifest.json
           python scripts/smoke_release.py --wheel "${wheels[0]}" --dist frontend/dist
           cp -R frontend/dist artifacts/frontend

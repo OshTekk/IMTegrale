@@ -56,13 +56,35 @@ def test_release_audit_rejects_secrets_inside_wheel(tmp_path) -> None:
     (dist / "index.html").write_text('<div id="root"></div>', encoding="utf-8")
     sbom = tmp_path / "sbom.json"
     sbom.write_text(json.dumps({"bomFormat": "CycloneDX"}), encoding="utf-8")
+    openapi_dir = tmp_path / "openapi"
+    openapi_dir.mkdir()
+    openapi = openapi_dir / "imtegrale.openapi.json"
+    openapi.write_text(json.dumps({"openapi": "3.1.0"}), encoding="utf-8")
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    migration = migrations_dir / "0029_operational_sequence_reconciliation.py"
+    migration.write_text('revision = "0029"\n', encoding="utf-8")
+    operator_source = tmp_path / "operational_sequence_tool.py"
+    operator_source.write_text("MODES = ('check', 'apply')\n", encoding="utf-8")
+    helper_source = tmp_path / "operational_sequence_reconciliation_v1.py"
+    helper_source.write_text('LOGICAL_SEQUENCE = "SEQ OP 01"\n', encoding="utf-8")
     wheel = tmp_path / "imtegrale.whl"
     secret = "bn1_" + "a" * 10 + "_" + "B" * 43
     with zipfile.ZipFile(wheel, "w") as archive:
         archive.writestr("app/__init__.py", f"VALUE = {secret!r}\n")
 
     try:
-        auditor.audit(wheel, dist, sbom, tmp_path / "manifest.json")
+        auditor.audit(
+            wheel,
+            dist,
+            sbom,
+            tmp_path / "manifest.json",
+            source_sha="a" * 40,
+            openapi=openapi,
+            migration=migration,
+            operator_source=operator_source,
+            helper_source=helper_source,
+        )
     except ValueError as exc:
         assert str(exc) == "Wheel secret scan failed"
     else:  # pragma: no cover - the scanner must fail closed
