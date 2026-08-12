@@ -302,3 +302,173 @@ test("la vue sombre et reduced-motion conserve clavier, focus et comparaison mob
   expect(await comparison.evaluate((element) => element.scrollWidth - element.clientWidth)).toBe(0);
   await expectNoSeriousA11yViolations(page);
 });
+
+test("une restitution GPA différée ne vole pas le focus du menu fermé au clavier", async ({ page }) => {
+  await installSimulationApp(page);
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
+  await page.goto("/simulations/gpa");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+
+  const firstEntry = page.locator(".gpa-ue-trigger").first();
+  await firstEntry.focus();
+  await page.keyboard.press("Enter");
+  const editor = page.getByRole("dialog", { name: /Modifier \[FICTIF\] Unité GPA/ });
+  await expect(editor).toBeVisible();
+
+  await page.evaluate(() => {
+    const nativeRequestAnimationFrame = window.requestAnimationFrame.bind(window);
+    const nativeCancelAnimationFrame = window.cancelAnimationFrame.bind(window);
+    const callbacks = new Map<number, FrameRequestCallback>();
+    let nextId = -1;
+    Object.defineProperty(window, "__gpaDeferredFocusFrames", {
+      configurable: true,
+      value: {
+        callbacks,
+        currentTrigger: null as HTMLButtonElement | null,
+        removedMenu: null as HTMLElement | null,
+        flush() {
+          const pending = [...callbacks.values()];
+          callbacks.clear();
+          window.requestAnimationFrame = nativeRequestAnimationFrame;
+          window.cancelAnimationFrame = nativeCancelAnimationFrame;
+          for (const callback of pending) callback(performance.now());
+        },
+      },
+    });
+    window.requestAnimationFrame = (callback: FrameRequestCallback) => {
+      const id = nextId--;
+      callbacks.set(id, callback);
+      return id;
+    };
+    window.cancelAnimationFrame = (id: number) => {
+      if (!callbacks.delete(id)) nativeCancelAnimationFrame(id);
+    };
+  });
+
+  await page.keyboard.press("Escape");
+  await expect(editor).toBeHidden();
+  await expect(firstEntry).toBeFocused();
+
+  const allTriggers = page.getByRole("button", { name: "Actions sur la simulation" });
+  await expect(allTriggers).toHaveCount(1);
+  const trigger = allTriggers.first();
+  await expect(trigger).toBeVisible();
+  await trigger.evaluate((element) => {
+    (window as any).__gpaDeferredFocusFrames.currentTrigger = element;
+  });
+  await trigger.focus();
+  await page.keyboard.press("Enter");
+  const menu = page.getByRole("menu");
+  await expect(menu).toBeVisible();
+  await expect(trigger).toHaveAttribute("aria-expanded", "true");
+  const firstMenuItem = page.getByRole("menuitem").first();
+  await firstMenuItem.focus();
+  await expect(firstMenuItem).toBeFocused();
+  await menu.evaluate((element) => {
+    (window as any).__gpaDeferredFocusFrames.removedMenu = element;
+  });
+
+  await page.keyboard.press("Escape");
+  await expect(menu).toBeHidden();
+  await expect(trigger).toHaveAttribute("aria-expanded", "false");
+  await expect(trigger).toBeFocused();
+  await page.evaluate(() => (window as any).__gpaDeferredFocusFrames.flush());
+
+  const focusState = await page.evaluate(() => {
+    const state = (window as any).__gpaDeferredFocusFrames;
+    const triggers = [
+      ...document.querySelectorAll<HTMLButtonElement>('button[aria-label="Actions sur la simulation"]'),
+    ];
+    const visible = triggers.filter((element) => element.offsetParent !== null);
+    const current = visible[0] ?? null;
+    return {
+      totalTriggers: triggers.length,
+      visibleTriggers: visible.length,
+      currentConnected: current?.isConnected ?? false,
+      currentIsSameNode: current === state.currentTrigger,
+      currentFocused: document.activeElement === current,
+      focusIsBody: document.activeElement === document.body,
+      focusIsDocument: document.activeElement === null,
+      removedMenuConnected: state.removedMenu?.isConnected ?? false,
+    };
+  });
+  expect(focusState).toEqual({
+    totalTriggers: 1,
+    visibleTriggers: 1,
+    currentConnected: true,
+    currentIsSameNode: true,
+    currentFocused: true,
+    focusIsBody: false,
+    focusIsDocument: false,
+    removedMenuConnected: false,
+  });
+
+  await trigger.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("menu")).toBeVisible();
+  await page.getByRole("menuitem").first().focus();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("menu")).toBeHidden();
+  await expect(trigger).toHaveAttribute("aria-expanded", "false");
+  await expect(trigger).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(page.getByLabel("Semestre")).toBeFocused();
+});
+
+for (const presentation of [
+  { label: "mobile sombre reduced-motion", width: 375, height: 812, colorScheme: "dark", reducedMotion: "reduce" },
+  {
+    label: "desktop clair motion normale",
+    width: 1280,
+    height: 800,
+    colorScheme: "light",
+    reducedMotion: "no-preference",
+  },
+] as const) {
+  test(`le menu GPA restitue son trigger sur deux cycles en ${presentation.label}`, async ({ page }) => {
+    await installSimulationApp(page);
+    await page.setViewportSize({ width: presentation.width, height: presentation.height });
+    await page.emulateMedia({
+      colorScheme: presentation.colorScheme,
+      reducedMotion: presentation.reducedMotion,
+    });
+    await page.goto("/simulations/gpa");
+    await expect(page.locator("html")).toHaveAttribute("data-theme", presentation.colorScheme);
+
+    const triggers = page.getByRole("button", { name: "Actions sur la simulation" });
+    await expect(triggers).toHaveCount(1);
+    const trigger = triggers.first();
+    await expect(trigger).toBeVisible();
+    await trigger.evaluate((element) => {
+      Object.defineProperty(window, "__gpaStableActionTrigger", { configurable: true, value: element });
+    });
+
+    for (let cycle = 0; cycle < 2; cycle += 1) {
+      await trigger.focus();
+      await page.keyboard.press("Enter");
+      await expect(page.getByRole("menu")).toBeVisible();
+      await expect(trigger).toHaveAttribute("aria-expanded", "true");
+      await page.getByRole("menuitem").first().focus();
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("menu")).toBeHidden();
+      await expect(trigger).toHaveAttribute("aria-expanded", "false");
+      await expect(trigger).toBeFocused();
+      expect(
+        await trigger.evaluate(
+          (element) =>
+            element.isConnected &&
+            element === (window as any).__gpaStableActionTrigger &&
+            document.activeElement !== document.body &&
+            document.activeElement !== null,
+        ),
+      ).toBe(true);
+    }
+
+    await page.keyboard.press("Tab");
+    const layout = await page.locator(".gpa-simulations-page").getAttribute("data-layout");
+    const nextControl =
+      layout === "compact" ? page.getByLabel("Semestre") : page.getByRole("tab", { name: "Tous", exact: true });
+    await expect(nextControl).toBeFocused();
+  });
+}

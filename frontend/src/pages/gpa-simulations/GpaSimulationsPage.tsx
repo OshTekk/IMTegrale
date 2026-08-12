@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, FlaskConical, Plus, RefreshCw, ShieldCheck } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { EmptyState } from "../../components/EmptyState";
 import {
   SimulationConfirmationModal,
@@ -21,6 +21,11 @@ import { GpaSimulationCreationModal } from "./GpaSimulationCreationModal";
 import { GpaSimulationScenarioSelector } from "./GpaSimulationScenarioSelector";
 import { GpaSimulationStatusBanners } from "./GpaSimulationStatusBanners";
 import { GpaSimulationWorkbench } from "./GpaSimulationWorkbench";
+import {
+  createGpaFocusIntentController,
+  GPA_FOCUS_INVALIDATION_EVENT,
+  type GpaFocusIntent,
+} from "./gpaSimulationFocus";
 import { domSafeKey, projectionForSemester } from "./gpaSimulationPresentation";
 import type { GpaSimulationEditorState } from "./gpaSimulationState";
 import "./gpaSimulations.css";
@@ -54,7 +59,9 @@ export function GpaSimulationsPage() {
   const [comparisonOpen, setComparisonOpen] = useState(false);
   const [comparisonId, setComparisonId] = useState("");
   const [editor, setEditor] = useState<GpaSimulationEditorState>(null);
-  const pendingFocusId = useRef<string | null>(null);
+  const pendingFocusIntent = useRef<GpaFocusIntent | null>(null);
+  const focusIntentController = useRef<ReturnType<typeof createGpaFocusIntentController> | null>(null);
+  if (!focusIntentController.current) focusIntentController.current = createGpaFocusIntentController();
   const scenarios = useMemo(() => simulations.data?.scenarios ?? [], [simulations.data?.scenarios]);
 
   const cacheScenario = useCallback(
@@ -119,16 +126,18 @@ export function GpaSimulationsPage() {
   }, [activeId, comparisonId, comparisonOpen, scenarios]);
 
   useEffect(() => {
-    const targetId = pendingFocusId.current;
-    if (!targetId) return;
-    const frame = window.requestAnimationFrame(() => {
-      const target = document.getElementById(targetId);
-      if (!target) return;
-      target.focus({ preventScroll: true });
-      target.scrollIntoView({ block: "nearest", behavior: "auto" });
-      pendingFocusId.current = null;
-    });
-    return () => window.cancelAnimationFrame(frame);
+    const invalidate = () => {
+      focusIntentController.current?.invalidate();
+      pendingFocusIntent.current = null;
+    };
+    document.addEventListener(GPA_FOCUS_INVALIDATION_EVENT, invalidate);
+    return () => document.removeEventListener(GPA_FOCUS_INVALIDATION_EVENT, invalidate);
+  }, []);
+
+  useLayoutEffect(() => {
+    const intent = pendingFocusIntent.current;
+    if (!intent) return;
+    if (focusIntentController.current?.restore(intent)) pendingFocusIntent.current = null;
   }, [draft, editor]);
 
   const { actionMutation, createMutation } = useGpaScenarioCommands({
@@ -169,7 +178,9 @@ export function GpaSimulationsPage() {
         ? [...current.entries, nextEntry]
         : current.entries.map((entry) => (entry.clientKey === nextEntry.clientKey ? nextEntry : entry)),
     }));
-    pendingFocusId.current = `gpa-ue-trigger-${domSafeKey(nextEntry.clientKey)}`;
+    pendingFocusIntent.current = focusIntentController.current!.create(
+      `gpa-ue-trigger-${domSafeKey(nextEntry.clientKey)}`,
+    );
     setEditor(compact ? null : { mode: "edit", entryKey: nextEntry.clientKey });
   };
 
@@ -178,15 +189,17 @@ export function GpaSimulationsPage() {
       ...current,
       entries: current.entries.filter((item) => item.clientKey !== entry.clientKey),
     }));
-    pendingFocusId.current = "gpa-add-ue";
+    pendingFocusIntent.current = focusIntentController.current!.create("gpa-add-ue");
     setEditor(null);
   };
 
   const closeEditor = () => {
     if (editor?.mode === "edit") {
-      pendingFocusId.current = `gpa-ue-trigger-${domSafeKey(editor.entryKey)}`;
+      pendingFocusIntent.current = focusIntentController.current!.create(
+        `gpa-ue-trigger-${domSafeKey(editor.entryKey)}`,
+      );
     } else {
-      pendingFocusId.current = "gpa-add-ue";
+      pendingFocusIntent.current = focusIntentController.current!.create("gpa-add-ue");
     }
     setEditor(null);
   };
