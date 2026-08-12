@@ -1,7 +1,7 @@
-import { CheckCircle2, X, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Info, X, XCircle } from "lucide-react";
 import { createContext, type ReactNode, useCallback, useContext, useMemo, useState } from "react";
 
-type ToastKind = "success" | "error";
+export type ToastKind = "success" | "error" | "warning" | "info";
 interface ToastItem {
   id: number;
   message: string;
@@ -12,6 +12,13 @@ interface ToastContextValue {
 }
 
 const ToastContext = createContext<ToastContextValue | null>(null);
+
+function ToastIcon({ kind }: { kind: ToastKind }) {
+  if (kind === "error") return <XCircle size={18} />;
+  if (kind === "warning") return <AlertTriangle size={18} />;
+  if (kind === "info") return <Info size={18} />;
+  return <CheckCircle2 size={18} />;
+}
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
@@ -31,7 +38,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             key={toast.id}
             role={toast.kind === "error" ? "alert" : "status"}
           >
-            {toast.kind === "success" ? <CheckCircle2 size={18} /> : <XCircle size={18} />}
+            <ToastIcon kind={toast.kind} />
             <span>{toast.message}</span>
             <button
               type="button"
