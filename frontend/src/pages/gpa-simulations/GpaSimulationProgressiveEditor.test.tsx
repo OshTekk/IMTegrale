@@ -2,6 +2,7 @@
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SimulationSaveState } from "../../components/simulations/SimulationSaveIndicator";
 import { calculateDraftProjection, type SimulationDraftEntry } from "../../lib/simulations";
@@ -13,6 +14,11 @@ import { GpaSimulationSemesterFilter } from "./GpaSimulationSemesterFilter";
 import { GpaSimulationSummary } from "./GpaSimulationSummary";
 import { GpaSimulationUeEditor } from "./GpaSimulationUeEditor";
 import { GpaSimulationUeList } from "./GpaSimulationUeList";
+import {
+  createGpaFocusIntentController,
+  GPA_FOCUS_INVALIDATION_EVENT,
+  restoreCurrentGpaFocus,
+} from "./gpaSimulationFocus";
 
 const NOW = "2026-07-20T10:00:00Z";
 type SourceStatus = NonNullable<SimulationEntry["source"]>["status"];
@@ -286,26 +292,108 @@ describe("éditeur progressif de simulation GPA", () => {
 
   it("ferme le menu d’actions avec Échap et restaure son déclencheur", async () => {
     const user = userEvent.setup();
-    render(
-      <GpaSimulationHeader
-        scenario={scenario(0)}
-        name="[FICTIF] Projection"
-        saveState={"saved" satisfies SimulationSaveState}
-        valid
-        canCompare
-        actionPending={false}
-        onNameChange={vi.fn()}
-        onCompare={vi.fn()}
-        onDuplicate={vi.fn()}
-        onConfirm={vi.fn()}
-      />,
+    const header = (index: number) => (
+      <StrictMode>
+        <GpaSimulationHeader
+          scenario={scenario(index)}
+          name="[FICTIF] Projection"
+          saveState={"saved" satisfies SimulationSaveState}
+          valid
+          canCompare
+          actionPending={false}
+          onNameChange={vi.fn()}
+          onCompare={vi.fn()}
+          onDuplicate={vi.fn()}
+          onConfirm={vi.fn()}
+        />
+      </StrictMode>
     );
+    const { rerender } = render(header(0));
     const trigger = screen.getByRole("button", { name: "Actions sur la simulation" });
-    await user.click(trigger);
-    expect(screen.getByRole("menu")).toBeTruthy();
-    await user.keyboard("{Escape}");
-    expect(screen.queryByRole("menu")).toBeNull();
+    const focusAfterMenuUnmount: boolean[] = [];
+    const invalidations = vi.fn();
+    document.addEventListener(GPA_FOCUS_INVALIDATION_EVENT, invalidations);
+    vi.spyOn(trigger, "focus").mockImplementation((options) => {
+      focusAfterMenuUnmount.push(screen.queryByRole("menu") === null);
+      HTMLElement.prototype.focus.call(trigger, options);
+    });
+    for (let cycle = 0; cycle < 2; cycle += 1) {
+      trigger.focus();
+      await user.keyboard("{Enter}");
+      expect(screen.getByRole("menu")).toBeTruthy();
+      expect(trigger.getAttribute("aria-expanded")).toBe("true");
+      screen.getAllByRole("menuitem")[0]!.focus();
+      await user.keyboard("{Escape}");
+      expect(screen.queryByRole("menu")).toBeNull();
+      expect(trigger.getAttribute("aria-expanded")).toBe("false");
+      expect(trigger.isConnected).toBe(true);
+      expect(document.activeElement).toBe(trigger);
+      expect(document.activeElement).not.toBe(document.body);
+    }
+    expect(focusAfterMenuUnmount.slice(-2)).toEqual([true, true]);
+    expect(invalidations).toHaveBeenCalledTimes(2);
+    document.removeEventListener(GPA_FOCUS_INVALIDATION_EVENT, invalidations);
+
+    rerender(header(1));
+    expect(screen.getByRole("button", { name: "Actions sur la simulation" })).toBe(trigger);
     expect(document.activeElement).toBe(trigger);
+  });
+
+  it("résout le trigger courant connecté après son remplacement et reste idempotent sous StrictMode", () => {
+    const targetId = "gpa-action-trigger-fictif";
+    const view = (version: number) => (
+      <StrictMode>
+        <button id={targetId} key={version} type="button">
+          Actions sur la simulation
+        </button>
+      </StrictMode>
+    );
+    const { rerender } = render(view(1));
+    const previous = screen.getByRole("button", { name: "Actions sur la simulation" });
+    expect(restoreCurrentGpaFocus(targetId)).toBe(true);
+    expect(document.activeElement).toBe(previous);
+    rerender(view(2));
+    const current = screen.getByRole("button", { name: "Actions sur la simulation" });
+    const focus = vi.spyOn(current, "focus");
+
+    expect(previous.isConnected).toBe(false);
+    expect(current).not.toBe(previous);
+    expect(restoreCurrentGpaFocus(targetId)).toBe(true);
+    expect(current.isConnected).toBe(true);
+    expect(document.activeElement).toBe(current);
+    expect(document.activeElement).not.toBe(document.body);
+    expect(focus).toHaveBeenCalledOnce();
+
+    expect(restoreCurrentGpaFocus(targetId)).toBe(true);
+    expect(focus).toHaveBeenCalledOnce();
+
+    const detached = document.createElement("button");
+    const detachedFocus = vi.spyOn(detached, "focus");
+    vi.spyOn(document, "getElementById").mockReturnValueOnce(detached);
+    expect(restoreCurrentGpaFocus(targetId)).toBe(false);
+    expect(detachedFocus).not.toHaveBeenCalled();
+  });
+
+  it("invalide une intention GPA ancienne avant qu’elle puisse reprendre le focus", () => {
+    const controller = createGpaFocusIntentController();
+    render(
+      <>
+        <button id="gpa-entry-fictif" type="button">
+          Saisie GPA
+        </button>
+        <button type="button">Actions sur la simulation</button>
+      </>,
+    );
+    const entry = screen.getByRole("button", { name: "Saisie GPA" });
+    const trigger = screen.getByRole("button", { name: "Actions sur la simulation" });
+    const staleIntent = controller.create(entry.id);
+    controller.invalidate();
+    trigger.focus();
+
+    expect(controller.restore(staleIntent)).toBe(false);
+    expect(document.activeElement).toBe(trigger);
+    expect(document.activeElement).not.toBe(entry);
+    expect(document.activeElement).not.toBe(document.body);
   });
 
   it("verrouille le changement de scénario pendant une modification locale", () => {

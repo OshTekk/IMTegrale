@@ -1,5 +1,5 @@
 import { ArrowLeftRight, Copy, EllipsisVertical, RotateCcw, Trash2 } from "lucide-react";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { SimulationConfirmation } from "../../components/simulations/SimulationConfirmationModal";
 import {
   SimulationSaveIndicator,
@@ -7,6 +7,7 @@ import {
 } from "../../components/simulations/SimulationSaveIndicator";
 import { formatDate, relativeDate } from "../../lib/format";
 import type { SimulationScenarioSummary } from "../../types";
+import { invalidatePendingGpaFocus } from "./gpaSimulationFocus";
 
 export function GpaSimulationHeader({
   scenario,
@@ -35,7 +36,16 @@ export function GpaSimulationHeader({
   const menuId = useId();
   const menuRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const restoreFocusAfterCloseRef = useRef(false);
   const actionsDisabled = saveState !== "saved" || actionPending;
+
+  useLayoutEffect(() => {
+    if (menuOpen || !restoreFocusAfterCloseRef.current) return;
+    restoreFocusAfterCloseRef.current = false;
+    const trigger = triggerRef.current;
+    if (!trigger?.isConnected || trigger.disabled || document.activeElement === trigger) return;
+    trigger.focus({ preventScroll: true });
+  }, [menuOpen]);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -44,8 +54,10 @@ export function GpaSimulationHeader({
     };
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      event.preventDefault();
+      invalidatePendingGpaFocus();
+      restoreFocusAfterCloseRef.current = true;
       setMenuOpen(false);
-      triggerRef.current?.focus();
     };
     document.addEventListener("mousedown", close);
     document.addEventListener("keydown", closeOnEscape);
