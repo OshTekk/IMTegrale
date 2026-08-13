@@ -1,8 +1,11 @@
 import type { Page, Route } from "@playwright/test";
 
 export const SYNTHETIC_APP_FIXTURE_ONLY = true as const;
+export const SYNTHETIC_LOGOUT_ACCOUNT_B_ID = "account-app-e2e-fictif-b";
 
 export type AppSessionMode = "anonymous" | "imt" | "passkey" | "token" | "viewer";
+export type LogoutFixtureMode =
+  "success" | "fail-before-server" | "lose-after-commit" | "indeterminate" | "principal-changed" | "stale-success";
 
 export interface FakeAppState {
   autonomousAvailable: boolean;
@@ -17,6 +20,7 @@ export interface FakeAppState {
   calendarStatusError: boolean;
   csrfHeaders: Array<string | undefined>;
   dashboard: Record<string, unknown>;
+  dashboardDelayMs: number;
   dashboardError: boolean;
   dashboardRequests: number;
   credentialDeletes: number;
@@ -25,9 +29,14 @@ export interface FakeAppState {
   externalRequests: string[];
   loginError: boolean;
   loginRequests: Array<Record<string, unknown>>;
+  logoutDelayMs: number;
+  logoutMode: LogoutFixtureMode;
+  logoutRequests: number;
   passkeyCreates: number;
   passkeyDeletes: string[];
   session: Record<string, unknown>;
+  sessionRequests: number;
+  sessionVerificationDelayMs: number;
   syncMode: "manual" | "session_only" | "autonomous";
   syncModeUpdates: Array<Record<string, unknown>>;
   syncRequests: number;
@@ -45,8 +54,13 @@ const account = {
   display_name: "Étudiante fictive",
   imt_username: "demo.fictif",
 };
+const accountB = {
+  id: SYNTHETIC_LOGOUT_ACCOUNT_B_ID,
+  display_name: "Étudiant fictif B",
+  imt_username: "demo.b.fictif",
+};
 
-function session(mode: AppSessionMode): Record<string, unknown> {
+function session(mode: AppSessionMode, sessionAccount = account): Record<string, unknown> {
   if (mode === "anonymous") return { authenticated: false };
   const authMethod = mode === "imt" ? "imt" : mode === "passkey" ? "passkey" : "token";
   return {
@@ -55,7 +69,7 @@ function session(mode: AppSessionMode): Record<string, unknown> {
     auth_method: authMethod,
     needs_security_setup: false,
     needs_sync_setup: false,
-    account,
+    account: sessionAccount,
     learning: {
       available: false,
       audience_label: null,
@@ -576,12 +590,20 @@ async function json(route: Route, body: unknown, status = 200) {
   });
 }
 
+async function syntheticDelay(milliseconds: number): Promise<void> {
+  if (milliseconds > 0) await new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
 function recordCsrf(route: Route, state: FakeAppState) {
   state.csrfHeaders.push(route.request().headers()["x-csrf-token"]);
 }
 
-export async function installFakeAppApi(page: Page, mode: AppSessionMode = "imt"): Promise<FakeAppState> {
-  const state: FakeAppState = {
+export async function installFakeAppApi(
+  page: Page,
+  mode: AppSessionMode = "imt",
+  sharedState?: FakeAppState,
+): Promise<FakeAppState> {
+  const state: FakeAppState = sharedState ?? {
     autonomousAvailable: false,
     autonomousConfigured: false,
     autonomousNeedsReenrollment: false,
@@ -594,6 +616,7 @@ export async function installFakeAppApi(page: Page, mode: AppSessionMode = "imt"
     calendarStatusError: false,
     csrfHeaders: [],
     dashboard: structuredClone(syntheticDashboard),
+    dashboardDelayMs: 0,
     dashboardError: false,
     dashboardRequests: 0,
     credentialDeletes: 0,
@@ -602,10 +625,15 @@ export async function installFakeAppApi(page: Page, mode: AppSessionMode = "imt"
     externalRequests: [],
     loginError: false,
     loginRequests: [],
+    logoutDelayMs: 0,
+    logoutMode: "success",
+    logoutRequests: 0,
     passkeyCreates: 0,
     passkeyDeletes: [],
     passAccessPurges: 0,
     session: session(mode),
+    sessionRequests: 0,
+    sessionVerificationDelayMs: 0,
     syncMode: "manual",
     syncModeUpdates: [],
     syncRequests: 0,
@@ -633,7 +661,14 @@ export async function installFakeAppApi(page: Page, mode: AppSessionMode = "imt"
       return;
     }
     if (url.pathname === "/api/v1/auth/session") {
-      await json(route, state.session);
+      state.sessionRequests += 1;
+      const authoritativeSession = structuredClone(state.session);
+      if (state.logoutRequests > 0) await syntheticDelay(state.sessionVerificationDelayMs);
+      if (state.logoutMode === "indeterminate" && state.logoutRequests > 0) {
+        await route.abort("failed");
+        return;
+      }
+      await json(route, authoritativeSession);
       return;
     }
     if (url.pathname === "/api/v1/auth/login/imt" && request.method() === "POST") {
@@ -660,16 +695,35 @@ export async function installFakeAppApi(page: Page, mode: AppSessionMode = "imt"
     }
     if (url.pathname === "/api/v1/auth/logout" && request.method() === "POST") {
       recordCsrf(route, state);
-      state.session = session("anonymous");
+      state.logoutRequests += 1;
+      const logoutMode = state.logoutMode;
+      await syntheticDelay(state.logoutDelayMs);
+      if (logoutMode === "fail-before-server" || logoutMode === "indeterminate") {
+        await route.abort("failed");
+        return;
+      }
+      if (logoutMode === "lose-after-commit") {
+        state.session = session("anonymous");
+        await route.abort("failed");
+        return;
+      }
+      if (logoutMode === "principal-changed") {
+        state.session = session("imt", accountB);
+        await route.abort("failed");
+        return;
+      }
+      if (logoutMode !== "stale-success") state.session = session("anonymous");
       await json(route, { ok: true });
       return;
     }
     if (url.pathname === "/api/v1/dashboard") {
       state.dashboardRequests += 1;
+      const dashboard = structuredClone(state.dashboard);
+      await syntheticDelay(state.dashboardDelayMs);
       if (state.dashboardError) {
         await json(route, { detail: { code: "SERVICE_UNAVAILABLE", message: "Service fictif indisponible." } }, 503);
       } else {
-        await json(route, state.dashboard);
+        await json(route, dashboard);
       }
       return;
     }
