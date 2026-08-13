@@ -1,13 +1,12 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, Ellipsis, LibraryBig, LogIn, LogOut, RefreshCw, ShieldCheck } from "lucide-react";
+import { ChevronDown, Ellipsis, LibraryBig, LogOut, RefreshCw, ShieldCheck } from "lucide-react";
 import { Suspense, useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { authLogout } from "../generated/api/sdk.gen";
 import { ApiError } from "../lib/api";
 import { isPrimaryOwnerSession } from "../lib/auth";
 import { learningEntryVisible } from "../lib/learning";
-import { apiData, throwOnApiError } from "../lib/generatedApi";
-import { useDashboard, useRefreshDashboard } from "../lib/queries";
+import { requestServerConfirmedLogout, type LogoutState } from "../lib/logout";
+import { queryKeys, replaceSessionState, useDashboard, useRefreshDashboard } from "../lib/queries";
 import { broadcastSessionChange } from "../lib/sessionSync";
 import { formatSyncDuration, manualSyncMessage, useServerCountdown } from "../lib/sync";
 import { useAccountEventStream } from "../lib/useAccountEventStream";
@@ -18,16 +17,13 @@ import { PassReconnectModal } from "./PassReconnectModal";
 import { SourceNotice } from "./SourceNotice";
 import { ThemeToggle } from "./ThemeToggle";
 import { useToast } from "./Toast";
-import {
-  appPageHeading,
-  appPageTitles,
-  isAppNavItemActive,
-  mobileAppNavigation,
-  mobileNavDescriptions,
-  visibleAppNavigation,
-} from "./appNavigation";
+import { appPageHeading, isAppNavItemActive, mobileAppNavigation, visibleAppNavigation } from "./appNavigation";
 
 export { isAppNavItemActive } from "./appNavigation";
+
+const LOGOUT_FAILED: LogoutState = 4;
+const LOGOUT_INDETERMINATE: LogoutState = 5;
+let logoutGeneration = 0;
 
 function PageRouteLoading() {
   return (
@@ -39,7 +35,7 @@ function PageRouteLoading() {
 }
 
 export function AppShell({ session, preloadRoute }: { session: Session; preloadRoute: (path: string) => void }) {
-  const location = useLocation();
+  const { pathname } = useLocation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const dashboard = useDashboard();
@@ -48,14 +44,18 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
   const [profileOpen, setProfileOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [passReconnectOpen, setPassReconnectOpen] = useState(false);
-  const [title, subtitle] = appPageHeading(location.pathname, session);
+  const [logoutState, setLogoutState] = useState<LogoutState>(0);
+  const [title, subtitle] = appPageHeading(pathname, session);
   const primaryOwner = isPrimaryOwnerSession(session);
   const visibleNav = visibleAppNavigation(session, primaryOwner);
   const { primary: mobilePrimaryNav, secondary: mobileSecondaryNav } = mobileAppNavigation(session, primaryOwner);
+  const mobileSecondaryActive = mobileSecondaryNav.some((item) => isAppNavItemActive(item.to, pathname));
   const profileWrap = useRef<HTMLDivElement>(null);
+  const logoutRetryButton = useRef<HTMLButtonElement>(null);
+  const activeLogoutGeneration = useRef(0);
   const mobileSecondaryFirstLink = useRef<HTMLAnchorElement>(null);
   const mainRef = useRef<HTMLElement>(null);
-  const previousPath = useRef(location.pathname);
+  const previousPath = useRef(pathname);
   const manualSync = dashboard.data?.account.manual_sync;
   const syncRemaining = useServerCountdown(manualSync);
   const syncMessage = manualSyncMessage(manualSync, syncRemaining);
@@ -65,13 +65,21 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
   const live = useAccountEventStream(eventAccountId, latestEventId);
 
   useEffect(() => {
+    setLogoutState(0);
+    // Cleanup runs before an account-id effect replacement and again on unmount.
+    return () => {
+      activeLogoutGeneration.current = 0;
+    };
+  }, [session.account?.id]);
+
+  useEffect(() => {
     setProfileOpen(false);
     setMobileMenuOpen(false);
-    if (previousPath.current !== location.pathname) {
-      previousPath.current = location.pathname;
+    if (previousPath.current !== pathname) {
+      previousPath.current = pathname;
       window.requestAnimationFrame(() => mainRef.current?.focus({ preventScroll: true }));
     }
-  }, [location.pathname]);
+  }, [pathname]);
 
   useEffect(() => {
     if (!profileOpen) return;
@@ -79,7 +87,7 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
       if (!profileWrap.current?.contains(event.target as Node)) setProfileOpen(false);
     };
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setProfileOpen(false);
+      if (event.key === "Escape" && !document.body.classList.contains("modal-open")) setProfileOpen(false);
     };
     document.addEventListener("pointerdown", close);
     document.addEventListener("keydown", closeOnEscape);
@@ -128,13 +136,39 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
           ? "Reconnecter"
           : "Synchroniser";
 
-  const logout = async () => {
-    await apiData(authLogout({ throwOnError: throwOnApiError })).catch(() => undefined);
-    queryClient.clear();
-    broadcastSessionChange();
-    navigate("/");
-    window.location.reload();
+  const logout = async (): Promise<void> => {
+    if (activeLogoutGeneration.current || !session.account?.id) return;
+    const expectedAccountId = session.account.id;
+
+    const attempt = ++logoutGeneration;
+    activeLogoutGeneration.current = attempt;
+    const owns = () =>
+      attempt === activeLogoutGeneration.current &&
+      expectedAccountId === queryClient.getQueryData<Session>(queryKeys.session)?.account?.id;
+    try {
+      const authoritativeSession = await requestServerConfirmedLogout(
+        expectedAccountId,
+        (state) => owns() && setLogoutState(state),
+      );
+      if (!authoritativeSession || !owns()) return;
+      await queryClient.cancelQueries();
+      if (!owns()) return;
+      queryClient.clear();
+      const cache = queryClient.getQueryCache();
+      cache.subscribe(({ query }) => {
+        if (query.queryKey[1] === expectedAccountId) cache.remove(query);
+      });
+      replaceSessionState(queryClient, authoritativeSession);
+      broadcastSessionChange();
+      if (!authoritativeSession.authenticated) navigate("/");
+      location.reload();
+    } finally {
+      if (attempt === activeLogoutGeneration.current) activeLogoutGeneration.current = 0;
+    }
   };
+
+  const logoutIssue = logoutState >= LOGOUT_FAILED && logoutState;
+  const logoutIsBusy = logoutState > 0 && !logoutIssue;
 
   return (
     <div className="app-shell">
@@ -154,7 +188,7 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
               viewTransition
               onMouseEnter={() => preloadRoute(item.to)}
               onFocus={() => preloadRoute(item.to)}
-              className={() => (isAppNavItemActive(item.to, location.pathname) ? "active" : "")}
+              className={isAppNavItemActive(item.to, pathname) ? "active" : ""}
             >
               <item.icon size={19} />
               <span>{item.label}</span>
@@ -199,14 +233,7 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
                 aria-label={syncMessage}
                 title={syncMessage}
               >
-                {manualSync?.state === "reauth_required" ? (
-                  <LogIn size={18} />
-                ) : (
-                  <RefreshCw
-                    size={17}
-                    className={sync.isPending || manualSync?.state === "in_progress" ? "spin" : ""}
-                  />
-                )}
+                <RefreshCw size={17} className={sync.isPending || manualSync?.state === "in_progress" ? "spin" : ""} />
                 <span>{syncButtonLabel}</span>
               </button>
             )}
@@ -235,7 +262,7 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
               </button>
               {profileOpen && (
                 <div className="profile-menu" id="profile-menu" role="menu">
-                  <button type="button" role="menuitem" onClick={logout}>
+                  <button role="menuitem" onClick={logout} disabled={logoutIsBusy} aria-busy={logoutIsBusy}>
                     <LogOut size={17} /> Se déconnecter
                   </button>
                 </div>
@@ -246,12 +273,12 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
               <NavLink
                 className="secondary-button learning-shell-cta"
                 to="/parcours"
-                aria-label={location.pathname.startsWith("/parcours") ? "Continuer mon parcours" : "Réussir ma 2A"}
+                aria-label={pathname.startsWith("/parcours") ? "Continuer mon parcours" : "Réussir ma 2A"}
                 onMouseEnter={() => preloadRoute("/parcours")}
                 onFocus={() => preloadRoute("/parcours")}
               >
                 <LibraryBig size={17} />
-                <span>{location.pathname.startsWith("/parcours") ? "Continuer mon parcours" : "Réussir ma 2A"}</span>
+                <span>{pathname.startsWith("/parcours") ? "Continuer mon parcours" : "Réussir ma 2A"}</span>
               </NavLink>
             )}
           </div>
@@ -275,8 +302,8 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
             viewTransition
             onTouchStart={() => preloadRoute(item.to)}
             onFocus={() => preloadRoute(item.to)}
-            aria-current={isAppNavItemActive(item.to, location.pathname) ? "page" : undefined}
-            className={isAppNavItemActive(item.to, location.pathname) ? "active" : ""}
+            aria-current={isAppNavItemActive(item.to, pathname) ? "page" : undefined}
+            className={isAppNavItemActive(item.to, pathname) ? "active" : ""}
           >
             <item.icon size={20} />
             <span>{item.short}</span>
@@ -284,17 +311,13 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
         ))}
         {mobileSecondaryNav.length > 0 && (
           <button
-            className={
-              mobileSecondaryNav.some((item) => isAppNavItemActive(item.to, location.pathname)) ? "active" : ""
-            }
+            className={mobileSecondaryActive ? "active" : ""}
             type="button"
             onClick={() => setMobileMenuOpen(true)}
             aria-label="Ouvrir les autres pages"
             aria-expanded={mobileMenuOpen}
             aria-controls="mobile-overflow-navigation"
-            aria-current={
-              mobileSecondaryNav.some((item) => isAppNavItemActive(item.to, location.pathname)) ? "page" : undefined
-            }
+            aria-current={mobileSecondaryActive ? "page" : undefined}
           >
             <Ellipsis size={21} />
             <span>Plus</span>
@@ -302,35 +325,42 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
         )}
       </nav>
 
-      <Modal
-        open={mobileMenuOpen}
-        title="Autres pages"
-        description="Retrouve les pages disponibles pour ton compte."
-        onClose={() => setMobileMenuOpen(false)}
-        initialFocusRef={mobileSecondaryFirstLink}
-      >
-        <nav className="mobile-overflow-links" id="mobile-overflow-navigation" aria-label="Navigation secondaire">
-          {mobileSecondaryNav.map((item, index) => (
-            <NavLink
-              key={item.to}
-              ref={index === 0 ? mobileSecondaryFirstLink : undefined}
-              to={item.to}
-              viewTransition
-              onTouchStart={() => preloadRoute(item.to)}
-              onFocus={() => preloadRoute(item.to)}
-              onClick={() => setMobileMenuOpen(false)}
-              aria-current={isAppNavItemActive(item.to, location.pathname) ? "page" : undefined}
-              className={isAppNavItemActive(item.to, location.pathname) ? "active" : ""}
-            >
-              <item.icon size={19} />
-              <span>
-                <strong>{item.label}</strong>
-                <small>{mobileNavDescriptions[item.to] ?? appPageTitles[item.to]?.[1]}</small>
-              </span>
-            </NavLink>
-          ))}
-        </nav>
-      </Modal>
+      {(mobileMenuOpen || logoutIssue) && (
+        <Modal
+          open
+          title={logoutIssue === LOGOUT_FAILED ? "Session active" : logoutIssue ? "Session inconnue" : "Autres pages"}
+          onClose={() => (logoutIssue ? setLogoutState(0) : setMobileMenuOpen(false))}
+          initialFocusRef={logoutIssue ? logoutRetryButton : mobileSecondaryFirstLink}
+        >
+          {logoutIssue ? (
+            <footer className="modal-actions">
+              {logoutIssue === LOGOUT_INDETERMINATE && <a href={pathname}>Recharger</a>}
+              <button ref={logoutRetryButton} onClick={logout}>
+                Réessayer
+              </button>
+            </footer>
+          ) : (
+            <nav className="mobile-overflow-links" id="mobile-overflow-navigation" aria-label="Navigation secondaire">
+              {mobileSecondaryNav.map((item, index) => (
+                <NavLink
+                  key={item.to}
+                  ref={index === 0 ? mobileSecondaryFirstLink : undefined}
+                  to={item.to}
+                  viewTransition
+                  onTouchStart={() => preloadRoute(item.to)}
+                  onFocus={() => preloadRoute(item.to)}
+                  onClick={() => setMobileMenuOpen(false)}
+                  aria-current={isAppNavItemActive(item.to, pathname) ? "page" : undefined}
+                  className={isAppNavItemActive(item.to, pathname) ? "active" : ""}
+                >
+                  <item.icon size={19} />
+                  <strong>{item.label}</strong>
+                </NavLink>
+              ))}
+            </nav>
+          )}
+        </Modal>
+      )}
       <PassReconnectModal
         open={passReconnectOpen}
         identifier={session.account?.imt_username}
