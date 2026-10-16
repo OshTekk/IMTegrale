@@ -1,0 +1,630 @@
+from __future__ import annotations
+
+import base64
+import ipaddress
+import json
+import os
+import stat
+import sys
+from enum import StrEnum
+from functools import lru_cache
+from pathlib import Path
+from typing import Literal
+from urllib.parse import urlsplit
+from uuid import UUID
+
+from pydantic import Field, field_validator, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class RuntimeRole(StrEnum):
+    WEB = "web"
+    SYNC = "sync"
+    SYNC_MIGRATION = "sync-migration"
+    HPKE_ROTATION = "hpke-rotation"
+    CALENDAR = "calendar"
+    OUTBOX = "outbox"
+    SCHEDULER = "scheduler"
+    GENERAL = "general"
+    OPERATIONS = "operations"
+    CLI = "cli"
+
+
+class AutonomousSyncRollout(StrEnum):
+    OFF = "off"
+    CANARY = "canary"
+    ALL = "all"
+
+
+AUTONOMOUS_SYNC_CANARY_MAX_ACCOUNTS = 25
+
+RUNTIME_IDENTIFIER_CREDENTIALS = {
+    "autonomous_sync_canary_account_ids": "autonomous-sync-canary-account-ids",
+    "owner_imt_username": "owner-imt-username",
+    "learning_allowed_imt_usernames": "learning-allowed-imt-usernames",
+}
+RUNTIME_IDENTIFIER_ENVIRONMENT_VARIABLES = {
+    "autonomous_sync_canary_account_ids": "BOTNOTE_AUTONOMOUS_SYNC_CANARY_ACCOUNT_IDS",
+    "owner_imt_username": "BOTNOTE_OWNER_IMT_USERNAME",
+    "learning_allowed_imt_usernames": "BOTNOTE_LEARNING_ALLOWED_IMT_USERNAMES",
+}
+_RUNTIME_IDENTIFIER_ALLOWED_ROLES = {
+    "autonomous_sync_canary_account_ids": frozenset(
+        {RuntimeRole.WEB, RuntimeRole.SCHEDULER, RuntimeRole.SYNC, RuntimeRole.GENERAL}
+    ),
+    "owner_imt_username": frozenset({RuntimeRole.SYNC}),
+    "learning_allowed_imt_usernames": frozenset({RuntimeRole.WEB}),
+}
+_RUNTIME_IDENTIFIER_CREDENTIAL_MAX_BYTES = 4_096
+_OPERATIONS_ALLOWED_ENVIRONMENT_VARIABLES = frozenset(
+    {
+        "BOTNOTE_ENVIRONMENT",
+        "BOTNOTE_DATABASE_URL",
+        "BOTNOTE_WORKER_HEARTBEAT_TTL_SECONDS",
+        "BOTNOTE_AUTONOMOUS_SYNC_ENABLED",
+        "BOTNOTE_AUTONOMOUS_SYNC_ENROLLMENT_ENABLED",
+        "BOTNOTE_AUTONOMOUS_SYNC_ROLLOUT",
+    }
+)
+
+
+def _read_runtime_identifier_credential(logical_name: str) -> str | None:
+    credentials_directory = os.environ.get("RUNTIME_IDENTIFIER_CREDENTIALS_DIRECTORY")
+    if not credentials_directory:
+        return None
+    directory = Path(credentials_directory)
+    if not directory.is_absolute():
+        raise RuntimeError("RUNTIME_IDENTIFIER_CREDENTIAL_DIRECTORY_INVALID")
+    path = directory / logical_name
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except FileNotFoundError:
+        return None
+    except OSError:
+        raise RuntimeError("RUNTIME_IDENTIFIER_CREDENTIAL_UNREADABLE") from None
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or not 1 <= metadata.st_size <= _RUNTIME_IDENTIFIER_CREDENTIAL_MAX_BYTES
+            or stat.S_IMODE(metadata.st_mode) & 0o077
+        ):
+            raise RuntimeError("RUNTIME_IDENTIFIER_CREDENTIAL_UNSAFE")
+        with os.fdopen(descriptor, encoding="utf-8", closefd=True) as source:
+            descriptor = None
+            value = source.read(_RUNTIME_IDENTIFIER_CREDENTIAL_MAX_BYTES + 1)
+    except (OSError, UnicodeError):
+        raise RuntimeError("RUNTIME_IDENTIFIER_CREDENTIAL_UNREADABLE") from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    value = value.rstrip("\r\n")
+    if not value or len(value.encode("utf-8")) > _RUNTIME_IDENTIFIER_CREDENTIAL_MAX_BYTES:
+        raise RuntimeError("RUNTIME_IDENTIFIER_CREDENTIAL_INVALID")
+    return value
+
+
+def _parse_identifier_list_credential(value: str) -> list[str]:
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        raise RuntimeError("RUNTIME_IDENTIFIER_CREDENTIAL_INVALID") from None
+    if not isinstance(parsed, list) or not all(isinstance(item, str) for item in parsed):
+        raise RuntimeError("RUNTIME_IDENTIFIER_CREDENTIAL_INVALID")
+    return parsed
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_prefix="BOTNOTE_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    environment: Literal["production", "development", "test"] = "production"
+    database_url: str = "postgresql+psycopg:///botnote"
+    credential_key: str = ""
+    credential_previous_keys: list[str] = Field(default_factory=list)
+    token_pepper: str = ""
+    token_previous_peppers: list[str] = Field(default_factory=list)
+    public_origin: str = "https://localhost"
+    allowed_hosts: list[str] = Field(default_factory=lambda: ["localhost"])
+    frontend_dist: Path = Path("frontend/dist")
+    secure_cookies: bool = True
+    allow_imt_signup: bool = True
+    session_ttl_days: int = 30
+    session_touch_minutes: int = 15
+    max_request_bytes: int = 1_048_576
+    imt_timeout_seconds: int = 30
+    pass_operation_lease_seconds: int = Field(default=180, ge=60, le=600)
+    pass_quiet_period_seconds: int = Field(default=60, ge=0, le=600)
+    pass_session_max_days: int = Field(default=30, ge=1, le=30)
+    pass_profile_refresh_days: int = Field(default=30, ge=1, le=90)
+    pass_hourly_quota: int = Field(default=3, ge=1, le=12)
+    pass_daily_quota: int = Field(default=8, ge=1, le=48)
+    scheduler_poll_seconds: int = Field(default=60, ge=15, le=900)
+    worker_heartbeat_ttl_seconds: int = Field(default=180, ge=60, le=900)
+    autonomous_sync_enabled: bool = False
+    autonomous_sync_enrollment_enabled: bool = False
+    autonomous_sync_rollout: AutonomousSyncRollout = AutonomousSyncRollout.OFF
+    autonomous_sync_canary_account_ids: list[str] = Field(default_factory=list)
+    sync_runtime_profile: Literal["normal", "migration"] = "normal"
+    sync_lock_dir: Path = Path("/run/botnote-sync-locks")
+    trusted_proxy_ips: list[str] = Field(default_factory=lambda: ["127.0.0.1"])
+    admin_allowed_identities: list[str] = Field(default_factory=list)
+    admin_session_ttl_hours: int = Field(default=8, ge=1, le=24)
+    backend_tls_cert: Path = Path("/etc/botnote/mtls/server.crt")
+    backend_tls_key: Path = Path("/etc/botnote/mtls/server.key")
+    backend_tls_ca: Path = Path("/etc/botnote/mtls/ca.crt")
+    database_pool_size: int = Field(default=10, ge=1, le=50)
+    database_max_overflow: int = Field(default=10, ge=0, le=50)
+    database_pool_timeout_seconds: int = Field(default=10, ge=1, le=60)
+    owner_imt_username: str = ""
+    owner_imt_password_file: Path | None = None
+    learning_content_root: Path | None = None
+    learning_student_status_max_age_days: int = Field(default=30, ge=1, le=90)
+    learning_access_mode: Literal["cohort", "personal"] = "cohort"
+    learning_audience_id: str = Field(
+        default="fip:2028",
+        min_length=1,
+        max_length=128,
+        pattern=r"^[a-z0-9][a-z0-9._:-]{0,127}$",
+    )
+    learning_audience_label: str = Field(default="FIP 2028", min_length=1, max_length=120)
+    learning_level_label: str = Field(default="2A", min_length=1, max_length=80)
+    learning_allowed_imt_usernames: list[str] = Field(default_factory=list)
+    learning_allowed_identities: list[str] = Field(default_factory=list)
+
+    @field_validator(
+        "allowed_hosts",
+        "credential_previous_keys",
+        "token_previous_peppers",
+        "trusted_proxy_ips",
+        "admin_allowed_identities",
+        "learning_allowed_imt_usernames",
+        "learning_allowed_identities",
+        mode="before",
+    )
+    @classmethod
+    def parse_list_settings(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [part.strip() for part in value.split(",") if part.strip()]
+        return value
+
+    @field_validator("public_origin")
+    @classmethod
+    def clean_origin(cls, value: str) -> str:
+        return value.rstrip("/")
+
+    @field_validator("owner_imt_username")
+    @classmethod
+    def clean_owner_username(cls, value: str) -> str:
+        return value.strip().casefold()
+
+    @field_validator("learning_content_root", mode="before")
+    @classmethod
+    def empty_learning_content_root_disables_feature(cls, value: object) -> object:
+        if isinstance(value, str):
+            value = value.strip()
+            return value or None
+        return value
+
+    @field_validator("learning_audience_label", "learning_level_label")
+    @classmethod
+    def normalize_learning_labels(cls, value: str) -> str:
+        normalized = " ".join(value.split())
+        if not normalized or any(ord(character) < 32 for character in normalized):
+            raise ValueError("Learning labels must be printable non-empty text")
+        return normalized
+
+    @field_validator("learning_allowed_imt_usernames")
+    @classmethod
+    def normalize_learning_usernames(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for value in values:
+            username = value.strip().casefold()
+            if not 2 <= len(username) <= 160 or any(ord(character) < 33 for character in username):
+                raise ValueError("Learning account allowlist contains an invalid IMT login")
+            if username not in normalized:
+                normalized.append(username)
+        return normalized
+
+    @field_validator("learning_allowed_identities")
+    @classmethod
+    def normalize_learning_identities(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for value in values:
+            identity = value.strip().casefold()
+            if (
+                not 5 <= len(identity) <= 320
+                or not identity.startswith(("lan:", "tailnet:"))
+                or any(ord(character) < 33 or ord(character) >= 127 for character in identity)
+            ):
+                raise ValueError("Learning ingress identities must be exact LAN or Tailnet identities")
+            if identity not in normalized:
+                normalized.append(identity)
+        return normalized
+
+    @field_validator("autonomous_sync_canary_account_ids", mode="before")
+    @classmethod
+    def parse_autonomous_sync_canary_accounts(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [] if value == "" else value.split(",")
+        return value
+
+    @field_validator("autonomous_sync_canary_account_ids")
+    @classmethod
+    def normalize_autonomous_sync_canary_accounts(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for raw_value in values:
+            value = raw_value
+            try:
+                parsed = UUID(value)
+            except (AttributeError, ValueError):
+                raise ValueError(
+                    "Autonomous sync canary account IDs must be canonical UUIDs"
+                ) from None
+            canonical = str(parsed)
+            if value != canonical:
+                raise ValueError(
+                    "Autonomous sync canary account IDs must be canonical UUIDs"
+                )
+            if canonical not in normalized:
+                normalized.append(canonical)
+        if len(normalized) > AUTONOMOUS_SYNC_CANARY_MAX_ACCOUNTS:
+            raise ValueError(
+                "Autonomous sync canary allowlist exceeds its maximum size"
+            )
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_personal_learning_mode(self) -> Settings:
+        if self.learning_access_mode == "cohort":
+            if self.learning_audience_id != "fip:2028":
+                raise ValueError("Cohort learning mode requires the fip:2028 audience")
+            return self
+
+        if self.learning_access_mode == "personal":
+            # Production identifiers are loaded later from a role-scoped
+            # systemd credential. Non-web roles deliberately construct the
+            # same non-identifying policy without receiving the login.
+            if self.environment != "production" and not self.learning_allowed_imt_usernames:
+                raise ValueError("Personal learning mode requires an IMT account allowlist")
+            if self.learning_allowed_imt_usernames and len(self.learning_allowed_imt_usernames) != 1:
+                raise ValueError("Personal learning mode requires exactly one IMT account")
+            if not self.learning_allowed_identities:
+                raise ValueError("Personal learning mode requires a private ingress allowlist")
+            audience_suffix = self.learning_audience_id.removeprefix("personal:")
+            if (
+                audience_suffix == self.learning_audience_id
+                or not audience_suffix
+                or not audience_suffix[0].isalnum()
+            ):
+                raise ValueError("Personal learning mode requires a distinct personal:<id> audience")
+        return self
+
+    @model_validator(mode="after")
+    def validate_autonomous_sync_rollout(self) -> Settings:
+        if self.environment != "production":
+            return self
+        rollout = self.autonomous_sync_rollout
+        runtime_enabled = self.autonomous_sync_enabled
+        enrollment_enabled = self.autonomous_sync_enrollment_enabled
+        canary_accounts = self.autonomous_sync_canary_account_ids
+        if rollout is AutonomousSyncRollout.OFF:
+            if runtime_enabled or enrollment_enabled or canary_accounts:
+                raise ValueError("AUTONOMOUS_SYNC_ROLLOUT_CONFIGURATION_INVALID")
+            return self
+        if not runtime_enabled or not enrollment_enabled:
+            raise ValueError("AUTONOMOUS_SYNC_ROLLOUT_CONFIGURATION_INVALID")
+        # A canary identifier is required only by the three code consumers.
+        # It is injected from a role-scoped systemd credential during runtime
+        # validation, so non-consumer processes keep an empty list.
+        if rollout is AutonomousSyncRollout.ALL and canary_accounts:
+            raise ValueError("AUTONOMOUS_SYNC_ROLLOUT_CONFIGURATION_INVALID")
+        return self
+
+    def _load_runtime_identifier_credentials(self, runtime_role: RuntimeRole) -> None:
+        configured_environment_names = {name.casefold() for name in os.environ}
+        raw_environment = [
+            variable
+            for variable in RUNTIME_IDENTIFIER_ENVIRONMENT_VARIABLES.values()
+            if variable.casefold() in configured_environment_names
+        ]
+        if raw_environment:
+            raise RuntimeError("RUNTIME_IDENTIFIER_ENVIRONMENT_FORBIDDEN")
+
+        credential_values: dict[str, str] = {}
+        for field_name, logical_name in RUNTIME_IDENTIFIER_CREDENTIALS.items():
+            value = _read_runtime_identifier_credential(logical_name)
+            if value is not None:
+                credential_values[field_name] = value
+
+        if any(
+            runtime_role not in _RUNTIME_IDENTIFIER_ALLOWED_ROLES[field_name]
+            for field_name in credential_values
+        ):
+            raise RuntimeError("RUNTIME_IDENTIFIER_CREDENTIAL_FORBIDDEN_FOR_ROLE")
+
+        # Production never falls back to a value parsed from Environment or a
+        # dotenv file. Only the credential copy for this exact service role can
+        # repopulate these fields.
+        self.autonomous_sync_canary_account_ids = []
+        self.owner_imt_username = ""
+        self.learning_allowed_imt_usernames = []
+
+        canary_value = credential_values.get("autonomous_sync_canary_account_ids")
+        if canary_value is not None:
+            parsed_canary = _parse_identifier_list_credential(canary_value)
+            self.autonomous_sync_canary_account_ids = (
+                self.normalize_autonomous_sync_canary_accounts(parsed_canary)
+            )
+
+        owner_value = credential_values.get("owner_imt_username")
+        if owner_value is not None:
+            owner_username = owner_value.strip().casefold()
+            if (
+                not 2 <= len(owner_username) <= 160
+                or any(ord(character) < 33 for character in owner_username)
+            ):
+                raise RuntimeError("RUNTIME_IDENTIFIER_CREDENTIAL_INVALID")
+            self.owner_imt_username = owner_username
+
+        learning_value = credential_values.get("learning_allowed_imt_usernames")
+        if learning_value is not None:
+            parsed_learning = _parse_identifier_list_credential(learning_value)
+            self.learning_allowed_imt_usernames = self.normalize_learning_usernames(
+                parsed_learning
+            )
+
+        canary_consumer = runtime_role in _RUNTIME_IDENTIFIER_ALLOWED_ROLES[
+            "autonomous_sync_canary_account_ids"
+        ]
+        if self.autonomous_sync_rollout is AutonomousSyncRollout.CANARY:
+            if canary_consumer and not self.autonomous_sync_canary_account_ids:
+                raise RuntimeError("RUNTIME_IDENTIFIER_CREDENTIAL_REQUIRED")
+        elif self.autonomous_sync_canary_account_ids:
+            raise RuntimeError("RUNTIME_IDENTIFIER_CREDENTIAL_UNEXPECTED")
+
+        if runtime_role is RuntimeRole.WEB:
+            if self.learning_access_mode == "personal":
+                if len(self.learning_allowed_imt_usernames) != 1:
+                    raise RuntimeError("RUNTIME_IDENTIFIER_CREDENTIAL_REQUIRED")
+            elif self.learning_allowed_imt_usernames:
+                raise RuntimeError("RUNTIME_IDENTIFIER_CREDENTIAL_UNEXPECTED")
+
+        if runtime_role is RuntimeRole.SYNC:
+            if self.owner_imt_password_file is not None and not self.owner_imt_username:
+                raise RuntimeError("RUNTIME_IDENTIFIER_CREDENTIAL_REQUIRED")
+            if self.owner_imt_username and self.owner_imt_password_file is None:
+                raise RuntimeError("RUNTIME_IDENTIFIER_CREDENTIAL_UNEXPECTED")
+
+    def validate_for_runtime(self, role: RuntimeRole | str) -> None:
+        try:
+            runtime_role = RuntimeRole(role)
+        except (TypeError, ValueError):
+            raise RuntimeError("Unknown runtime role") from None
+        if self.environment == "production":
+            self._load_runtime_identifier_credentials(runtime_role)
+            if runtime_role is RuntimeRole.OPERATIONS and any(
+                name.casefold().startswith("botnote_")
+                and name not in _OPERATIONS_ALLOWED_ENVIRONMENT_VARIABLES
+                for name in os.environ
+            ):
+                raise RuntimeError("OPERATIONS_ENVIRONMENT_FORBIDDEN")
+        if runtime_role is RuntimeRole.WEB:
+            self.validate_learning_content_boundary()
+        if runtime_role in {
+            RuntimeRole.SYNC_MIGRATION,
+            RuntimeRole.HPKE_ROTATION,
+        } and self.sync_runtime_profile != "migration":
+            raise RuntimeError("BOTNOTE_SYNC_RUNTIME_PROFILE=migration is required")
+        if runtime_role is RuntimeRole.SYNC and self.sync_runtime_profile != "normal":
+            raise RuntimeError("The normal sync worker requires its normal profile")
+        legacy_sync_environment_present = any(
+            name in os.environ
+            for name in (
+                "BOTNOTE_CREDENTIAL_KEY",
+                "BOTNOTE_CREDENTIAL_PREVIOUS_KEYS",
+            )
+        )
+        if runtime_role is RuntimeRole.SYNC and (
+            legacy_sync_environment_present or self.credential_key or self.credential_previous_keys
+        ):
+            raise RuntimeError("SYNC_LEGACY_CREDENTIAL_KEY_FORBIDDEN")
+        if runtime_role is RuntimeRole.HPKE_ROTATION and (
+            legacy_sync_environment_present
+            or self.credential_key
+            or self.credential_previous_keys
+            or self.token_pepper
+            or self.token_previous_peppers
+        ):
+            raise RuntimeError("HPKE_ROTATION_UNRELATED_SECRET_FORBIDDEN")
+        if runtime_role is RuntimeRole.OPERATIONS and (
+            self.credential_key
+            or self.credential_previous_keys
+            or self.token_pepper
+            or self.token_previous_peppers
+            or self.owner_imt_password_file is not None
+        ):
+            raise RuntimeError("OPERATIONS_UNRELATED_SECRET_FORBIDDEN")
+
+        needs_credential_key = runtime_role in {
+            RuntimeRole.WEB,
+            RuntimeRole.SYNC_MIGRATION,
+            RuntimeRole.CALENDAR,
+            RuntimeRole.OUTBOX,
+            RuntimeRole.GENERAL,
+            RuntimeRole.CLI,
+        }
+        needs_token_pepper = runtime_role in {
+            RuntimeRole.WEB,
+            RuntimeRole.SYNC,
+            RuntimeRole.SYNC_MIGRATION,
+            RuntimeRole.SCHEDULER,
+            RuntimeRole.GENERAL,
+            RuntimeRole.CLI,
+        }
+        if needs_credential_key and not self.credential_key:
+            raise RuntimeError("BOTNOTE_CREDENTIAL_KEY is required")
+        if needs_token_pepper and not self.token_pepper:
+            raise RuntimeError("BOTNOTE_TOKEN_PEPPER is required")
+        if runtime_role is RuntimeRole.GENERAL and not self.database_url.startswith("postgresql+psycopg:"):
+            raise RuntimeError("GENERAL_WORKER_REQUIRES_POSTGRESQL")
+        if (
+            runtime_role is RuntimeRole.GENERAL
+            and self.database_url.startswith("postgresql")
+            and self.database_pool_size + self.database_max_overflow < 3
+        ):
+            raise RuntimeError("GENERAL_WORKER_REQUIRES_THREE_DATABASE_CONNECTIONS")
+        if self.environment == "test":
+            return
+
+        if self.environment == "production":
+            if runtime_role is RuntimeRole.WEB:
+                for path in (self.backend_tls_cert, self.backend_tls_key, self.backend_tls_ca):
+                    if not path.is_file():
+                        raise RuntimeError(f"Required backend mTLS file is missing: {path}")
+                self.validate_production_invariants()
+            else:
+                if not self.database_url.startswith("postgresql+psycopg:"):
+                    raise RuntimeError("Production requires PostgreSQL through psycopg")
+                if runtime_role in {
+                    RuntimeRole.SYNC,
+                    RuntimeRole.HPKE_ROTATION,
+                }:
+                    database_target = urlsplit(self.database_url)
+                    if (
+                        database_target.scheme != "postgresql+psycopg"
+                        or database_target.netloc
+                        or database_target.path != "/botnote"
+                        or database_target.query
+                        or database_target.fragment
+                    ):
+                        raise RuntimeError(
+                            "Sync production requires local peer PostgreSQL access to the botnote database"
+                        )
+                if runtime_role is RuntimeRole.SYNC:
+                    if not self.sync_lock_dir.is_absolute():
+                        raise RuntimeError("BOTNOTE_SYNC_LOCK_DIR must be an absolute path")
+                    try:
+                        lock_metadata = self.sync_lock_dir.lstat()
+                    except OSError:
+                        raise RuntimeError(
+                            "BOTNOTE_SYNC_LOCK_DIR must be provisioned before startup"
+                        ) from None
+                    if stat.S_ISLNK(lock_metadata.st_mode) or not stat.S_ISDIR(lock_metadata.st_mode):
+                        raise RuntimeError("BOTNOTE_SYNC_LOCK_DIR must be a real directory")
+                    expected_lock_mode = 0o2770 if sys.platform.startswith("linux") else 0o770
+                    if stat.S_IMODE(lock_metadata.st_mode) != expected_lock_mode:
+                        raise RuntimeError("BOTNOTE_SYNC_LOCK_DIR must use mode 2770")
+                if needs_credential_key:
+                    self._validate_credential_keyring()
+                if needs_token_pepper:
+                    self._validate_token_peppers()
+
+    def validate_secrets(self) -> None:
+        """Backward-compatible full web validation for existing callers."""
+
+        self.validate_for_runtime(RuntimeRole.WEB)
+
+    def _validate_credential_keyring(self) -> None:
+        if not self.credential_key:
+            raise RuntimeError("BOTNOTE_CREDENTIAL_KEY is required")
+        keyring = (self.credential_key, *self.credential_previous_keys)
+        decoded_keys: list[bytes] = []
+        for encoded_key in keyring:
+            try:
+                decoded = base64.urlsafe_b64decode(encoded_key + "=" * (-len(encoded_key) % 4))
+            except Exception as exc:
+                raise RuntimeError("Credential keys must be URL-safe base64") from exc
+            if len(decoded) != 32:
+                raise RuntimeError("Credential keys must decode to exactly 32 bytes")
+            decoded_keys.append(decoded)
+        if len(set(decoded_keys)) != len(decoded_keys):
+            raise RuntimeError("Credential keyring entries must be unique")
+
+    def _validate_token_peppers(self) -> None:
+        if not self.token_pepper:
+            raise RuntimeError("BOTNOTE_TOKEN_PEPPER is required")
+        peppers = (self.token_pepper, *self.token_previous_peppers)
+        if any(len(pepper.encode("utf-8")) < 32 for pepper in peppers):
+            raise RuntimeError("Token peppers must contain at least 32 bytes")
+        if len(set(peppers)) != len(peppers):
+            raise RuntimeError("Token peppers must be unique")
+
+    def validate_production_invariants(self) -> None:
+        parsed_origin = urlsplit(self.public_origin)
+        if (
+            parsed_origin.scheme != "https"
+            or not parsed_origin.hostname
+            or parsed_origin.username is not None
+            or parsed_origin.password is not None
+            or parsed_origin.query
+            or parsed_origin.fragment
+            or parsed_origin.path not in {"", "/"}
+        ):
+            raise RuntimeError("BOTNOTE_PUBLIC_ORIGIN must be one canonical HTTPS origin")
+        if not self.secure_cookies:
+            raise RuntimeError("BOTNOTE_SECURE_COOKIES must remain enabled in production")
+        if not self.database_url.startswith("postgresql+psycopg:"):
+            raise RuntimeError("Production requires PostgreSQL through psycopg")
+        normalized_hosts = {host.strip().casefold() for host in self.allowed_hosts}
+        if not normalized_hosts or "*" in normalized_hosts:
+            raise RuntimeError("BOTNOTE_ALLOWED_HOSTS must contain exact hostnames")
+        if parsed_origin.hostname.casefold() not in normalized_hosts:
+            raise RuntimeError("BOTNOTE_ALLOWED_HOSTS must include BOTNOTE_PUBLIC_ORIGIN's hostname")
+
+        try:
+            trusted_proxies = [ipaddress.ip_address(value) for value in self.trusted_proxy_ips]
+        except ValueError as exc:
+            raise RuntimeError("BOTNOTE_TRUSTED_PROXY_IPS must contain exact IP addresses") from exc
+        if not trusted_proxies or any(
+            address.is_unspecified or address.is_multicast for address in trusted_proxies
+        ):
+            raise RuntimeError("BOTNOTE_TRUSTED_PROXY_IPS contains an unsafe address")
+        if not self.admin_allowed_identities or any(
+            not identity.casefold().startswith(("lan:", "tailnet:"))
+            for identity in self.admin_allowed_identities
+        ):
+            raise RuntimeError("BOTNOTE_ADMIN_ALLOWED_IDENTITIES must be a private exact allowlist")
+
+        self._validate_credential_keyring()
+        self._validate_token_peppers()
+        decoded_keys = [
+            base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+            for value in (self.credential_key, *self.credential_previous_keys)
+        ]
+        if self.token_pepper.encode("utf-8") in decoded_keys:
+            raise RuntimeError("Credential encryption and token hashing must use different secrets")
+
+        key_mode = stat.S_IMODE(self.backend_tls_key.stat().st_mode)
+        if key_mode & 0o037:
+            raise RuntimeError("Backend mTLS private key permissions must be 0640 or stricter")
+
+    def validate_learning_content_boundary(self) -> None:
+        """Refuse a content root that a public static surface could expose."""
+
+        if self.learning_content_root is None:
+            return
+        learning_root = self.learning_content_root.resolve(strict=False)
+        public_roots = (
+            self.frontend_dist.resolve(strict=False),
+            Path("frontend/public").resolve(strict=False),
+            Path("backend/app/static").resolve(strict=False),
+        )
+        if any(
+            learning_root == public_root
+            or learning_root in public_root.parents
+            or public_root in learning_root.parents
+            for public_root in public_roots
+        ):
+            raise RuntimeError("BOTNOTE_LEARNING_CONTENT_ROOT overlaps a public static path")
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()

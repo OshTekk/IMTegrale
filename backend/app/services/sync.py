@@ -1,0 +1,939 @@
+from __future__ import annotations
+
+import fcntl
+import hashlib
+import logging
+import math
+import os
+import re
+import stat
+from contextlib import contextmanager
+from datetime import timedelta
+from typing import TYPE_CHECKING
+
+from sqlalchemy import delete, select, update
+from sqlalchemy.orm import Session
+
+from app.academic_numbers import coefficient_decimal, ects_decimal, score_decimal
+from app.calculations import clean_text, ue_code, ue_year
+from app.config import get_settings
+from app.database import SessionLocal, utcnow
+from app.limits import MAX_ARCHIVED_PASS_NOTES_PER_ACCOUNT, MAX_UE_SETTINGS_PER_ACCOUNT
+from app.models import Account, Note, SyncRequest, UeSetting
+from app.services.autonomous_sync_credentials import AutonomousSyncCredentialError
+from app.services.autonomous_sync_schedule import (
+    reconcile_autonomous_schedule_state,
+)
+from app.services.cohort_pulse import emit_cohort_pulse
+from app.services.events import record_event
+from app.services.imt import (
+    MAX_NOTE_COEFFICIENT,
+    MAX_NOTE_LABEL_LENGTH,
+    MAX_PASS_ENTRIES,
+    MAX_UE_CODE_LENGTH,
+    CompetencyUe,
+    ImtAuthenticationError,
+    ImtFetchError,
+    PassEntry,
+    PassProfile,
+)
+from app.services.jobs import JobClaimLost, enqueue_telegram_notification, lock_job_claim
+from app.services.leaderboard import (
+    apply_detected_academic_profile,
+    apply_detected_campus,
+    apply_official_identity,
+    normalize_detected_campus,
+    reconcile_participating_leaderboard_basis,
+)
+from app.services.pass_gateway import PassAccessRejected, perform_sync_operation
+from app.services.pass_sessions import PassSessionRequired
+from app.services.sync_control import (
+    ACTIVE_SYNC_STATUSES,
+    SYNC_LEASE_SECONDS,
+    SyncInProgress,
+    SyncLeaseExpired,
+    ensure_utc,
+    finalize_sync_request,
+    reserve_sync_request,
+    server_idempotency_key,
+    sync_log_reference,
+)
+from app.services.sync_schedule import (
+    auto_sync_is_due,
+    automatic_lateness_ratio,
+    defer_automatic_sync,
+    update_adaptive_cadence,
+)
+from app.sync_modes import stored_sync_mode_is_supported
+
+if TYPE_CHECKING:
+    from app.services.jobs import JobClaim
+    from app.services.sync_worker_credentials import SyncRuntimeContext
+
+logger = logging.getLogger(__name__)
+
+
+class SyncAlreadyRunning(RuntimeError):
+    pass
+
+
+class AutomaticSyncNotAllowed(RuntimeError):
+    pass
+
+
+def pass_source_key(entry: PassEntry) -> str:
+    stable = "|".join(
+        (
+            ue_code(entry.ue_code),
+            clean_text(entry.label).casefold(),
+            f"{entry.coefficient:g}",
+            "resit" if entry.is_resit else "normal",
+        )
+    )
+    return hashlib.sha256(stable.encode("utf-8")).hexdigest()[:32]
+
+
+def validate_pass_entries(entries: list[PassEntry]) -> None:
+    if len(entries) > MAX_PASS_ENTRIES:
+        raise ImtFetchError("PASS a fourni trop de notes")
+    for entry in entries:
+        code = ue_code(entry.ue_code)
+        label = clean_text(entry.label)
+        if not code or len(code) > MAX_UE_CODE_LENGTH:
+            raise ImtFetchError("PASS a fourni un code UE invalide")
+        if not label or len(label) > MAX_NOTE_LABEL_LENGTH:
+            raise ImtFetchError("PASS a fourni un libellé de note invalide")
+        if not math.isfinite(entry.score) or not 0 <= entry.score <= 20:
+            raise ImtFetchError("PASS a fourni une note invalide")
+        if (
+            not math.isfinite(entry.coefficient)
+            or entry.coefficient <= 0
+            or entry.coefficient > MAX_NOTE_COEFFICIENT
+        ):
+            raise ImtFetchError("PASS a fourni un coefficient invalide")
+
+
+@contextmanager
+def account_sync_lock(account_id: str):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", account_id):
+        raise ValueError("Invalid account identifier for synchronization lock")
+    settings = get_settings()
+    directory = settings.sync_lock_dir
+    if settings.environment == "production":
+        if not directory.is_dir():
+            raise RuntimeError("Synchronization lock directory is unavailable")
+    else:
+        directory.mkdir(parents=True, exist_ok=True)
+    directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    filename = f"sync-{account_id}.lock"
+    try:
+        directory_metadata = os.fstat(directory_fd)
+        if (
+            not stat.S_ISDIR(directory_metadata.st_mode)
+            or directory_metadata.st_mode & stat.S_IWOTH
+            or (
+                settings.environment == "production"
+                and stat.S_IMODE(directory_metadata.st_mode) != 0o2770
+            )
+        ):
+            raise RuntimeError("Synchronization lock directory permissions are invalid")
+        creation_fd = _open_shared_lock_file(directory_fd, ".creation.lock")
+        try:
+            fcntl.flock(creation_fd, fcntl.LOCK_EX)
+            lock_fd = _open_shared_lock_file(directory_fd, filename)
+        finally:
+            fcntl.flock(creation_fd, fcntl.LOCK_UN)
+            os.close(creation_fd)
+    finally:
+        os.close(directory_fd)
+    with os.fdopen(lock_fd, "r+") as handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise SyncAlreadyRunning("Une synchronisation est déjà en cours") from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _open_shared_lock_file(directory_fd: int, filename: str) -> int:
+    flags = os.O_RDWR | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    created = False
+    try:
+        descriptor = os.open(
+            filename,
+            flags | os.O_CREAT | os.O_EXCL,
+            0o660,
+            dir_fd=directory_fd,
+        )
+        created = True
+    except FileExistsError:
+        descriptor = os.open(filename, flags, dir_fd=directory_fd)
+    try:
+        if created:
+            os.fchmod(descriptor, 0o660)
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or stat.S_IMODE(metadata.st_mode) != 0o660
+        ):
+            raise OSError("Synchronization lock file permissions are invalid")
+        return descriptor
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
+def apply_pass_entries(
+    db: Session,
+    account: Account,
+    entries: list[PassEntry],
+    *,
+    actor: str = "system",
+    initial_import: bool = False,
+) -> dict:
+    validate_pass_entries(entries)
+    incoming_ue_codes = {ue_code(entry.ue_code) for entry in entries}
+    if len(incoming_ue_codes) > MAX_UE_SETTINGS_PER_ACCOUNT:
+        raise ImtFetchError("PASS a fourni trop d'UE distinctes")
+    existing = {
+        note.source_key: note
+        for note in db.scalars(select(Note).where(Note.account_id == account.id, Note.source == "pass"))
+    }
+    known_ue_codes = set(db.scalars(select(UeSetting.code).where(UeSetting.account_id == account.id)))
+    missing_ue_codes = incoming_ue_codes - known_ue_codes
+    if len(known_ue_codes) + len(missing_ue_codes) > MAX_UE_SETTINGS_PER_ACCOUNT:
+        raise ImtFetchError("La limite d'UE du compte serait dépassée")
+    active_keys: set[str] = set()
+    inserted: list[Note] = []
+    changed = 0
+
+    for entry in entries:
+        code = ue_code(entry.ue_code)
+        key = pass_source_key(entry)
+        score = score_decimal(entry.score)
+        coefficient = coefficient_decimal(entry.coefficient)
+        active_keys.add(key)
+        note = existing.get(key)
+        if note is None:
+            note = Note(
+                account_id=account.id,
+                source="pass",
+                source_key=key,
+                ue_code=code,
+                raw_label=clean_text(entry.label),
+                raw_score=score,
+                raw_coefficient=coefficient,
+                raw_is_resit=entry.is_resit,
+            )
+            db.add(note)
+            inserted.append(note)
+            existing[key] = note
+        else:
+            values = (
+                code,
+                clean_text(entry.label),
+                score,
+                coefficient,
+                entry.is_resit,
+                False,
+            )
+            current = (
+                note.ue_code,
+                note.raw_label,
+                note.raw_score,
+                note.raw_coefficient,
+                note.raw_is_resit,
+                note.archived,
+            )
+            if values != current:
+                note.ue_code = code
+                note.raw_label = clean_text(entry.label)
+                note.raw_score = score
+                note.raw_coefficient = coefficient
+                note.raw_is_resit = entry.is_resit
+                note.archived = False
+                note.updated_at = utcnow()
+                changed += 1
+
+        if code not in known_ue_codes:
+            db.add(UeSetting(account_id=account.id, code=code, year=ue_year(code)))
+            known_ue_codes.add(code)
+
+    archive_filters = [
+        Note.account_id == account.id,
+        Note.source == "pass",
+        Note.archived.is_(False),
+    ]
+    if active_keys:
+        archive_filters.append(Note.source_key.not_in(active_keys))
+    archived_result = db.execute(
+        update(Note).where(*archive_filters).values(archived=True, updated_at=utcnow())
+    )
+    archived_count = max(0, archived_result.rowcount or 0)
+
+    db.flush()
+    stale_archived_ids = (
+        select(Note.id)
+        .where(
+            Note.account_id == account.id,
+            Note.source == "pass",
+            Note.archived.is_(True),
+        )
+        .order_by(Note.updated_at.desc(), Note.id.desc())
+        .offset(MAX_ARCHIVED_PASS_NOTES_PER_ACCOUNT)
+    )
+    db.execute(delete(Note).where(Note.id.in_(stale_archived_ids)))
+    if not initial_import:
+        for note in inserted:
+            record_event(
+                db,
+                account_id=account.id,
+                kind="note:new",
+                actor=actor,
+                payload={
+                    "note_id": note.id,
+                    "ue_code": note.ue_code,
+                    "label": note.raw_label,
+                    "score": float(note.raw_score),
+                },
+            )
+    record_event(
+        db,
+        account_id=account.id,
+        kind="sync:completed",
+        actor=actor,
+        payload={
+            "total": len(active_keys),
+            "inserted": len(inserted),
+            "updated": changed,
+            "archived": archived_count,
+        },
+    )
+    account.last_sync_at = utcnow()
+    account.last_successful_sync_at = account.last_sync_at
+    account.last_sync_status = "success"
+    account.last_sync_error = None
+    has_changes = bool(inserted or changed or archived_count)
+    if has_changes:
+        account.last_note_change_at = utcnow()
+    return {
+        "total": len(active_keys),
+        "inserted": inserted,
+        "updated": changed,
+        "archived": archived_count,
+        "changed": has_changes,
+    }
+
+
+def apply_pass_profile(account: Account, profile: PassProfile | None) -> None:
+    if profile is None:
+        return
+    now = utcnow()
+    if profile.campus:
+        apply_detected_campus(
+            account,
+            normalize_detected_campus(profile.campus),
+            detected_at=now,
+        )
+    apply_detected_academic_profile(
+        account,
+        program=profile.program,
+        promotion_year=profile.promotion_year,
+        detected_at=now,
+    )
+    apply_official_identity(
+        account,
+        first_name=profile.first_name,
+        last_name=profile.last_name,
+        detected_at=now,
+    )
+    account.profile_refreshed_at = now
+    account.profile_refresh_requested_at = None
+
+
+def apply_competency_ues(
+    db: Session,
+    account: Account,
+    entries: list[CompetencyUe] | None,
+    *,
+    actor: str = "system",
+) -> dict[str, int]:
+    if entries is None:
+        return {"total": 0, "updated": 0}
+    if len(entries) > MAX_UE_SETTINGS_PER_ACCOUNT:
+        raise ImtFetchError("COMPETENCES a fourni trop d'UE distinctes")
+
+    by_code = {
+        setting.code: setting
+        for setting in db.scalars(select(UeSetting).where(UeSetting.account_id == account.id))
+    }
+    incoming_codes = {ue_code(entry.ue_code) for entry in entries}
+    if len(by_code.keys() | incoming_codes) > MAX_UE_SETTINGS_PER_ACCOUNT:
+        raise ImtFetchError("La limite d'UE du compte serait dépassée")
+
+    now = utcnow()
+    updated = 0
+    for entry in entries:
+        code = ue_code(entry.ue_code)
+        title = clean_text(entry.title)
+        credits_number = float(entry.credits_ects)
+        earned_credits_number = (
+            float(entry.earned_credits_ects)
+            if entry.earned_credits_ects is not None
+            else None
+        )
+        if not code or len(code) > MAX_UE_CODE_LENGTH:
+            raise ImtFetchError("COMPETENCES a fourni un code UE invalide")
+        if not title or len(title) > 200:
+            raise ImtFetchError("COMPETENCES a fourni un intitulé d'UE invalide")
+        if not math.isfinite(credits_number) or not 0 < credits_number <= 60:
+            raise ImtFetchError("COMPETENCES a fourni des crédits ECTS invalides")
+        if earned_credits_number is not None and (
+            not math.isfinite(earned_credits_number)
+            or not 0 <= earned_credits_number <= credits_number
+        ):
+            raise ImtFetchError("COMPETENCES a fourni des crédits obtenus invalides")
+        credits = ects_decimal(credits_number)
+        earned_credits = (
+            ects_decimal(earned_credits_number)
+            if earned_credits_number is not None
+            else None
+        )
+        if entry.semester is not None and not re.fullmatch(r"S(?:[5-9]|10)", entry.semester):
+            raise ImtFetchError("COMPETENCES a fourni un semestre invalide")
+        if entry.source_semester is not None and len(entry.source_semester) > 32:
+            raise ImtFetchError("COMPETENCES a fourni un libellé de semestre invalide")
+        if entry.grade is not None and entry.grade not in {"A", "B", "C", "D", "E", "FX", "F"}:
+            raise ImtFetchError("COMPETENCES a fourni un grade invalide")
+
+        setting = by_code.get(code)
+        if setting is None:
+            setting = UeSetting(account_id=account.id, code=code, year=ue_year(code))
+            db.add(setting)
+            by_code[code] = setting
+        changed = any(
+            (
+                setting.title != title,
+                setting.credits_ects != credits,
+                setting.earned_credits_ects != earned_credits,
+                setting.semester != entry.semester,
+                setting.source_semester != entry.source_semester,
+                setting.official_code != entry.official_code,
+                setting.official_grade != entry.grade,
+            )
+        )
+        setting.title = title
+        setting.credits_ects = credits
+        setting.earned_credits_ects = earned_credits
+        setting.semester = entry.semester
+        setting.source_semester = entry.source_semester
+        setting.official_code = entry.official_code
+        setting.official_grade = entry.grade
+        setting.metadata_source = "competences"
+        setting.metadata_refreshed_at = now
+        setting.updated_at = now
+        updated += int(changed)
+
+    account.ue_metadata_refreshed_at = now
+    account.ue_metadata_refresh_requested_at = None
+    if entries:
+        record_event(
+            db,
+            account_id=account.id,
+            kind="ue:metadata_refreshed",
+            actor=actor,
+            payload={"total": len(entries), "updated": updated, "source": "competences"},
+        )
+    return {"total": len(entries), "updated": updated}
+
+
+def _sync_error(exc: Exception) -> tuple[str, str]:
+    if isinstance(exc, AutonomousSyncCredentialError):
+        return exc.code, "La synchronisation autonome nécessite une action."
+    if isinstance(exc, PassSessionRequired):
+        return exc.code, exc.message
+    if isinstance(exc, ImtAuthenticationError):
+        return "SYNC_AUTHENTICATION_FAILED", "Les identifiants IMT ne sont plus valides."
+    if isinstance(exc, ImtFetchError):
+        return "SYNC_UPSTREAM_FAILED", "PASS n'a pas pu être synchronisé."
+    if isinstance(exc, SyncAlreadyRunning):
+        return "SYNC_LOCAL_LOCKED", "Une autre synchronisation est déjà en cours."
+    if isinstance(exc, PermissionError):
+        return "SYNC_ACCOUNT_DISABLED", "Le compte est désactivé."
+    if isinstance(exc, SyncLeaseExpired):
+        return "SYNC_WORKER_LOST", "La demande de synchronisation a expiré."
+    if isinstance(exc, PassAccessRejected):
+        return exc.code, exc.message
+    return "SYNC_INTERNAL_ERROR", "La synchronisation n'a pas pu aboutir."
+
+
+def _lock_sync_rows(
+    db: Session, account_id: str, request_id: str, claim: JobClaim | None,
+) -> tuple[Account | None, SyncRequest | None]:
+    # Match renewal/recovery order; reload cached objects after the external wait.
+    if claim is not None:
+        if (
+            claim.kind != "sync" or claim.account_id != account_id
+            or claim.payload.get("request_id") != request_id
+        ):
+            raise JobClaimLost("Sync claim target mismatch")
+        lock_job_claim(db, claim)
+    account = db.get(Account, account_id, with_for_update=True, populate_existing=True)
+    request = db.get(SyncRequest, request_id, with_for_update=True, populate_existing=True)
+    if request is not None and request.account_id != account_id:
+        raise JobClaimLost("Sync request account mismatch")
+    return account, request
+
+
+def _record_sync_failure(
+    account_id: str, request_id: str, exc: Exception, *, claim: JobClaim | None = None,
+) -> None:
+    error_code, public_message = _sync_error(exc)
+    now = utcnow()
+    with SessionLocal() as db:
+        try:
+            account, request = _lock_sync_rows(db, account_id, request_id, claim)
+        except JobClaimLost:
+            return
+        if account is None or request is None or request.status not in ACTIVE_SYNC_STATUSES:
+            return
+        account.last_sync_at = now
+        account.last_sync_status = "error"
+        account.last_sync_error = public_message
+        if isinstance(exc, PassSessionRequired):
+            account.auto_sync_paused_reason = "reauth_required"
+            account.auto_sync_paused_at = now
+            account.auto_sync_next_at = None
+        elif request.actor == "automatic":
+            defer_automatic_sync(account, now=now)
+        finalize_sync_request(
+            db,
+            account,
+            request,
+            status="failed",
+            error_code=error_code,
+            now=now,
+        )
+        record_event(
+            db,
+            account_id=account.id,
+            kind="sync:error",
+            actor=request.actor,
+            payload={"code": error_code},
+        )
+        db.commit()
+
+
+def _record_sync_deferred(
+    account_id: str,
+    request_id: str,
+    exc: PassAccessRejected,
+    *,
+    claim: JobClaim | None = None,
+) -> None:
+    with SessionLocal() as db:
+        try:
+            account, request = _lock_sync_rows(db, account_id, request_id, claim)
+        except JobClaimLost:
+            return
+        if account is None or request is None or request.status not in ACTIVE_SYNC_STATUSES:
+            return
+        account.last_sync_status = "success" if account.last_sync_at else "never"
+        account.last_sync_error = None
+        if request.actor == "automatic":
+            defer_automatic_sync(
+                account,
+                available_at=exc.available_at,
+            )
+        finalize_sync_request(
+            db,
+            account,
+            request,
+            status="skipped",
+            error_code=exc.code,
+            result={
+                "retry_after_seconds": exc.retry_after_seconds,
+                "available_at": exc.available_at.isoformat(),
+            },
+        )
+        record_event(
+            db,
+            account_id=account.id,
+            kind="sync:deferred",
+            actor=request.actor,
+            payload={"code": exc.code},
+        )
+        db.commit()
+
+
+def _skip_automatic_request(
+    db: Session,
+    account: Account,
+    request: SyncRequest,
+    *,
+    previous_status: str,
+    previous_error: str | None,
+) -> None:
+    account.last_sync_status = previous_status
+    account.last_sync_error = previous_error
+    finalize_sync_request(
+        db,
+        account,
+        request,
+        status="skipped",
+        error_code="SYNC_AUTO_NOT_DUE",
+    )
+    record_event(
+        db,
+        account_id=account.id,
+        kind="sync:automatic_skipped",
+        actor="automatic",
+        payload={"code": "SYNC_AUTO_NOT_DUE"},
+    )
+    db.commit()
+
+
+def execute_sync_request(
+    account_id: str,
+    request_id: str,
+    *,
+    notify: bool = True,
+    quota_bypass: bool = False,
+    bypass_reason: str | None = None,
+    force_probe: bool = False,
+    sync_runtime: SyncRuntimeContext,
+    claim: JobClaim | None = None,
+) -> dict:
+    try:
+        with account_sync_lock(account_id), SessionLocal() as db:
+            account, request = _lock_sync_rows(db, account_id, request_id, claim)
+            if account is None or request is None:
+                raise LookupError("Demande de synchronisation introuvable")
+            if request.status not in ACTIVE_SYNC_STATUSES:
+                return request.result or {"skipped": True, "status": request.status}
+            now = utcnow()
+            if (
+                account.sync_active_request_id != request.id
+                or ensure_utc(request.lease_expires_at) <= now
+            ):
+                raise SyncLeaseExpired("Le lease de synchronisation a expiré")
+            if account.is_disabled:
+                raise PermissionError("Compte désactivé")
+            previous_status = account.last_sync_status
+            previous_error = account.last_sync_error
+            if request.actor == "automatic" and not auto_sync_is_due(account, now):
+                _skip_automatic_request(
+                    db,
+                    account,
+                    request,
+                    previous_status=previous_status,
+                    previous_error=previous_error,
+                )
+                raise AutomaticSyncNotAllowed(
+                    "Actualisation automatique non autorisée ou non échue"
+                )
+
+            lease_expires_at = now + timedelta(seconds=SYNC_LEASE_SECONDS)
+            request.status = "running"
+            request.started_at = request.started_at or now
+            request.lease_expires_at = lease_expires_at
+            account.sync_active_until = lease_expires_at
+            account.last_sync_status = "running"
+            account.last_sync_error = None
+            record_event(db, account_id=account.id, kind="sync:started", actor=request.actor)
+            db.commit()
+
+            db.refresh(account)
+            db.refresh(request)
+            if request.actor == "automatic" and not auto_sync_is_due(account, utcnow()):
+                account, request = _lock_sync_rows(db, account_id, request_id, claim)
+                _skip_automatic_request(
+                    db,
+                    account,
+                    request,
+                    previous_status=previous_status,
+                    previous_error=previous_error,
+                )
+                raise AutomaticSyncNotAllowed(
+                    "Actualisation automatique non autorisée ou non échue"
+                )
+
+            def lock_domain_authority() -> None:
+                current_account, current_request = _lock_sync_rows(db, account_id, request_id, claim)
+                if (
+                    current_account is None or current_request is None
+                    or current_request.status not in ACTIVE_SYNC_STATUSES
+                    or current_account.sync_active_request_id != request_id
+                ):
+                    raise JobClaimLost("Sync domain authority changed")
+
+            gateway = perform_sync_operation(
+                db=db,
+                account=account,
+                actor=request.actor,
+                quota_bypass=quota_bypass,
+                bypass_reason=bypass_reason,
+                force_probe=force_probe,
+                sync_runtime=sync_runtime,
+                sync_request_id=request.id,
+                lock_domain_authority=lock_domain_authority,
+            )
+            if account.is_disabled:
+                raise PermissionError("Compte désactivé")
+            result = apply_pass_entries(db, account, gateway.entries, actor=request.actor)
+            apply_pass_profile(account, gateway.profile)
+            competency_result = apply_competency_ues(
+                db,
+                account,
+                gateway.competency_ues,
+                actor=request.actor,
+            )
+            leaderboard_basis_result = (
+                reconcile_participating_leaderboard_basis(db, account)
+                if gateway.competency_ues is not None
+                else "unchanged"
+            )
+            if leaderboard_basis_result != "unchanged":
+                record_event(
+                    db,
+                    account_id=account.id,
+                    kind=f"leaderboard:basis_{leaderboard_basis_result}",
+                    actor=request.actor,
+                    payload={"source": "competences"},
+                )
+            update_adaptive_cadence(
+                account,
+                changed=result["changed"],
+                actor=request.actor,
+            )
+            if result["changed"]:
+                emit_cohort_pulse(db, account)
+            if account.leaderboard_profile is not None:
+                account.leaderboard_profile.refresh_recommended_at = None
+            account.auto_sync_paused_reason = None
+            account.auto_sync_paused_at = None
+            if notify:
+                enqueue_telegram_notification(
+                    db,
+                    account=account,
+                    notes=result["inserted"],
+                    sync_request_id=request.id,
+                )
+            response = {
+                "total": result["total"],
+                "inserted": len(result["inserted"]),
+                "updated": result["updated"],
+                "archived": result["archived"],
+                "ue_metadata_updated": competency_result["updated"],
+                "leaderboard_basis": leaderboard_basis_result,
+            }
+            finalize_sync_request(
+                db,
+                account,
+                request,
+                status="succeeded",
+                result=response,
+            )
+            db.commit()
+            return response
+    except (AutomaticSyncNotAllowed, JobClaimLost):
+        raise
+    except PassAccessRejected as exc:
+        _record_sync_deferred(account_id, request_id, exc, claim=claim)
+        raise
+    except Exception as exc:
+        _record_sync_failure(account_id, request_id, exc, claim=claim)
+        raise
+
+
+def sync_account(
+    account_id: str,
+    *,
+    notify: bool = True,
+    actor: str = "system",
+    quota_bypass: bool = False,
+    bypass_reason: str | None = None,
+    force_probe: bool = False,
+    sync_runtime: SyncRuntimeContext,
+) -> dict:
+    now = utcnow()
+    if actor == "automatic":
+        with SessionLocal() as db:
+            account = db.get(Account, account_id)
+            if account is None:
+                raise LookupError("Compte introuvable")
+            if not auto_sync_is_due(account, now):
+                raise AutomaticSyncNotAllowed(
+                    "Actualisation automatique non autorisée ou non échue"
+                )
+    reservation = reserve_sync_request(
+        account_id,
+        actor=actor,
+        idempotency_key=server_idempotency_key(actor),
+        enforce_cooldown=False,
+        notify=notify,
+        quota_bypass=quota_bypass,
+        bypass_reason=bypass_reason,
+        force_probe=force_probe,
+        enqueue=False,
+        now=now,
+    )
+    return execute_sync_request(
+        account_id,
+        reservation.request_id,
+        notify=notify,
+        quota_bypass=quota_bypass,
+        bypass_reason=bypass_reason,
+        force_probe=force_probe,
+        sync_runtime=sync_runtime,
+    )
+
+
+def sync_all_accounts(*, sync_runtime: SyncRuntimeContext) -> list[dict]:
+    with SessionLocal() as db:
+        account_ids = list(db.scalars(select(Account.id).order_by(Account.created_at)))
+    results: list[dict] = []
+    for account_id in account_ids:
+        try:
+            results.append(
+                {
+                    "account_id": account_id,
+                    "ok": True,
+                    **sync_account(account_id, sync_runtime=sync_runtime),
+                }
+            )
+        except Exception as exc:  # CLI must continue syncing other tenants
+            error_code, public_message = _sync_error(exc)
+            logger.error(
+                "Account sync failed sync_ref=%s error_type=%s",
+                sync_log_reference(account_id),
+                type(exc).__name__,
+            )
+            results.append(
+                {
+                    "account_id": account_id,
+                    "ok": False,
+                    "error_code": error_code,
+                    "error": public_message,
+                }
+            )
+    return results
+
+
+def sync_due_accounts() -> list[dict]:
+    now = utcnow()
+    settings = get_settings()
+    with SessionLocal() as db:
+        accounts = list(
+            db.scalars(
+                select(Account).where(
+                    Account.auto_sync_enabled.is_(True),
+                    Account.auto_sync_consented_at.is_not(None),
+                    Account.is_disabled.is_(False),
+                )
+            )
+        )
+        schedule_state_changed = reconcile_autonomous_schedule_state(
+            db,
+            accounts,
+            runtime_enabled=settings.autonomous_sync_enabled,
+            now=now,
+            settings=settings,
+        )
+        if schedule_state_changed:
+            db.commit()
+        unsupported_count = sum(
+            not stored_sync_mode_is_supported(
+                account,
+                autonomous_runtime_enabled=settings.autonomous_sync_enabled,
+            )
+            for account in accounts
+        )
+        if unsupported_count:
+            logger.error(
+                "Unsupported automatic sync mode ignored",
+                extra={
+                    "event": "sync_mode_unsupported",
+                    "count": unsupported_count,
+                },
+            )
+        due_accounts = [
+            account
+            for account in accounts
+            if auto_sync_is_due(account, now, settings=settings)
+        ]
+        due_accounts.sort(
+            key=lambda account: (
+                -automatic_lateness_ratio(account, now),
+                account.created_at,
+                account.id,
+            )
+        )
+        from app.models import PassSystemState
+
+        state = db.get(PassSystemState, 1)
+        if (
+            len(due_accounts) > 1
+            and state is not None
+            and due_accounts[0].id == state.last_auto_account_id
+        ):
+            due_accounts.append(due_accounts.pop(0))
+        account_ids = [account.id for account in due_accounts[:1]]
+    results: list[dict] = []
+    for account_id in account_ids:
+        try:
+            reservation = reserve_sync_request(
+                account_id,
+                actor="automatic",
+                idempotency_key=server_idempotency_key("automatic"),
+                enforce_cooldown=False,
+                now=now,
+            )
+            results.append(
+                {
+                    "account_id": account_id,
+                    "ok": True,
+                    "queued": reservation.status in ACTIVE_SYNC_STATUSES,
+                    "request_id": reservation.request_id,
+                }
+            )
+        except AutomaticSyncNotAllowed:
+            results.append({"account_id": account_id, "ok": True, "skipped": True})
+        except SyncInProgress:
+            results.append(
+                {
+                    "account_id": account_id,
+                    "ok": True,
+                    "skipped": True,
+                    "reason": "in_progress",
+                }
+            )
+        except Exception as exc:  # Worker must continue syncing other consenting accounts
+            error_code, public_message = _sync_error(exc)
+            logger.error(
+                "Scheduled sync failed sync_ref=%s error_type=%s",
+                sync_log_reference(account_id),
+                type(exc).__name__,
+            )
+            results.append(
+                {
+                    "account_id": account_id,
+                    "ok": False,
+                    "error_code": error_code,
+                    "error": public_message,
+                }
+            )
+        finally:
+            with SessionLocal() as db:
+                from app.models import PassSystemState
+
+                state = db.get(PassSystemState, 1)
+                if state is None:
+                    state = PassSystemState(id=1)
+                    db.add(state)
+                state.last_auto_account_id = account_id
+                db.commit()
+    return results
