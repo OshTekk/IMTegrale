@@ -2,6 +2,7 @@
 
 import json
 import os
+import stat
 import sys
 import threading
 import time
@@ -12,6 +13,32 @@ mode, directory = sys.argv[1:]
 state = Path(directory)
 credentials = Path(os.environ["CREDENTIALS_DIRECTORY"])
 os.environ["RUNTIME_IDENTIFIER_CREDENTIALS_DIRECTORY"] = str(credentials)
+# Measure the descriptor for the same logical credential before invoking W1.
+fd = os.open(credentials / "autonomous-sync-canary-account-ids", os.O_RDONLY | os.O_NOFOLLOW)
+try:
+    metadata = os.fstat(fd)
+finally:
+    os.close(fd)
+regular = stat.S_ISREG(metadata.st_mode)
+predicates = {
+    "regular_file": regular,
+    "single_link": metadata.st_nlink == 1,
+    "bounded_size": 1 <= metadata.st_size <= 4096,
+    "owner_only_permissions": stat.S_IMODE(metadata.st_mode) & 0o077 == 0,
+}
+measurement = {
+    "regular_file": regular,
+    "permission_mode": oct(stat.S_IMODE(metadata.st_mode)),
+    "st_nlink": metadata.st_nlink,
+    "st_size": metadata.st_size,
+    "predicates": predicates,
+    "intended_unprivileged_user": os.geteuid() != 0 and os.geteuid() == state.stat().st_uid,
+}
+print("W2_CREDENTIAL_METADATA=" + json.dumps(measurement, sort_keys=True), flush=True)
+(state / "credential-metadata.tmp").write_text(json.dumps(measurement, sort_keys=True))
+(state / "credential-metadata.tmp").replace(state / "credential-metadata.json")
+if not all(predicates.values()) or not measurement["intended_unprivileged_user"]:
+    raise SystemExit("W2_CREDENTIAL_METADATA_REJECTED")
 assert not {"owner-imt-password", "imt-sync-credential-private", "pass-service-session-private"} & {
     path.name for path in credentials.iterdir()
 }

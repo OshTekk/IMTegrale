@@ -27,9 +27,13 @@ def command(*args, check=True):
     return subprocess.run(args, check=check, capture_output=True, text=True, timeout=35)
 
 
-def eventually(predicate, seconds=30):
+def eventually(predicate, seconds=30, *, credential_state=None):
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
+        if credential_state is not None and (credential_state / "credential-metadata.json").exists():
+            measurement = json.loads((credential_state / "credential-metadata.json").read_text())
+            if not all(measurement["predicates"].values()) or not measurement["intended_unprivileged_user"]:
+                pytest.fail("W2_CREDENTIAL_METADATA=" + json.dumps(measurement, sort_keys=True))
         result = predicate()
         if result:
             return result
@@ -138,7 +142,7 @@ def test_startup_credentials_progress_identity_cgroups_restart_and_readiness(uni
         db.commit()
         job_id, outbox_id = job.id, outbox.id
     name, state = unit(restart="on-failure")
-    eventually(lambda: (state / "identity.json").exists())
+    eventually(lambda: (state / "identity.json").exists(), credential_state=state)
     identity = json.loads((state / "identity.json").read_text())
     pid = identity["pid"]
     eventually(lambda: heartbeats(pid))

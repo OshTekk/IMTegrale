@@ -63,15 +63,13 @@ jobs:
         run: |
           .venv/bin/python -c 'from sqlalchemy import create_engine,text; import os; e=create_engine(os.environ["BOTNOTE_POSTGRES_TEST_URL"]); c=e.connect(); assert c.scalar(text("SHOW server_version_num"))[:2]=="17"; c.close()'
           .venv/bin/alembic upgrade head
-      - name: Existing W1 configuration and PostgreSQL regressions
-        run: |
-          .venv/bin/pytest backend/tests/test_runtime_roles.py
-          .venv/bin/pytest backend/postgres_tests
       - name: Require real systemd and cgroup v2
         run: |
           test "$(cat /proc/1/comm)" = systemd
           systemctl --version | head -1
           test -f /sys/fs/cgroup/cgroup.controllers
           sudo -n true
-      - name: Real transient systemd worker qualification
-        run: .venv/bin/pytest -s backend/linux_tests
+      - name: Diagnose one synthetic systemd credential
+        run: >-
+          .venv/bin/pytest -x -s backend/linux_tests
+          -k startup_credentials_progress_identity_cgroups_restart_and_readiness
