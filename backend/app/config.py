@@ -5,6 +5,7 @@ import ipaddress
 import json
 import os
 import stat
+import struct
 import sys
 from enum import StrEnum
 from functools import lru_cache
@@ -68,6 +69,31 @@ _OPERATIONS_ALLOWED_ENVIRONMENT_VARIABLES = frozenset(
 )
 
 
+def _runtime_identifier_permissions_safe(descriptor: int, metadata: os.stat_result) -> bool:
+    mode = stat.S_IMODE(metadata.st_mode)
+    if mode & 0o077 == 0:
+        return True
+    uid = os.geteuid()
+    if not sys.platform.startswith("linux") or mode != 0o440 or metadata.st_uid != 0 or uid == 0:
+        return False
+    # systemd 255 write_credential() retains root ownership and adds a named-user
+    # read ACL. The group mode bits then represent the ACL mask, not group access.
+    # Accept only that exact Linux ACL v2: root + this UID read; group/others none.
+    undefined_id = 0xFFFFFFFF
+    entries = (
+        (0x01, 4, undefined_id),
+        (0x02, 4, uid),
+        (0x04, 0, undefined_id),
+        (0x10, 4, undefined_id),
+        (0x20, 0, undefined_id),
+    )
+    expected = struct.pack("<I", 2) + b"".join(struct.pack("<HHI", *entry) for entry in entries)
+    try:
+        return os.getxattr(descriptor, "system.posix_acl_access") == expected
+    except (AttributeError, OSError):
+        return False
+
+
 def _read_runtime_identifier_credential(logical_name: str) -> str | None:
     credentials_directory = os.environ.get("RUNTIME_IDENTIFIER_CREDENTIALS_DIRECTORY")
     if not credentials_directory:
@@ -89,7 +115,7 @@ def _read_runtime_identifier_credential(logical_name: str) -> str | None:
             not stat.S_ISREG(metadata.st_mode)
             or metadata.st_nlink != 1
             or not 1 <= metadata.st_size <= _RUNTIME_IDENTIFIER_CREDENTIAL_MAX_BYTES
-            or stat.S_IMODE(metadata.st_mode) & 0o077
+            or not _runtime_identifier_permissions_safe(descriptor, metadata)
         ):
             raise RuntimeError("RUNTIME_IDENTIFIER_CREDENTIAL_UNSAFE")
         with os.fdopen(descriptor, encoding="utf-8", closefd=True) as source:
