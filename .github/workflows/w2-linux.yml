@@ -34,6 +34,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.12'
@@ -42,7 +43,12 @@ jobs:
           python scripts/check_content_boundary.py
           python scripts/check_secrets.py
           python scripts/w2_verify_identity.py
-          test "$(git rev-list --count HEAD)" -eq 1
+          expected_root=92d9983dde54139c92418eb503137a6401553b6f
+          mapfile -t roots < <(git rev-list --max-parents=0 HEAD)
+          test "${#roots[@]}" -eq 1
+          test "${roots[0]}" = "$expected_root"
+          test "$(git rev-list --parents -n 1 "$expected_root")" = "$expected_root"
+          git merge-base --is-ancestor "$expected_root" HEAD
       - name: Install isolated test dependencies
         run: |
           python -m venv .venv
