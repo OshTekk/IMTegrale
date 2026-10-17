@@ -5,7 +5,11 @@ selected unchanged W1 regressions, schema definitions for a synthetic PostgreSQL
 test database, and narrow transient-systemd tests. It is not a complete application
 release. Other CLI commands, frontend and deployment assets are intentionally absent.
 
-Application code is byte-identical to the source described by `W1-IDENTITY.json`.
+Among the 90 original files recorded in `W1-IDENTITY.json`, 89 remain byte-identical
+to W1. Only `backend/app/config.py` contains the explicitly recorded W2.1 correction
+for systemd's root-and-service-user credential ACL. This is a corrected W2.2 candidate,
+not certification of the original W1 configuration. The separate ACL regressions
+exercise rejection of unsafe access.
 No source Git history was imported. The workflow runs only on the dedicated W2 branch
 using hosted Ubuntu, a disposable local PostgreSQL database and synthetic credentials.
 Its schema setup touches only that runner's disposable `_test` database.

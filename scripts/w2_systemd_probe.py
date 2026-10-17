@@ -1,7 +1,8 @@
-"""Fault injection confined to disposable W2 units; application files are unmodified."""
+"""Disposable W2 probes for the explicitly corrected configuration candidate."""
 
 import json
 import os
+import re
 import stat
 import sys
 import threading
@@ -9,14 +10,17 @@ import time
 from dataclasses import asdict
 from pathlib import Path
 
+from app.config import _runtime_identifier_permissions_safe
+
 mode, directory = sys.argv[1:]
 state = Path(directory)
 credentials = Path(os.environ["CREDENTIALS_DIRECTORY"])
 os.environ["RUNTIME_IDENTIFIER_CREDENTIALS_DIRECTORY"] = str(credentials)
-# Measure the descriptor for the same logical credential before invoking W1.
+# Measure the same descriptor using the corrected application permission check.
 fd = os.open(credentials / "autonomous-sync-canary-account-ids", os.O_RDONLY | os.O_NOFOLLOW)
 try:
     metadata = os.fstat(fd)
+    permissions_safe = _runtime_identifier_permissions_safe(fd, metadata)
 finally:
     os.close(fd)
 regular = stat.S_ISREG(metadata.st_mode)
@@ -24,7 +28,7 @@ predicates = {
     "regular_file": regular,
     "single_link": metadata.st_nlink == 1,
     "bounded_size": 1 <= metadata.st_size <= 4096,
-    "owner_only_permissions": stat.S_IMODE(metadata.st_mode) & 0o077 == 0,
+    "application_permissions_safe": permissions_safe,
 }
 measurement = {
     "regular_file": regular,
@@ -88,4 +92,15 @@ elif mode in {"hold", "drain"}:
 from app.cli import main  # noqa: E402
 
 sys.argv = ["botnote", "worker", "general"]
-main()
+try:
+    main()
+except BaseException as exc:
+    # The injected fatal loop is expected to fail once before systemd restarts it.
+    if not (mode == "fatal" and str(exc) == "GENERAL_WORKER_FAILED"):
+        code = str(exc)
+        if not re.fullmatch(r"(?:RUNTIME_IDENTIFIER|GENERAL_WORKER)_[A-Z_]+", code):
+            code = "UNCLASSIFIED"
+        failure = {"error_type": type(exc).__name__, "code": code}
+        (state / "startup-failure.tmp").write_text(json.dumps(failure))
+        (state / "startup-failure.tmp").replace(state / "startup-failure.json")
+    raise SystemExit(1) from None

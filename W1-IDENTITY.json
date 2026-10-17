@@ -91,5 +91,11 @@
     "pyproject.toml": "ef1ee88fd2315962dc1a37b6a4b38a21b53389119827840cf2c5b9ca8b2d69ea",
     "scripts/check_content_boundary.py": "ca2d643c8bec0cf27c72754a2fbf91021ff7faebebc10d664fe4da404b6b1a1b",
     "scripts/check_secrets.py": "85ce4f195f42bb0343a9248699304445feb3c23613f231ffe3e613b3a3a3e9ff"
+  },
+  "corrected_candidate": {
+    "file": "backend/app/config.py",
+    "sha256": "0c743eaa965632e581486b160916d0547bd56c68c66088771057324f6721808b",
+    "correction_commit": "c383700b9fcaeef1c5cb98a306be9c73ca12d8ad",
+    "reason": "W2.1 exact root-and-service-user Linux credential ACL validation"
   }
 }

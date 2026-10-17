@@ -30,6 +30,9 @@ def command(*args, check=True):
 def eventually(predicate, seconds=30, *, credential_state=None):
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
+        if credential_state is not None and (credential_state / "startup-failure.json").exists():
+            failure = json.loads((credential_state / "startup-failure.json").read_text())
+            pytest.fail("W2_WORKER_STARTUP_FAILED=" + json.dumps(failure, sort_keys=True))
         if credential_state is not None and (credential_state / "credential-metadata.json").exists():
             measurement = json.loads((credential_state / "credential-metadata.json").read_text())
             if not all(measurement["predicates"].values()) or not measurement["intended_unprivileged_user"]:
@@ -145,7 +148,7 @@ def test_startup_credentials_progress_identity_cgroups_restart_and_readiness(uni
     eventually(lambda: (state / "identity.json").exists(), credential_state=state)
     identity = json.loads((state / "identity.json").read_text())
     pid = identity["pid"]
-    eventually(lambda: heartbeats(pid))
+    eventually(lambda: heartbeats(pid), credential_state=state)
     assert int(show(name, "MainPID")) == pid
     assert identity["uid"] == os.getuid() != 0 and identity["gid"] == os.getgid()
     assert identity["no_new_privs"]
@@ -162,7 +165,7 @@ def test_startup_credentials_progress_identity_cgroups_restart_and_readiness(uni
                 db.get(NotificationOutbox, outbox_id).status == "delivered"
             )
 
-    eventually(progressed)
+    eventually(progressed, credential_state=state)
     settings = get_settings().model_copy(update={"environment": "production"})
     with SessionLocal() as db:
         assert not readiness_checks(db, settings)["workers"]  # Isolated sync is absent.
@@ -178,7 +181,7 @@ def test_startup_credentials_progress_identity_cgroups_restart_and_readiness(uni
     # Restart after a real SIGKILL, then require fresh PID/nonce heartbeats.
     command("sudo", "systemctl", "kill", "--signal=SIGKILL", "--kill-whom=all", name)
     new_pid = eventually(lambda: int(show(name, "MainPID")) not in {0, pid} and int(show(name, "MainPID")))
-    eventually(lambda: heartbeats(new_pid))
+    eventually(lambda: heartbeats(new_pid), credential_state=state)
     assert int(show(name, "NRestarts")) >= 1
     command("sudo", "systemctl", "stop", name)
     with SessionLocal() as db:
@@ -199,7 +202,7 @@ def test_sigterm_real_budget_and_unfinished_claim_recovery(unit, mode):
         db.commit()
         job_id = job.id
     name, state = unit("hold" if mode == "kill" else mode)
-    eventually(lambda: (state / "claim.json").exists())
+    eventually(lambda: (state / "claim.json").exists(), credential_state=state)
     claim_data = json.loads((state / "claim.json").read_text())
     # Capture the actual existing claim, without inventing owner/fencing values.
     with SessionLocal() as db:
@@ -234,9 +237,9 @@ def test_sigterm_real_budget_and_unfinished_claim_recovery(unit, mode):
 
 def test_fatal_loop_causes_process_failure_and_systemd_restart(unit):
     name, state = unit("fatal", restart="on-failure")
-    eventually(lambda: int(show(name, "NRestarts")) >= 1)
+    eventually(lambda: int(show(name, "NRestarts")) >= 1, credential_state=state)
     pid = eventually(lambda: int(show(name, "MainPID")))
-    eventually(lambda: heartbeats(pid))
+    eventually(lambda: heartbeats(pid), credential_state=state)
     assert (state / "failed-once").exists()
     assert show(name, "ActiveState") == "active"
     print("PASS fatal loop exits shared process and systemd restarts it")
