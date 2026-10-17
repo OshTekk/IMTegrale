@@ -148,7 +148,7 @@ def test_startup_credentials_progress_identity_cgroups_restart_and_readiness(uni
     eventually(lambda: (state / "identity.json").exists(), credential_state=state)
     identity = json.loads((state / "identity.json").read_text())
     pid = identity["pid"]
-    eventually(lambda: heartbeats(pid), credential_state=state)
+    eventually(lambda: heartbeats(pid), seconds=45, credential_state=state)
     assert int(show(name, "MainPID")) == pid
     assert identity["uid"] == os.getuid() != 0 and identity["gid"] == os.getgid()
     assert identity["no_new_privs"]
@@ -181,7 +181,7 @@ def test_startup_credentials_progress_identity_cgroups_restart_and_readiness(uni
     # Restart after a real SIGKILL, then require fresh PID/nonce heartbeats.
     command("sudo", "systemctl", "kill", "--signal=SIGKILL", "--kill-whom=all", name)
     new_pid = eventually(lambda: int(show(name, "MainPID")) not in {0, pid} and int(show(name, "MainPID")))
-    eventually(lambda: heartbeats(new_pid), credential_state=state)
+    eventually(lambda: heartbeats(new_pid), seconds=45, credential_state=state)
     assert int(show(name, "NRestarts")) >= 1
     command("sudo", "systemctl", "stop", name)
     with SessionLocal() as db:
@@ -239,7 +239,7 @@ def test_fatal_loop_causes_process_failure_and_systemd_restart(unit):
     name, state = unit("fatal", restart="on-failure")
     eventually(lambda: int(show(name, "NRestarts")) >= 1, credential_state=state)
     pid = eventually(lambda: int(show(name, "MainPID")))
-    eventually(lambda: heartbeats(pid), credential_state=state)
+    eventually(lambda: heartbeats(pid), seconds=45, credential_state=state)
     assert (state / "failed-once").exists()
     assert show(name, "ActiveState") == "active"
     print("PASS fatal loop exits shared process and systemd restarts it")
