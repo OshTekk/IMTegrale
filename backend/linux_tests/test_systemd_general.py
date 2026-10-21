@@ -98,6 +98,7 @@ def unit(tmp_path):
         properties = {
             "User": pwd.getpwuid(os.getuid()).pw_name,
             "Group": str(os.getgid()),
+            "SupplementaryGroups": "botnote",
             "WorkingDirectory": str(ROOT),
             "EnvironmentFile": str(envfile),
             "LoadCredential": f"autonomous-sync-canary-account-ids:{credential}",

@@ -20,6 +20,9 @@ from app.services.operations import readiness_checks
 
 
 def test_general_worker_progresses_while_scheduler_is_blocked(monkeypatch) -> None:
+    # This in-process test isolates loop/database behavior; independent process
+    # exclusion is covered by test_worker_mode_exclusion.py and the kernel tests.
+    monkeypatch.setattr(worker_runtime, "acquire_worker_mode_lock", lambda **_kwargs: None)
     stop, entered, release = threading.Event(), threading.Event(), threading.Event()
     monkeypatch.setattr(worker_runtime, "_stop_event", lambda: stop)
     cycle = worker_runtime.scheduler_cycle
@@ -110,6 +113,7 @@ def test_general_sigterm_finishes_only_completed_work_and_recovers_unfinished_cl
     source = """
 import sys, threading
 from app.services import jobs, worker_runtime
+worker_runtime.acquire_worker_mode_lock = lambda **kwargs: None
 worker_runtime.GENERAL_SHUTDOWN_SECONDS = 1
 def hold(claim):
     print('CLAIMED', flush=True)

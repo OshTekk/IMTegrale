@@ -19,6 +19,7 @@ from app.services.jobs import (
     process_one,
 )
 from app.services.operations import record_runtime_heartbeat
+from app.services.worker_mode_lock import acquire_worker_mode_lock
 
 if TYPE_CHECKING:
     from app.services.sync_worker_credentials import SyncRuntimeContext
@@ -55,6 +56,7 @@ def _stop_event() -> threading.Event:
 
 def run_general_worker() -> None:
     """Run the existing three loops with independent sessions and one lifecycle."""
+    acquire_worker_mode_lock(exclusive=True)
     stop = _stop_event()
     failed = threading.Event()
 
@@ -143,6 +145,8 @@ def run_worker(
     runtime_details: dict[str, int | bool | str] | None = None,
     sync_runtime: SyncRuntimeContext | None = None,
 ) -> None:
+    if kind in GENERAL_WORKER_KINDS:
+        acquire_worker_mode_lock(exclusive=False)
     _run_worker(kind, runtime_details=runtime_details, sync_runtime=sync_runtime)
 
 

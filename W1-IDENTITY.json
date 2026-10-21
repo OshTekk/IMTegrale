@@ -97,5 +97,15 @@
     "sha256": "0c743eaa965632e581486b160916d0547bd56c68c66088771057324f6721808b",
     "correction_commit": "c383700b9fcaeef1c5cb98a306be9c73ca12d8ad",
     "reason": "W2.1 exact root-and-service-user Linux credential ACL validation"
+  },
+  "w3_candidate": {
+    "source_commit": "464e9fca0abc024e8b62d2db9100a606d87a7f5f",
+    "sha256": {
+      "backend/app/services/worker_mode_lock.py": "4bbd35ac5201db172b2131a48ecebb2820e5aaefebc110c5d7ddafdf4acd66a1",
+      "backend/app/services/worker_runtime.py": "e4c480a8790de453efc81708beb927099a9d3e597340d9ff7ad2cfa81efe4527",
+      "backend/tests/test_worker_mode_lock.py": "be58ccb02c7fef2e048d11160047c788f711d3c99871614e57088910c2c1957f",
+      "backend/postgres_tests/test_worker_mode_exclusion.py": "a1c609c860a3ef7ea2c2ed7d3be978615103bd12aa35b49b3c2f60283bffa1ea",
+      "backend/postgres_tests/test_general_worker.py": "7a9eda1432b57ae8a265914dd736eea99617054e839fc4de44cdc3986fc6eead"
+    }
   }
 }

@@ -1,16 +1,16 @@
-name: W2 Linux worker qualification
+name: W4 replacement Linux flock qualification
 on:
   push:
-    branches: [codex/w2-linux-qualification]
+    branches: [codex/w4-linux-flock-v2]
 permissions:
   contents: read
 concurrency:
-  group: w2-linux-${{ github.ref }}
+  group: w4-v2-linux-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   qualification:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:17-alpine
@@ -73,5 +73,5 @@ jobs:
           systemctl --version | head -1
           test -f /sys/fs/cgroup/cgroup.controllers
           sudo -n true
-      - name: All five real systemd worker integration cases
+      - name: All 17 systemd cases (W2.3 regressions and W4 lock admission)
         run: .venv/bin/pytest -s backend/linux_tests
