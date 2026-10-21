@@ -8,7 +8,9 @@ import grp
 import json
 import os
 import pwd
+import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import uuid
@@ -37,6 +39,91 @@ def metadata():
         "stat.S_ISREG(f.st_mode),f.st_dev,f.st_ino]))"
     )
     return json.loads(command("sudo", "-n", sys.executable, "-c", program).stdout)
+
+
+def launch_diagnostics(result, name, python_in_mount):
+    """Only synthetic-unit evidence; never print environment, commands or file contents."""
+    secret_values = [
+        value
+        for key, value in os.environ.items()
+        if value and re.search(r"TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH|DATABASE_URL|DSN", key)
+    ]
+
+    def sanitized(text, limit=1200):
+        for value in sorted(secret_values, key=len, reverse=True):
+            text = text.replace(value, "[REDACTED]")
+        text = re.sub(r"[a-zA-Z][a-zA-Z0-9+.-]*://[^\s]+", "[URL]", text)
+        text = re.sub(r"/[^\s\"'<>]+", "[PATH]", text)
+        text = re.sub(r"[^\x20-\x7e\n]", "", text)
+        return text[:limit] + (" [TRUNCATED]" if len(text) > limit else "")
+
+    def query(*arguments):
+        try:
+            value = subprocess.run(arguments, capture_output=True, text=True, timeout=5, check=False)
+            return {
+                "returncode": value.returncode,
+                "stdout": sanitized(value.stdout, 2400),
+                "stderr": sanitized(value.stderr),
+            }
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return {"diagnostic_error": type(exc).__name__}
+
+    def executable(path):
+        is_link = None
+        try:
+            is_link = path.is_symlink()
+            target = path.resolve(strict=True)
+            return {
+                "exists": path.exists(),
+                "regular_file": path.is_file(),
+                "symlink": is_link,
+                "executable": os.access(path, os.X_OK),
+                "target_exists": target.exists(),
+                "target_executable": os.access(target, os.X_OK),
+            }
+        except (OSError, RuntimeError) as exc:
+            return {
+                "exists": False if isinstance(exc, FileNotFoundError) else None,
+                "symlink": is_link,
+                "executable": False if isinstance(exc, FileNotFoundError) else None,
+                "target_exists": False if isinstance(exc, FileNotFoundError) else None,
+                "target_executable": False if isinstance(exc, FileNotFoundError) else None,
+                "error_type": type(exc).__name__,
+            }
+
+    properties = (
+        "LoadState",
+        "ActiveState",
+        "SubState",
+        "Result",
+        "ExecMainCode",
+        "ExecMainStatus",
+        "StatusErrno",
+    )
+    status = query(
+        "sudo", "-n", "systemctl", "show", name, "--no-pager", "--property=" + ",".join(properties)
+    )
+    values = dict(
+        line.split("=", 1)
+        for line in status.get("stdout", "").splitlines()
+        if "=" in line and line.split("=", 1)[0] in properties
+    )
+    # not-found describes this observation; it does not claim the unit never existed.
+    unit_present = None if "LoadState" not in values else values["LoadState"] != "not-found"
+    journal = query(
+        "sudo", "-n", "journalctl", "--unit=" + name, "--lines=12", "--no-pager", "--output=cat", "--quiet"
+    )
+    return {
+        "launch_returncode": result.returncode,
+        "launch_stderr": sanitized(result.stderr),
+        "unit_present_at_query": unit_present,
+        "unit_status": values,
+        "status_query": status,
+        "journal": journal,
+        "executable_context": "current runner host namespace; not service namespace",
+        "runner_python": executable(Path(sys.executable)),
+        "bind_mounted_python": executable(python_in_mount),
+    }
 
 
 @pytest.fixture
@@ -93,7 +180,7 @@ def units():
         for key, value in properties.items():
             args += ["--property", f"{key}={value}"]
         started.append((name, state))
-        command(
+        launched = command(
             *args,
             str(python_in_mount),
             "-B",
@@ -101,7 +188,11 @@ def units():
             kind,
             behavior,
             str(state),
+            check=False,
         )
+        if launched.returncode:
+            diagnostic = launch_diagnostics(launched, name, python_in_mount)
+            pytest.fail("W4_LAUNCH_DIAGNOSTIC=" + json.dumps(diagnostic, sort_keys=True), pytrace=False)
         return name, state
 
     yield start
