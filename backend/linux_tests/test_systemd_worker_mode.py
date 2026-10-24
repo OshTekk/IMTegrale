@@ -4,6 +4,7 @@ The post-lock domain boundary is paused. Actual business work, credentials and P
 fencing remain exercised by all five unweakened W2.3 systemd regressions.
 """
 
+import errno
 import grp
 import json
 import os
@@ -317,20 +318,54 @@ def test_unauthorized_identity_and_unprivileged_write_denial(units):
     rejected(units, "general", "WORKER_MODE_LOCK_UNAVAILABLE", user="w4-outsider")
     # Explicitly test outside the read-only service mount as well: root ownership,
     # rather than ProtectSystem alone, must prevent ordinary-process modification.
+    probe = """
+import errno, json, os, sys
+uid, gid = int(sys.argv[1]), int(sys.argv[2])
+assert os.geteuid() == uid != 0
+assert os.getegid() == gid
+if sys.argv[4] == 'readable':
+    fd = os.open(sys.argv[3], os.O_RDONLY | os.O_NOFOLLOW)
+    os.close(fd)
+try:
+    fd = os.open(sys.argv[3], os.O_WRONLY | os.O_NOFOLLOW)
+except PermissionError as exc:
+    assert exc.errno == errno.EACCES
+    print(json.dumps({'uid': os.geteuid(), 'gid': os.getegid(), 'errno': exc.errno}))
+else:
+    os.close(fd)
+    raise SystemExit('W4_DAC_WRITE_UNEXPECTEDLY_ALLOWED')
+"""
     for user in ("w4-calendar", "w4-outsider"):
+        group = "botnote" if user == "w4-calendar" else "nogroup"
+        uid, gid = pwd.getpwnam(user).pw_uid, grp.getgrnam(group).gr_gid
+        # Use the runner's already-authorized root command path, then drop identity.
+        # Do not change sudoers or treat a launcher refusal as filesystem denial.
         result = command(
             "sudo",
             "-n",
+            "/usr/sbin/runuser",
             "-u",
             user,
             "-g",
-            "botnote" if user == "w4-calendar" else "nogroup",
+            group,
+            "--",
             "/usr/bin/python3",
             "-c",
-            'import os; os.open("/run/botnote-worker-mode/mode.lock", os.O_WRONLY | os.O_NOFOLLOW)',
+            probe,
+            str(uid),
+            str(gid),
+            str(LOCK),
+            "readable" if user == "w4-calendar" else "unreadable",
             check=False,
         )
-        assert result.returncode != 0 and "PermissionError" in result.stderr
+        if result.returncode:
+            stderr = re.sub(r"/[^\s\"'<>]+", "[PATH]", result.stderr)
+            stderr = re.sub(r"[^\x20-\x7e\n]", "", stderr)[:600]
+            pytest.fail(
+                "W4_DAC_PROBE_FAILED=" + json.dumps({"returncode": result.returncode, "stderr": stderr}),
+                pytrace=False,
+            )
+        assert json.loads(result.stdout) == {"uid": uid, "gid": gid, "errno": errno.EACCES}
 
 
 @pytest.mark.parametrize(
