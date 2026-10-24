@@ -114,13 +114,14 @@ def launch_diagnostics(result, name, python_in_mount):
         "sudo", "-n", "journalctl", "--unit=" + name, "--lines=12", "--no-pager", "--output=cat", "--quiet"
     )
     return {
-        "launch_returncode": result.returncode,
-        "launch_stderr": sanitized(result.stderr),
+        "launch_returncode": result.returncode if result is not None else None,
+        "launch_stderr": sanitized(result.stderr) if result is not None else "",
         "unit_present_at_query": unit_present,
         "unit_status": values,
         "status_query": status,
         "journal": journal,
         "executable_context": "current runner host namespace; not service namespace",
+        "host_launcher": executable(Path("/usr/bin/env")),
         "runner_python": executable(Path(sys.executable)),
         "bind_mounted_python": executable(python_in_mount),
     }
@@ -128,6 +129,7 @@ def launch_diagnostics(result, name, python_in_mount):
 
 @pytest.fixture
 def units():
+    assert Path("/usr/bin/env").is_file() and os.access("/usr/bin/env", os.X_OK)
     state_root = Path(tempfile.mkdtemp(prefix="w4-lock-"))
     state_root.chmod(0o755)
     # Read-only private bind gives distinct service UIDs access to the PUBLIC tree
@@ -182,6 +184,7 @@ def units():
         started.append((name, state))
         launched = command(
             *args,
+            "/usr/bin/env",
             str(python_in_mount),
             "-B",
             str(source_mount / "scripts/w4_lock_probe.py"),
@@ -214,9 +217,13 @@ def marker(unit, prefix):
         if result:
             return result
         # Fail quickly for setup/permissions/exec failures; never dump environment.
-        if show(name, "ActiveState") == "failed":
-            failures = [json.loads(path.read_text()) for path in state.glob("failure-*.json")]
-            pytest.fail(f"W4_UNIT_FAILED status={show(name, 'ExecMainStatus')} codes={failures}")
+        if show(name, "ActiveState") in {"failed", "inactive"}:
+            python_in_mount = state.parent / "source" / Path(sys.executable).relative_to(ROOT)
+            diagnostic = launch_diagnostics(None, name, python_in_mount)
+            diagnostic["failure_codes"] = [
+                json.loads(path.read_text()) for path in state.glob("failure-*.json")
+            ]
+            pytest.fail("W4_UNIT_FAILED_DIAGNOSTIC=" + json.dumps(diagnostic, sort_keys=True), pytrace=False)
         return None
 
     return eventually(ready)

@@ -73,7 +73,11 @@ jobs:
           systemctl --version | head -1
           test -f /sys/fs/cgroup/cgroup.controllers
           sudo -n true
-      - name: W4.1 single-case launch diagnostic
+      - name: Stage A - worker-mode smoke gate
+        id: worker_mode_smoke
         run: >-
           .venv/bin/pytest -x -s
           backend/linux_tests/test_systemd_worker_mode.py::test_shared_legacy_concurrency_and_each_holder_excludes_general
+      - name: Stage B - all 17 Linux systemd cases
+        if: ${{ success() && steps.worker_mode_smoke.outcome == 'success' }}
+        run: .venv/bin/pytest -s backend/linux_tests
