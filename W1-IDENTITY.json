@@ -107,5 +107,12 @@
       "backend/postgres_tests/test_worker_mode_exclusion.py": "a1c609c860a3ef7ea2c2ed7d3be978615103bd12aa35b49b3c2f60283bffa1ea",
       "backend/postgres_tests/test_general_worker.py": "7a9eda1432b57ae8a265914dd736eea99617054e839fc4de44cdc3986fc6eead"
     }
+  },
+  "w5_templates": {
+    "source_commit": "57432f058eb397a0d86ba31c3b3e074c93381bfb",
+    "sha256": {
+      "deploy/botnote-general-worker.service": "1b8faedda5a3fb780c3cd5e1b3eafadc89fac681b5cdfd48972695aa8b538611",
+      "deploy/botnote-worker-mode.tmpfiles.conf": "6dacdbe4f4e031ba1e524b18143d2e0a67cd3c9dffda3a9c4276fede740bea3c"
+    }
   }
 }

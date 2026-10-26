@@ -26,3 +26,12 @@ for name, digest in w3.items():
     assert hashlib.sha256((root / name).read_bytes()).hexdigest() == digest, name
 print("W1 evidence retained: 87 original files unchanged; corrected config and W3 overrides explicit")
 print(f"Corrected W2.2 candidate: {candidate['file']} sha256={candidate['sha256']}")
+
+w5 = manifest["w5_templates"]
+assert w5["source_commit"] == "57432f058eb397a0d86ba31c3b3e074c93381bfb"
+assert set(w5["sha256"]) == {
+    "deploy/botnote-general-worker.service", "deploy/botnote-worker-mode.tmpfiles.conf",
+}
+for name, digest in w5["sha256"].items():
+    assert hashlib.sha256((root / name).read_bytes()).hexdigest() == digest, name
+print("W5 opt-in templates match their canonical local source; application bytes unchanged")

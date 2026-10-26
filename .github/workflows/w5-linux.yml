@@ -1,11 +1,11 @@
-name: W4 replacement Linux flock qualification
+name: W5 opt-in systemd profile qualification
 on:
   push:
-    branches: [codex/w4-linux-flock-v2]
+    branches: [codex/w5-systemd-profile]
 permissions:
   contents: read
 concurrency:
-  group: w4-v2-linux-${{ github.ref }}
+  group: w5-profile-linux-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   qualification:
@@ -24,6 +24,7 @@ jobs:
           --health-cmd "pg_isready -U w2_synthetic -d w2_worker_test"
           --health-interval 5s --health-timeout 5s --health-retries 10
     env:
+      BOTNOTE_W5_TMPFILES: 'true'
       PYTHONPATH: backend
       BOTNOTE_ENVIRONMENT: test
       BOTNOTE_DATABASE_URL: postgresql+psycopg://w2_synthetic:w2-disposable-only@127.0.0.1:5432/w2_worker_test
@@ -74,6 +75,8 @@ jobs:
           test -f /sys/fs/cgroup/cgroup.controllers
           sudo -n true
           test -x /usr/sbin/runuser
+      - name: W5 full sandbox and native tmpfiles gate
+        run: .venv/bin/pytest -x -s backend/linux_tests/test_systemd_w5_profile.py
       - name: Stage A - worker-mode and DAC smoke gate
         id: worker_mode_smoke
         run: >-
@@ -82,4 +85,4 @@ jobs:
           backend/linux_tests/test_systemd_worker_mode.py::test_unauthorized_identity_and_unprivileged_write_denial
       - name: Stage B - all 17 Linux systemd cases
         if: ${{ success() && steps.worker_mode_smoke.outcome == 'success' }}
-        run: .venv/bin/pytest -s backend/linux_tests
+        run: .venv/bin/pytest -s backend/linux_tests/test_systemd_general.py backend/linux_tests/test_systemd_worker_mode.py

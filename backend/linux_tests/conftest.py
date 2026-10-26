@@ -46,11 +46,20 @@ def provision_worker_lock():
                 user,
             )
             users_created.append(user)
-        root("install", "-d", "-o", "root", "-g", "botnote", "-m", "0750", str(DIRECTORY))
-        directory_created = True
-        root(
-            "install", "-o", "root", "-g", "botnote", "-m", "0440", "/dev/null", str(DIRECTORY / "mode.lock")
-        )
+        if os.environ.get("BOTNOTE_W5_TMPFILES") == "true":
+            # Exercise the exact opt-in rule, never the host's complete rule set.
+            directory_created = True
+            root(
+                "systemd-tmpfiles", "--create",
+                str(Path(__file__).resolve().parents[2] / "deploy/botnote-worker-mode.tmpfiles.conf"),
+            )
+        else:
+            root("install", "-d", "-o", "root", "-g", "botnote", "-m", "0750", str(DIRECTORY))
+            directory_created = True
+            root(
+                "install", "-o", "root", "-g", "botnote", "-m", "0440",
+                "/dev/null", str(DIRECTORY / "mode.lock"),
+            )
         initial_inode = root("stat", "-Lc", "%d:%i", str(DIRECTORY / "mode.lock")).stdout
         yield
         assert root("stat", "-Lc", "%d:%i", str(DIRECTORY / "mode.lock")).stdout == initial_inode
