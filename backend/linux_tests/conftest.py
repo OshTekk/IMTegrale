@@ -25,7 +25,9 @@ def provision_worker_lock():
     assert not DIRECTORY.exists() and not DIRECTORY.is_symlink()
     with pytest.raises(KeyError):
         grp.getgrnam("botnote")
-    for user in USERS:
+    qualify_w5 = os.environ.get("BOTNOTE_W5_TMPFILES") == "true"
+    users = (*USERS, "botnote") if qualify_w5 else USERS
+    for user in users:
         with pytest.raises(KeyError):
             pwd.getpwnam(user)
     group_created = directory_created = False
@@ -33,8 +35,9 @@ def provision_worker_lock():
     try:
         root("groupadd", "--system", "botnote")
         group_created = True
-        for user in USERS:
-            # Admission relies on actual systemd SupplementaryGroups, not account membership.
+        group_id = grp.getgrnam("botnote").gr_gid
+        for user in users:
+            # W4 identities rely on supplementary groups; W5 tests the exact unit user/group.
             root(
                 "useradd",
                 "--system",
@@ -42,11 +45,11 @@ def provision_worker_lock():
                 "--shell",
                 "/usr/sbin/nologin",
                 "--gid",
-                "nogroup",
+                "botnote" if user == "botnote" else "nogroup",
                 user,
             )
             users_created.append(user)
-        if os.environ.get("BOTNOTE_W5_TMPFILES") == "true":
+        if qualify_w5:
             # Exercise the exact opt-in rule, never the host's complete rule set.
             directory_created = True
             root(
@@ -71,4 +74,12 @@ def provision_worker_lock():
         for user in reversed(users_created):
             root("userdel", user)
         if group_created:
-            root("groupdel", "botnote")
+            try:
+                remaining_group = grp.getgrnam("botnote")
+            except KeyError:
+                # userdel may remove its same-name empty group (USERGROUPS_ENAB).
+                # Only the W5 session owns a same-name user; W4 must retain its group.
+                assert "botnote" in users_created
+            else:
+                assert remaining_group.gr_gid == group_id
+                root("groupdel", "botnote")

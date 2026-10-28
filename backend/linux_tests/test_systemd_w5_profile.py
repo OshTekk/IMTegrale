@@ -36,19 +36,17 @@ def service_properties():
 
 
 @pytest.fixture
-def profile_unit(tmp_path):
+def profile_unit(tmp_path, provision_worker_lock):
     assert os.environ.get("BOTNOTE_W5_TMPFILES") == "true"
-    with pytest.raises(KeyError):
-        pwd.getpwnam("botnote")
+    user = pwd.getpwnam("botnote")
+    group = grp.getgrnam("botnote")
+    assert user.pw_uid != 0 and user.pw_gid == group.gr_gid
     name = f"w5-profile-{uuid.uuid4().hex}.service"
     state = Path("/run") / name.removesuffix(".service")
     source = state / "source"
-    created_user = created_directory = False
+    created_directory = False
     python = source / Path(sys.executable).relative_to(ROOT)
     try:
-        command("sudo", "-n", "useradd", "--system", "--no-create-home", "--shell", "/usr/sbin/nologin",
-                "--gid", "botnote", "botnote")
-        created_user = True
         command("sudo", "-n", "install", "-d", "-m", "0755", str(source))
         created_directory = True
         credential = tmp_path / "canary"
@@ -111,8 +109,9 @@ def profile_unit(tmp_path):
         command("sudo", "-n", "systemctl", "reset-failed", name, check=False)
         if created_directory:
             command("sudo", "-n", "rmdir", str(source), str(state))
-        if created_user:
-            command("sudo", "-n", "userdel", "botnote")
+        # Identity and admission group outlive every function-scoped unit.
+        assert pwd.getpwnam("botnote").pw_uid == user.pw_uid
+        assert grp.getgrnam("botnote").gr_gid == group.gr_gid
 
 
 def test_complete_w5_sandbox_progress_identity_and_shutdown(profile_unit):
