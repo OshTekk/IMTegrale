@@ -53,6 +53,7 @@ jobs:
           import os
           from pathlib import Path
           import platform
+          import re
           import signal
           import subprocess
           import sys
@@ -71,13 +72,15 @@ jobs:
               if not condition:
                   raise RuntimeError(reason)
 
-          def call(*args, end, ok=True):
+          def call(*args, end, ok=True, quiet_stderr=False):
               remaining = end - time.monotonic()
               require(remaining > 0, 'phase deadline expired; never reopen admission')
               result = subprocess.run(args, text=True, capture_output=True,
                                       timeout=min(10, remaining), check=False)
               require(not ok or result.returncode == 0,
                       'bounded command failed: ' + repr(args))
+              require(not quiet_stderr or not result.stderr,
+                      'unexpected command stderr; rc=' + str(result.returncode))
               return result.stdout
 
           def synthetic_processes(end):
@@ -191,10 +194,25 @@ jobs:
                   require(time.monotonic() < preflight_end, 'unit scan deadline expired')
                   if entry.is_symlink():
                       require(Path(os.readlink(entry)).name not in UNITS, 'synthetic alias collision')
-          for verb in ('list-units', 'list-unit-files'):
-              output = call('/usr/bin/systemctl', verb, '--all', '--no-legend', '--no-pager',
-                            'w9-proof-*', end=preflight_end)
-              require(not output.strip(), 'preexisting synthetic unit collision')
+          output = call('/usr/bin/systemctl', 'list-units', '--all', '--no-legend', '--no-pager',
+                        'w9-proof-*', end=preflight_end)
+          require(not output.strip(), 'preexisting synthetic unit collision')
+          # systemd v255 returns -ENOENT for zero list-unit-files matches. Require a
+          # successful full inventory, validate its rows, then filter only our prefix.
+          output = call('/usr/bin/systemctl', 'list-unit-files', '--all', '--full',
+                        '--no-legend', '--no-pager', end=preflight_end, quiet_stderr=True)
+          rows = output.splitlines()
+          require(rows, 'empty full unit-file inventory')
+          states = {'enabled', 'enabled-runtime', 'linked', 'linked-runtime', 'alias',
+                    'masked', 'masked-runtime', 'static', 'disabled', 'indirect',
+                    'generated', 'transient', 'bad'}
+          for row in rows:
+              fields = row.split()
+              require(len(fields) == 3 and
+                      re.fullmatch(r'[A-Za-z0-9:_.@\\-]+\.[a-z]+', fields[0]) and
+                      fields[1] in states and fields[2] in {'enabled', 'disabled', 'ignored', '-'},
+                      'invalid unit-file inventory row')
+              require(not fields[0].startswith('w9-proof-'), 'preexisting synthetic unit collision')
           jobs = call('/usr/bin/systemctl', 'list-jobs', '--no-legend', '--no-pager', end=preflight_end)
           require('w9-proof-' not in jobs, 'synthetic job collision')
           def unreadable_cgroup(error):
