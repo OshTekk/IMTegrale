@@ -1,0 +1,231 @@
+name: W10 exact W9 disposable Linux qualification
+
+'on':
+  push:
+    branches:
+      - codex/w10-maintenance-window
+
+permissions:
+  contents: read
+
+concurrency:
+  group: w10-maintenance-window
+  cancel-in-progress: false
+
+jobs:
+  w9:
+    if: >-
+      github.repository == 'OshTekk/IMTegrale' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/codex/w10-maintenance-window' &&
+      github.event.created == true &&
+      github.event.deleted == false &&
+      github.event.forced == false &&
+      github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout only the triggering commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        timeout-minutes: 2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+          lfs: false
+          show-progress: false
+
+      - name: Preflight, one exact W9 run, then leave synthetic admission closed
+        timeout-minutes: 7
+        env:
+          W10_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        shell: bash
+        run: |
+          test "$W10_RUNNER_ENVIRONMENT" = github-hosted
+          test "$RUNNER_OS" = Linux
+          test "$RUNNER_ARCH" = X64
+          /usr/bin/sudo -n /usr/bin/true
+          /usr/bin/sudo -n /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LC_ALL=C \
+            /usr/bin/python3 -I -B - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+          import platform
+          import signal
+          import subprocess
+          import sys
+          import time
+
+          EXPECTED = 'db7256bb9815c549bdc5364311d99b4c07f7f296dbd53e027725c39216d18366'
+          ROOT = Path('/var/lib/w9-maintenance-proof')
+          ETC = Path('/etc/systemd/system')
+          CGROOT = Path('/sys/fs/cgroup')
+          SERVICES = tuple('w9-proof-' + role + '.service' for role in
+                           ('general', 'sync', 'legacy', 'web', 'scheduler'))
+          UNITS = (*SERVICES, 'w9-proof-legacy.timer', 'w9-proof-trigger.service')
+          SCRIPT = Path.cwd() / 'w9_linux_window.py'
+
+          def require(condition, reason):
+              if not condition:
+                  raise RuntimeError(reason)
+
+          def call(*args, end, ok=True):
+              remaining = end - time.monotonic()
+              require(remaining > 0, 'phase deadline expired; never reopen admission')
+              result = subprocess.run(args, text=True, capture_output=True,
+                                      timeout=min(10, remaining), check=False)
+              require(not ok or result.returncode == 0,
+                      'bounded command failed: ' + repr(args))
+              return result.stdout
+
+          def synthetic_processes(end):
+              found = []
+              for entry in Path('/proc').iterdir():
+                  require(time.monotonic() < end, 'process scan deadline expired')
+                  if not entry.name.isdecimal() or int(entry.name) == os.getpid():
+                      continue
+                  try:
+                      args = (entry / 'cmdline').read_bytes().split(b'\0')
+                  except (FileNotFoundError, ProcessLookupError):
+                      continue
+                  if any(b'/var/lib/w9-maintenance-proof' in arg or
+                         arg.rsplit(b'/', 1)[-1] == b'w9_linux_window.py' for arg in args):
+                      found.append(int(entry.name))
+              return found  # Never emit unrelated process arguments.
+
+          def state(unit, end):
+              text = call('/usr/bin/systemctl', 'show', unit,
+                          '--property=Id,ActiveState,SubState,MainPID,ControlPID,Job,ControlGroup',
+                          end=end)
+              values = dict(line.split('=', 1) for line in text.splitlines() if '=' in line)
+              require(values.get('Id') == unit, 'ambiguous synthetic unit identity')
+              return values
+
+          def masks_present():
+              return all((ETC / unit).is_symlink() and
+                         os.readlink(ETC / unit) == '/dev/null' for unit in UNITS)
+
+          def contain(end):
+              # Closure only: no unmask, unlink, evidence removal, or --cleanup.
+              call('/usr/bin/systemctl', 'mask', *UNITS, end=end)
+              fd = os.open(ETC, os.O_RDONLY | os.O_DIRECTORY)
+              try:
+                  os.fsync(fd)
+              finally:
+                  os.close(fd)
+              call('/usr/bin/systemctl', 'daemon-reload', end=end)
+              require(masks_present(), 'incomplete persistent closure')
+              groups = {unit: state(unit, end).get('ControlGroup', '') for unit in UNITS}
+              call('/usr/bin/systemctl', 'stop', '--no-block', *UNITS, end=end)
+              # Inactive units may reject kill; the independent checks below decide success.
+              call('/usr/bin/systemctl', 'kill', '--kill-whom=all', '--signal=SIGKILL',
+                   *SERVICES, 'w9-proof-trigger.service', end=end, ok=False)
+              while True:
+                  free = True
+                  for unit in UNITS:
+                      current = state(unit, end)
+                      free &= (current.get('ActiveState') == 'inactive' and
+                               current.get('SubState') == 'dead' and
+                               current.get('Job') in ('', '0'))
+                      if unit.endswith('.service'):
+                          free &= (current.get('MainPID') == '0' and
+                                   current.get('ControlPID') == '0')
+                      candidates = {groups[unit], current.get('ControlGroup', ''),
+                                    '/system.slice/' + unit} - {''}
+                      for group in candidates:
+                          require(group.startswith('/') and '..' not in group.split('/'),
+                                  'invalid synthetic cgroup path')
+                          try:
+                              events = (CGROOT / group.lstrip('/') / 'cgroup.events').read_text()
+                              free &= 'populated 0' in events.splitlines()
+                          except FileNotFoundError:
+                              pass  # Accepted only with all the other inactive/no-job checks.
+                  jobs = call('/usr/bin/systemctl', 'list-jobs', '--no-legend', '--no-pager',
+                              end=end)
+                  free &= not any(any(unit in line.split() for unit in UNITS)
+                                  for line in jobs.splitlines())
+                  free &= not synthetic_processes(end)
+                  require(masks_present(), 'persistent closure lost')
+                  if free:
+                      print('W10_CONTAINMENT_VERIFIED; LEFT MASKED; DESTROY RUNNER', flush=True)
+                      return
+                  require(time.monotonic() < end, 'synthetic residual; containment NOT verified')
+                  time.sleep(0.1)
+
+          def interrupted(signum, _frame):
+              raise InterruptedError('interrupted: ' + str(signum))
+
+          for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+              signal.signal(sig, interrupted)
+
+          # Everything before the ownership boundary is read-only on the host.
+          preflight_end = time.monotonic() + 45
+          require(sys.platform == 'linux' and os.geteuid() == 0, 'disposable Linux root required')
+          require(sys.executable == '/usr/bin/python3' and sys.version_info[:2] == (3, 12),
+                  'expected system Python 3.12 required')
+          release = platform.freedesktop_os_release()
+          require(release.get('ID') == 'ubuntu' and release.get('VERSION_ID') == '24.04',
+                  'Ubuntu 24.04 required')
+          require(Path('/proc/1/comm').read_text().strip() == 'systemd', 'systemd PID1 required')
+          require((CGROOT / 'cgroup.controllers').is_file(), 'cgroup v2 required')
+          require(call('/usr/bin/stat', '-f', '-c', '%T', str(CGROOT),
+                       end=preflight_end).strip() == 'cgroup2fs', 'cgroup v2 mount required')
+          require(SCRIPT.is_file() and not SCRIPT.is_symlink(), 'regular candidate file required')
+          require(hashlib.sha256(SCRIPT.read_bytes()).hexdigest() == EXPECTED, 'candidate hash mismatch')
+          require(not os.path.lexists(ROOT), 'synthetic root collision; no mutation permitted')
+          require(not any(os.path.lexists(Path('/run/credentials') / unit) for unit in UNITS),
+                  'synthetic credential directory collision')
+          paths = call('/usr/bin/systemd-analyze', 'unit-paths', end=preflight_end).splitlines()
+          require(paths and all(path.startswith('/') for path in paths), 'ambiguous unit search paths')
+          for path in paths:
+              folder = Path(path)
+              if not folder.exists():
+                  continue
+              require(folder.is_dir(), 'ambiguous unit search directory')
+              for pattern in ('w9-proof-*', '*.wants/w9-proof-*',
+                              '*.requires/w9-proof-*', '*.upholds/w9-proof-*'):
+                  require(not any(folder.glob(pattern)), 'synthetic unit or drop-in collision')
+              for entry in folder.iterdir():
+                  require(time.monotonic() < preflight_end, 'unit scan deadline expired')
+                  if entry.is_symlink():
+                      require(Path(os.readlink(entry)).name not in UNITS, 'synthetic alias collision')
+          for verb in ('list-units', 'list-unit-files'):
+              output = call('/usr/bin/systemctl', verb, '--all', '--no-legend', '--no-pager',
+                            'w9-proof-*', end=preflight_end)
+              require(not output.strip(), 'preexisting synthetic unit collision')
+          jobs = call('/usr/bin/systemctl', 'list-jobs', '--no-legend', '--no-pager', end=preflight_end)
+          require('w9-proof-' not in jobs, 'synthetic job collision')
+          def unreadable_cgroup(error):
+              raise error
+
+          for _folder, directories, _files in os.walk(CGROOT, followlinks=False,
+                                                     onerror=unreadable_cgroup):
+              require(time.monotonic() < preflight_end, 'cgroup scan deadline expired')
+              require(not any(name.startswith('w9-proof-') for name in directories),
+                      'synthetic cgroup collision')
+          require(not synthetic_processes(preflight_end), 'synthetic process collision')
+          require(time.monotonic() < preflight_end, 'preflight deadline expired')
+          print('PREFLIGHT_PASSED; exact candidate; exclusive synthetic namespace', flush=True)
+
+          # Namespace ownership has now been established; exactly one candidate invocation.
+          driver = None
+          result = None
+          try:
+              driver = subprocess.Popen(['/usr/bin/python3', '-I', '-B', str(SCRIPT),
+                                         '--authorized-disposable-linux'], start_new_session=True)
+              result = driver.wait(timeout=255)  # W9 alarm 240 s + 15 s external margin.
+          finally:
+              for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+                  signal.signal(sig, signal.SIG_IGN)
+              if driver is not None:
+                  try:
+                      os.killpg(driver.pid, signal.SIGKILL)
+                  except ProcessLookupError:
+                      pass
+                  driver.wait(timeout=5)
+              contain(time.monotonic() + 75)
+          require(result == 0, 'W9 failed; admission remains closed; no retry')
+          print('ONE_W9_RUN_PASSED; SYNTHETIC_SCOPE_ONLY; NO WINDOW CERTIFICATION', flush=True)
+          PY
