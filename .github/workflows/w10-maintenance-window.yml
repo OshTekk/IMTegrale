@@ -18,7 +18,6 @@ jobs:
       github.repository == 'OshTekk/IMTegrale' &&
       github.event_name == 'push' &&
       github.ref == 'refs/heads/codex/w10-maintenance-window' &&
-      github.event.created == true &&
       github.event.deleted == false &&
       github.event.forced == false &&
       github.run_attempt == 1
