@@ -235,4 +235,3 @@ class Observer:
             return
         self.bytes += len(encoded)
         emit('snapshot', **data)
-
