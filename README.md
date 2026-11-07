@@ -1,185 +1,110 @@
-# W10 — préparation locale d'un seul essai W9
+# W10.3 — one synthetic closure diagnostic, local preparation
 
-État : **NON EXÉCUTÉ, NON PUBLIÉ, AUTORISATION DISTINCTE REQUISE**.
-Aucune fenêtre de maintenance certifiée. Ce dépôt neuf contient exclusivement
-le candidat W9 exact, un workflow et ce document de qualification synthétique.
+**Not published or executed. New exact-commit authorization required.**
+`WINDOW_CERTIFIED=false`. W10.2's authorization is consumed.
 
-## Identité et frontière de publication
+The previous run was attempt 1 of [42303017229](https://github.com/OshTekk/IMTegrale/actions/runs/42303017229),
+commit `187d3cc39606613ad9086f33baeb3f2e70dd9879`, workflow
+`.github/workflows/w10-maintenance-window.yml`. It passed preflight, failed
+W9's first closure wait, then failed final containment verification. The exact
+blocking state was not recorded. See [W10.3 review](W10.3-review.md).
 
-`w9_linux_window.py` doit conserver exactement ce SHA-256 :
+## Candidate identity and scope
 
-```text
-db7256bb9815c549bdc5364311d99b4c07f7f296dbd53e027725c39216d18366
-```
+`w9_linux_window.py` is the unchanged original candidate:
+`db7256bb9815c549bdc5364311d99b4c07f7f296dbd53e027725c39216d18366`.
+The workflow now invokes **a different diagnostic candidate**, once:
+`w9_linux_window_diagnostic.py`, SHA-256
+`d7d1eb126ee2e0d892223a2a6c587c125e71f3f2dfe7cf973524651d5d87cc3c`.
+Both hashes are checked before namespace ownership. The diagnostic module is
+`w10_observe.py`; the exact publication commit binds all files. The reviewed
+original-to-diagnostic delta is [w9-diagnostic.patch](w9-diagnostic.patch).
 
-La revue intégrale du candidat ne relève ni secret, credential réel, donnée
-personnelle, adresse ou topologie d'infrastructure, incident opérationnel ou
-procédure interne déployée. Ses imports sont exclusivement Python stdlib :
-argparse, os, pathlib, signal, subprocess, sys, threading et time.
-Il exige les binaires Linux systemd et `/usr/bin/python3`, sans installation,
-source privée, base de données ou accès réseau applicatif. Les valeurs de
-credentials sont littéralement `old` et `new`. Les noms des cinq rôles sont
-ceux du laboratoire, sans mapping vers une installation.
+Only the first closure scenario executes: omission rejection, concurrent start,
+legacy residual rejection, targeted SIGKILL, unchanged complete closure wait,
+and unchanged in-flight assertion. A successful wait returns before direct
+launch/mutation/recovery scenarios. It cannot certify those scenarios or a
+maintenance window. No automatic retry or second experiment.
 
-Le rapport interne mentionné par le docstring du candidat est volontairement
-absent. Aucun rapport opérationnel, test antérieur, historique Git privé ou
-autre source privée n'est transporté. Cette revue classe les trois fichiers
-proposés comme publiables ; elle ne donne pas l'autorisation de les publier.
-L'identité Git du nouveau commit est une identité technique synthétique.
+## Fixed synthetic boundary
 
-## Une seule voie future, à autoriser
+Five consumers: `w9-proof-{general,sync,legacy,web,scheduler}.service`.
+Also `w9-proof-legacy.timer` and `w9-proof-trigger.service`.
+Files are confined to `/var/lib/w9-maintenance-proof`, seven vendor units under
+`/usr/local/lib/systemd/system`, and seven persistent `/etc/systemd/system`
+masks. Credentials are synthetic `old`/`new`; no application data, DB or network.
+No accounts, permission, KillMode, consumer, masking or reopening changes.
+No `--cleanup` invocation, unmask, mask deletion, production service operation,
+package install, artifact upload, release, deployment, cache or private history.
+`daemon-reload` retains its original manager-wide reload effect.
 
-Destination unique envisagée : dépôt public `OshTekk/IMTegrale`, nouvelle branche
-`codex/w10-maintenance-window`, jamais la branche principale. Le workflow ne
-réagit qu'aux pushes de cette branche ; le job exige en plus le dépôt exact,
-une création de branche sans force ni suppression, et `run_attempt == 1`.
-Une branche déjà existante interdit cette procédure : pas d'écrasement,
-suppression/recréation, modification du candidat ou relance automatique.
+Preflight remains read-only and rejects collisions before acquiring ownership.
+Its existing inventories and the wrapper's existing no-synthetic-process
+assertion are retained, including their original host process scan. They are
+not added diagnostics and their contents/argv are never emitted. New diagnostics
+never enumerate host processes or host journals: only exact unit properties,
+exact unit journals, exact synthetic cgroup trees and their associated PID
+metadata. This retains the existing termination assertion without weakening it.
 
-Un job, aucune matrice, un seul appel du candidat, aucun `--cleanup`.
-`contents: read` est la seule permission ; aucun secret configuré, environnement,
-OIDC, runner self-hosted, service, installation, cache, artefact, déploiement ou
-release. Le jeton éphémère de checkout reste limité à la lecture et n'est pas
-persisté. `actions/checkout` est épinglée au commit officiel
-`3d3c42e5aac5ba805825da76410c181273ba90b1` (v7.0.1), profondeur 1,
-sans tags, LFS ni submodules.
+## Observation and failure handling
 
-Le label fixe est `ubuntu-24.04` x64 standard GitHub-hosted ; le contexte doit
-annoncer `github-hosted`. Les préconditions sont vérifiées dans le runner :
-Ubuntu 24.04, `/usr/bin/python3` 3.12 sans optimisation, root par `sudo -n`,
-systemd PID1 et montage cgroup v2. Aucun hôte connecté existant n'est substituable.
-La documentation GitHub décrit ces runners standard comme des VM neuves
-par job, avec sudo sans mot de passe ; cela ne remplace pas les gardes runtime.
+At first useful observation, on sampled change (at most once per second), and
+on closure/confinement exit, emit JSON with phase, remaining monotonic budget,
+independent unit predicates, selected properties, exact remaining synthetic jobs,
+masks, cgroup populated/PIDs and PID UID/PPID/state/start ticks. Actual W9 and wrapper unit predicates are also emitted from their existing
+decision reads; W9 short-circuit rejection is marked with its unit and reason. Snapshots
+are independent reads, not atomic witnesses and not inputs to the decision.
+Missing/error/truncated reads are explicit unknowns. Removed cgroups are labelled
+as removed, never counted as a newly observed empty cgroup. The original decision
+still accepts disappearance only with its original unit/no-job checks.
 
-Références publiques consultées pour cette préparation :
-[runners et privilèges](https://docs.github.com/en/actions/reference/runners/github-hosted-runners),
-[image Ubuntu 24.04](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md),
-[contexte du runner](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#runner-context),
-[checkout épinglé](https://github.com/actions/checkout/commit/3d3c42e5aac5ba805825da76410c181273ba90b1).
+Observation uses at most 0.6 s per sample and at most 0.15 s per command, within
+the current phase deadline. No new sleep, retry or deadline extension. This adds
+measurement overhead and may perturb a race; local tests cannot validate Linux
+behavior. Expiration emits the last observation explicitly stale and starts no
+new command. A lost hard-killed wrapper cannot promise an expiry record.
 
-Avant toute autorisation d'exécution, lire les paramètres distants sans les
-modifier et vérifier `enabled=false`, l'absence de la branche dédiée et des
-autres runs actifs/en attente ; vérifier de nouveau le SHA local soumis et son
-arbre de trois fichiers. L'autorisation doit nommer le SHA du nouveau commit,
-sa publication sur cette seule branche, UN run et le changement temporaire des
-paramètres Actions. Les paramètres distants n'ont pas été consultés ici.
+Selected properties: Id, LoadState, ActiveState, SubState, MainPID, ControlPID,
+Job, ControlGroup, Result, ExecMainCode, ExecMainStatus, TimeoutStopUSec, KillMode,
+SendSIGKILL. Journal: at most three messages per blocking exact unit, once per
+observer. Free journal/stderr text is reduced to a fixed vocabulary (24 tokens,
+first 2048 input characters); paths, argv, credentials and arbitrary message
+values are withheld. Command rc, timeout/error type and redaction/truncation
+status remain explicit. No environment, secret, source-file content, descriptor,
+full command line or unrelated path is printed. PID stat comm is omitted; start
+ticks are reread to identify observed PID reuse. No signals are sent by diagnostics.
 
-Après autorisation seulement : prévoir et autoriser le réglage Actions minimal
-limitant les actions au checkout officiel, conserver la configuration initiale,
-activer temporairement, publier le seul commit approuvé sur la nouvelle branche,
-suivre le seul run sans rerun, puis remettre Actions à `enabled=false` et le
-vérifier par relecture. Restaurer aussi les autres paramètres éventuellement
-modifiés. Ne pas activer des workflows antérieurs ni acheter des crédits.
-Une interruption de l'opérateur peut empêcher cette restauration : ce risque
-de contrôle doit être traité dans l'autorisation, pas présumé résolu par ce YAML.
+Cgroup observation is limited to exact `/system.slice/<unit>` trees, at most 16
+folders and 32 PIDs per tree, 64 process records per snapshot. Unexpected paths
+are withheld and marked out of scope. Regular snapshots have a 128 KiB payload
+budget per observer, with a total 192 KiB including reserved exit/expiry records;
+JSON framing adds small fixed overhead. Output exhaustion is explicit unknown,
+never success. The driver and wrapper have separate observers.
 
-## Ressources et collisions
+Wrapper output separates initial driver result, termination failure, containment
+attempt, command results (including tolerated kill rc), fsync, mask observations,
+residual predicates and verified/non-verified containment. Cleanup exceptions
+are caught and reported; an active initial driver exception is preserved. A
+nonzero driver result remains recorded before cleanup, and the job fails even
+when containment succeeds. Containment failure also always fails the job.
+No runner disposability inference substitutes for verification.
 
-Aucun utilisateur ni groupe n'est créé. Les services tournent sous root
-(aucun `User=`) uniquement sur le runner jetable. Namespace exclusif :
+## Existing execution bounds and future authorization
 
-- `w9-proof-{general,sync,legacy,web,scheduler}.service` ;
-- `w9-proof-legacy.timer` et `w9-proof-trigger.service` ;
-- `/var/lib/w9-maintenance-proof` : copie du script, trois sources synthétiques,
-  barrières, PID et traces, marqueurs de publication et d'incertitude ;
-- sept fichiers d'unités dans `/usr/local/lib/systemd/system` ;
-- sept masques `/etc/systemd/system/<unité> -> /dev/null` ;
-- cgroups systemd et copies temporaires `LoadCredential` gérées par systemd.
+Unchanged: preflight 45 s, W9 alarm 240 s, driver wait 255 s, driver termination
+5 s, first closure 60 s, containment 75 s, command ceiling 10 s; step 7 min,
+checkout 2 min, job 10 min. The workflow keeps `contents: read`, standard
+GitHub-hosted `ubuntu-24.04`, fixed dedicated branch and repository guard,
+ordinary non-forced/non-deleted push only, `run_attempt == 1`, no matrix,
+checkout pinned to `3d3c42e5aac5ba805825da76410c181273ba90b1`, triggering SHA,
+no persisted credentials/tags/LFS/submodules. No workflow_dispatch or rerun route.
 
-Avant toute mutation, le wrapper vérifie le hash et refuse le répertoire
-préexistant, y compris un lien cassé, les noms/drop-ins/liens de dépendance et
-alias synthétiques dans les chemins de recherche systemd, les unités chargées
-ou installées, jobs, cgroups, répertoires `/run/credentials/<unité>` et processus
-synthétiques préexistants.
-Un refus de garde ne déclenche aucune fermeture ni nettoyage : la propriété
-exclusive du namespace n'est pas acquise. Aucun état préexistant n'est effacé.
-Le laboratoire exclut les acteurs privilégiés concurrents et les changements
-de namespace entre la garde et l'installation ; ce n'est pas une défense contre
-un administrateur hostile.
+Before any publication, obtain explicit approval of the new exact commit for
+ordinary push only to `codex/w10-maintenance-window` and ONE diagnostic run,
+including temporary Actions activation and verified restoration to `enabled=false`.
+Recheck remote head/settings/read-only run inventory first; preserve and restore
+all affected prior settings and workflow states. No prior run rerun. No implicit
+activation or retry. A diagnostic PASS is not maintenance-window qualification.
 
-Les commandes privilégiées du candidat et du wrapper sont limitées aux sept
-noms : création des fichiers synthétiques, mask, stop, kill, show et essais
-start/restart. `daemon-reload` recharge le manager globalement ; il ne démarre
-ni n'arrête volontairement d'unité extérieure. Le wrapper consulte aussi les
-inventaires systemd, cgroups et `/proc` sans journaliser de lignes de commande
-extérieures. Les commandes utilisent des listes argv, sans `shell=True`, eval,
-texte de commande construit ou dépendance à un PATH utilisateur.
-
-## Durée, échecs et confinement
-
-Le pilote W9 fixe `SIGALRM(240)` : cette borne ne couvre pas à elle seule tous
-les descendants. Chaque commande W9 est bornée à 10 s ; une fermeture utilise
-un budget monotone de 60 s. Les boucles d'attente explicites sont bornées.
-Les auxiliaires consumer/pre sont volontairement persistants jusqu'à leur arrêt.
-
-Le wrapper prévoit 45 s de gardes, au plus 255 s d'attente du pilote
-(240 + 15 s), jusqu'à 5 s pour sa terminaison et 75 s de confinement.
-L'étape est limitée à 7 min, soit 40 s de marge au-delà de ces 380 s ;
-checkout est limité à 2 min et le job à 10 min, soit 60 s de marge globale.
-Aucun retry. Une course start/mask non observée est un résultat inconclusif,
-jamais une raison de relancer silencieusement.
-
-Après acquisition exclusive du namespace, le `finally` du wrapper termine le
-groupe de processus créé pour le seul pilote, pose/vérifie/synchronise les sept
-masques persistants, recharge systemd, arrête les sept unités et tue uniquement
-les processus de leurs services. Il vérifie ensuite inactive/dead, aucun job,
-MainPID/ControlPID zéro pour les services, cgroups capturés/courants vides
-(`populated 0`) ou disparus sous ces conditions, et aucun processus portant le
-chemin synthétique. Une erreur de lecture ou preuve ambiguë refuse le succès.
-Le résultat de W9 est évalué séparément : un confinement réussi ne transforme
-jamais un échec W9 en réussite.
-
-Sur succès, erreur, timeout ou signal interceptable, il n'existe aucune voie
-automatique de réouverture. Aucun masque, fichier vendor, source, marqueur
-`uncertain` ou preuve n'est retiré. Avant la première fermeture W9, une mort
-non interceptable peut laisser une fermeture incomplète ; un SIGKILL du wrapper,
-une annulation forcée ou un timeout dur du job peut empêcher le confinement.
-Dans ce cas aucune vérification d'arrêt n'est revendiquée : détruire le runner.
-Ne jamais réutiliser cet hôte ni traiter les masques seuls comme une preuve.
-
-Le nettoyage choisi pour cette voie jetable est l'arrêt vérifié quand il est
-possible, la fermeture conservée, puis la destruction de la VM par la plateforme
-en fin de job. Aucun nettoyage de réutilisation d'un hôte persistant n'est fait.
-Le mode `--cleanup` du candidat supprimerait les sept fichiers vendor avant
-unmask et conserverait les preuves ; il exige une revue explicite après succès
-et n'est ni appelé ni autorisé par cette préparation. Son absence de marqueur
-`uncertain` n'est pas, à elle seule, une attestation de succès complet.
-
-Les logs normaux du candidat sont des assertions fixes et les noms des coupures.
-Les erreurs peuvent contenir des commandes/chemins et messages systemd du
-namespace synthétique. Pas de dump d'environnement, données applicatives ou
-credentials réels ; aucune publication d'artefact. Les logs de run seront
-visibles selon les règles du dépôt public, ce qui fait partie de l'autorisation.
-
-## Limites de preuve et validation locale
-
-W9 exige l'absence de jobs/PID/cgroup peuplé pour cinq consommateurs ; le wrapper
-contrôle aussi timer et trigger en sortie. Le résiduel `KillMode=process` doit
-être rejeté avant son SIGKILL ciblé. Les enfants `--mutator` sont tués par SIGKILL
-à cinq coupures ; le pilote principal n'est pas lui-même tué par ce scénario.
-Les reçus en mémoire et la récupération `old/new` sont des assertions de test,
-sans protocole de reprise ou réouverture opérationnel. Le contrôle positif de
-réouverture ne retire aucun masque.
-
-Aucun reboot, perte d'alimentation ou perte réelle de `/run` n'est testé.
-Des liens sous `/etc` après daemon-reload ne prouvent pas le comportement au
-boot. Aucune certification des voies déployées, lancements directs/acteurs
-privilégiés hors contrat, mapping réel des trois sources, fencing PostgreSQL,
-lifecycle de déploiement ou bascule de services. Aucune suite antérieure ni DB
-n'est ajoutée. Une réussite future resterait exclusivement synthétique.
-
-Contrôles statiques locaux : syntaxe du candidat et du wrapper analysée avec
-grammaire Python 3.12 et compilation en mémoire ; YAML analysé avec Psych,
-clés dupliquées et alias refusés ; triggers, permissions, gardes et appel unique
-vérifiés structurellement ; `bash -n` et ShellCheck réussis ; identité exacte,
-revue manuelle de tout l'arbre et motifs de secrets vérifiés. Les motifs ne
-remplacent pas la revue intégrale. Ruff, Bandit, Gitleaks, actionlint et yamllint
-sont indisponibles localement ; rien n'est installé. La vérification Git finale
-doit confirmer racine sans parent, seuls trois fichiers, aucun objet/historique
-partagé, remote, tag ou alternate, intégrité et diff-check.
-
-Ces contrôles ne lancent ni le candidat, ni le wrapper, ni systemd, ni une
-simulation Linux. Leur succès ne valide aucun comportement Linux runtime.
-
-`LINUX_EXECUTION=NOT_RUN` · `WINDOW_CERTIFIED=false` · `GITHUB_PUSH=false` ·
-`ACTIONS_SETTINGS_MODIFIED=false` · `PRODUCTION_MODIFIED=false`.
+Local validation is documented in the review. Tests run only formatting,
+redaction, error handling and static guards; no Linux or systemd run occurred.

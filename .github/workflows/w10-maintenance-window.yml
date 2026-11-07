@@ -1,4 +1,4 @@
-name: W10 exact W9 disposable Linux qualification
+name: W10.3 single closure diagnostic
 
 'on':
   push:
@@ -36,7 +36,7 @@ jobs:
           lfs: false
           show-progress: false
 
-      - name: Preflight, one exact W9 run, then leave synthetic admission closed
+      - name: Preflight, one diagnostic closure, then verify synthetic confinement
         timeout-minutes: 7
         env:
           W10_RUNNER_ENVIRONMENT: ${{ runner.environment }}
@@ -49,6 +49,7 @@ jobs:
           /usr/bin/sudo -n /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LC_ALL=C \
             /usr/bin/python3 -I -B - <<'PY'
           import hashlib
+          import importlib.util
           import os
           from pathlib import Path
           import platform
@@ -58,14 +59,25 @@ jobs:
           import sys
           import time
 
-          EXPECTED = 'db7256bb9815c549bdc5364311d99b4c07f7f296dbd53e027725c39216d18366'
+          EXPECTED = 'd7d1eb126ee2e0d892223a2a6c587c125e71f3f2dfe7cf973524651d5d87cc3c'
+          ORIGINAL_EXPECTED = 'db7256bb9815c549bdc5364311d99b4c07f7f296dbd53e027725c39216d18366'
           ROOT = Path('/var/lib/w9-maintenance-proof')
           ETC = Path('/etc/systemd/system')
           CGROOT = Path('/sys/fs/cgroup')
           SERVICES = tuple('w9-proof-' + role + '.service' for role in
                            ('general', 'sync', 'legacy', 'web', 'scheduler'))
           UNITS = (*SERVICES, 'w9-proof-legacy.timer', 'w9-proof-trigger.service')
-          SCRIPT = Path.cwd() / 'w9_linux_window.py'
+          SCRIPT = Path.cwd() / 'w9_linux_window_diagnostic.py'
+          spec = importlib.util.spec_from_file_location('w10_observe', Path.cwd() / 'w10_observe.py')
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          observer = module.Observer()
+
+          def observe(phase, groups, end, force=False):
+              try:
+                  observer.snapshot(phase, groups, end, force=force)
+              except Exception as exc:
+                  module.emit('observation_error', status=type(exc).__name__, result='UNKNOWN')
 
           def require(condition, reason):
               if not condition:
@@ -74,8 +86,16 @@ jobs:
           def call(*args, end, ok=True, quiet_stderr=False):
               remaining = end - time.monotonic()
               require(remaining > 0, 'phase deadline expired; never reopen admission')
-              result = subprocess.run(args, text=True, capture_output=True,
-                                      timeout=min(10, remaining), check=False)
+              try:
+                  result = subprocess.run(args, text=True, capture_output=True,
+                                          timeout=min(10, remaining), check=False)
+              except Exception as exc:
+                  module.emit('command', operation=args[1], status=type(exc).__name__, rc=None,
+                              unit=args[2] if args[1] == 'show' and args[2] in UNITS else None)
+                  raise
+              if args[1] in ('mask', 'daemon-reload', 'stop', 'kill'):
+                  module.emit('containment_command', operation=args[1], rc=result.returncode,
+                              stderr=module.redacted(result.stderr))
               require(not ok or result.returncode == 0,
                       'bounded command failed: ' + repr(args))
               require(not quiet_stderr or not result.stderr,
@@ -93,7 +113,7 @@ jobs:
                   except (FileNotFoundError, ProcessLookupError):
                       continue
                   if any(b'/var/lib/w9-maintenance-proof' in arg or
-                         arg.rsplit(b'/', 1)[-1] == b'w9_linux_window.py' for arg in args):
+                         arg.rsplit(b'/', 1)[-1] in (b'w9_linux_window.py', b'w9_linux_window_diagnostic.py') for arg in args):
                       found.append(int(entry.name))
               return found  # Never emit unrelated process arguments.
 
@@ -110,11 +130,13 @@ jobs:
                          os.readlink(ETC / unit) == '/dev/null' for unit in UNITS)
 
           def contain(end):
+              module.emit('containment_attempt', attempted=True)
               # Closure only: no unmask, unlink, evidence removal, or --cleanup.
               call('/usr/bin/systemctl', 'mask', *UNITS, end=end)
               fd = os.open(ETC, os.O_RDONLY | os.O_DIRECTORY)
               try:
                   os.fsync(fd)
+                  module.emit("containment_fsync", succeeded=True)
               finally:
                   os.close(fd)
               call('/usr/bin/systemctl', 'daemon-reload', end=end)
@@ -125,9 +147,11 @@ jobs:
               call('/usr/bin/systemctl', 'kill', '--kill-whom=all', '--signal=SIGKILL',
                    *SERVICES, 'w9-proof-trigger.service', end=end, ok=False)
               while True:
+                  observe('final_confinement', groups, end)
                   free = True
                   for unit in UNITS:
                       current = state(unit, end)
+                      observer.unit_decision('final_confinement', unit, current)
                       free &= (current.get('ActiveState') == 'inactive' and
                                current.get('SubState') == 'dead' and
                                current.get('Job') in ('', '0'))
@@ -148,7 +172,9 @@ jobs:
                               end=end)
                   free &= not any(any(unit in line.split() for unit in UNITS)
                                   for line in jobs.splitlines())
-                  free &= not synthetic_processes(end)
+                  residuals = synthetic_processes(end)
+                  observer.residuals(residuals)
+                  free &= not residuals
                   require(masks_present(), 'persistent closure lost')
                   if free:
                       print('W10_CONTAINMENT_VERIFIED; LEFT MASKED; DESTROY RUNNER', flush=True)
@@ -174,6 +200,8 @@ jobs:
           require((CGROOT / 'cgroup.controllers').is_file(), 'cgroup v2 required')
           require(call('/usr/bin/stat', '-f', '-c', '%T', str(CGROOT),
                        end=preflight_end).strip() == 'cgroup2fs', 'cgroup v2 mount required')
+          require(hashlib.sha256((Path.cwd() / 'w9_linux_window.py').read_bytes()).hexdigest() == ORIGINAL_EXPECTED,
+                  'original W9 hash mismatch')
           require(SCRIPT.is_file() and not SCRIPT.is_symlink(), 'regular candidate file required')
           require(hashlib.sha256(SCRIPT.read_bytes()).hexdigest() == EXPECTED, 'candidate hash mismatch')
           require(not os.path.lexists(ROOT), 'synthetic root collision; no mutation permitted')
@@ -224,7 +252,7 @@ jobs:
                       'synthetic cgroup collision')
           require(not synthetic_processes(preflight_end), 'synthetic process collision')
           require(time.monotonic() < preflight_end, 'preflight deadline expired')
-          print('PREFLIGHT_PASSED; exact candidate; exclusive synthetic namespace', flush=True)
+          print('PREFLIGHT_PASSED; distinct diagnostic candidate; exclusive synthetic namespace', flush=True)
 
           # Namespace ownership has now been established; exactly one candidate invocation.
           driver = None
@@ -233,16 +261,40 @@ jobs:
               driver = subprocess.Popen(['/usr/bin/python3', '-I', '-B', str(SCRIPT),
                                          '--authorized-disposable-linux'], start_new_session=True)
               result = driver.wait(timeout=255)  # W9 alarm 240 s + 15 s external margin.
+          except BaseException as exc:
+              module.emit('initial_driver_failure', status=type(exc).__name__)
+              raise
           finally:
+              # Record W9 result before cleanup: secondary failures cannot erase it.
+              module.emit('initial_result', driver_rc=result, driver_completed=result is not None)
               for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
                   signal.signal(sig, signal.SIG_IGN)
-              if driver is not None:
-                  try:
-                      os.killpg(driver.pid, signal.SIGKILL)
-                  except ProcessLookupError:
-                      pass
-                  driver.wait(timeout=5)
-              contain(time.monotonic() + 75)
+              termination_failed = False
+              try:
+                  if driver is not None:
+                      try:
+                          os.killpg(driver.pid, signal.SIGKILL)
+                      except ProcessLookupError:
+                          pass
+                      driver.wait(timeout=5)
+              except BaseException as exc:
+                  termination_failed = True
+                  module.emit('driver_termination_failure', status=type(exc).__name__)
+              containment_end = time.monotonic() + 75
+              try:
+                  contain(containment_end)
+              except BaseException as exc:
+                  observe('final_confinement_failure', {}, containment_end, force=True)
+                  module.emit('containment_result', verified=False, status=type(exc).__name__,
+                              initial_driver_rc=result, result='NON_VERIFIE')
+                  # Keep an active primary exception; otherwise fail explicitly below.
+                  containment_failed = True
+              else:
+                  containment_failed = False
+                  module.emit('containment_result', verified=True)
+              # Do not raise from finally over an active driver failure.
           require(result == 0, 'W9 failed; admission remains closed; no retry')
-          print('ONE_W9_RUN_PASSED; SYNTHETIC_SCOPE_ONLY; NO WINDOW CERTIFICATION', flush=True)
+          require(not containment_failed and not termination_failed,
+                  'final confinement or driver termination failed; NON VERIFIED')
+          print('ONE_DIAGNOSTIC_CLOSURE_PASSED; SYNTHETIC_SCOPE_ONLY; NO WINDOW CERTIFICATION', flush=True)
           PY

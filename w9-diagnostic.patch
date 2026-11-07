@@ -1,0 +1,91 @@
+--- w9_linux_window.py
++++ w9_linux_window_diagnostic.py
+@@ -6,6 +6,7 @@
+ No automatic reopening or cleanup on failure. See w9-maintenance-window.md.
+ """
+ import argparse
++import importlib.util
+ import os
+ from pathlib import Path
+ import signal
+@@ -34,7 +35,7 @@
+     result = subprocess.run(args, text=True, capture_output=True,
+                             timeout=min(10, remaining))
+     require(not ok or result.returncode == 0,
+-            'command failed: ' + repr(args) + '\n' + result.stderr)
++            'synthetic command failed; rc=' + str(result.returncode))
+     return result
+ 
+ 
+@@ -71,17 +72,21 @@
+ 
+ 
+ def process_free(groups, end):
++    observe('closure', groups, end)
+     for unit in SERVICES:
+         s = state(unit, end)
++        OBSERVER.unit_decision('closure', unit, s)
+         if not (s.get('ActiveState') == 'inactive' and s.get('SubState') == 'dead'
+                 and s.get('MainPID') == '0' and s.get('ControlPID') == '0'
+                 and s.get('Job') in ('', '0')):
++            OBSERVER.decision('closure', unit, 'unit_predicate_false')
+             return False
+         for group in {groups.get(unit, ''), s.get('ControlGroup', '')} - {''}:
+             require(group.startswith('/') and '..' not in group.split('/'), 'invalid cgroup')
+             events = CGROOT / group.lstrip('/') / 'cgroup.events'
+             try:
+                 if 'populated 0' not in events.read_text().splitlines():
++                    OBSERVER.decision('closure', unit, 'cgroup_populated_not_zero')
+                     return False
+             except FileNotFoundError:
+                 # Removed cgroup plus inactive/no-job under durable masks.
+@@ -103,10 +108,13 @@
+ 
+ 
+ def wait_free(groups, end):
+-    while not process_free(groups, end):
+-        require(time.monotonic() < end, 'residual/job; closed window required')
+-        time.sleep(0.05)
+-    require(masked(), 'lost exclusion')
++    try:
++        while not process_free(groups, end):
++            require(time.monotonic() < end, 'residual/job; closed window required')
++            time.sleep(0.05)
++        require(masked(), 'lost exclusion')
++    finally:
++        observe('closure_exit', groups, end, force=True)
+ 
+ 
+ def deny_starts():
+@@ -184,7 +192,22 @@
+     ctl('daemon-reload')
+ 
+ 
++OBSERVER = None
++
++
++def observe(phase, groups, end, force=False):
++    try:
++        OBSERVER.snapshot(phase, groups, end, force=force)
++    except Exception as exc:
++        print('W10_DIAG observation_error=' + type(exc).__name__ + '; UNKNOWN', flush=True)
++
++
+ def run(script):
++    global OBSERVER
++    spec = importlib.util.spec_from_file_location('w10_observe', script.with_name('w10_observe.py'))
++    module = importlib.util.module_from_spec(spec)
++    spec.loader.exec_module(module)
++    OBSERVER = module.Observer()
+     setup(script)
+     durable(ROOT / 'general.release', 'go')
+     ctl('start', SERVICES[0])
+@@ -245,6 +268,8 @@
+     ctl('kill', '--kill-who=all', '--signal=SIGKILL', SERVICES[2])
+     wait_free(groups, end)
+     require(not (ROOT / 'general.entered').exists(), 'in-flight start escaped stop')
++    print('ONE_CLOSURE_SCENARIO_PASSED; NO WINDOW CERTIFICATION', flush=True)
++    return  # Diagnostic scope ends here; later W9 scenarios are not executed.
+     deny_starts()
+     # A pre-admitted direct process is outside the contract. Demonstrate, then kill.
+     outside = subprocess.Popen([sys.executable, str(ROOT / 'experiment.py'), '--consumer', 'outside'])
