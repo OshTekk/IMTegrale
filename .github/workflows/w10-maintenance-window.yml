@@ -1,4 +1,4 @@
-name: W10.4 bounded maintenance window qualification
+name: W11 confined credstore synthetic Linux qualification
 
 'on':
   push:
@@ -36,8 +36,13 @@ jobs:
           lfs: false
           show-progress: false
 
-      - name: Local quiescence and diagnostic regressions
-        run: /usr/bin/python3 -B -m unittest test_w10_diagnostics test_w104_quiescence -q
+      - name: Receive pinned ephemeral test inputs (never print private source)
+        env:
+          W11_EPHEMERAL_INPUT: ${{ secrets.W11_EPHEMERAL_SOURCE }}
+        run: /usr/bin/python3 -B w11_ephemeral_input.py unpack "$RUNNER_TEMP/w11-ephemeral-input"
+
+      - name: Offline regressions against exact private implementation (redacted)
+        run: /usr/bin/python3 -B w11_ephemeral_input.py regressions "$RUNNER_TEMP/w11-ephemeral-input"
 
       - name: Preflight, full corrected experiment, then verify synthetic confinement
         timeout-minutes: 7
@@ -50,6 +55,7 @@ jobs:
           test "$RUNNER_ARCH" = X64
           /usr/bin/sudo -n /usr/bin/true
           /usr/bin/sudo -n /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LC_ALL=C \
+            W11_CREDSTORE_SOURCE="$RUNNER_TEMP/w11-ephemeral-input" \
             /usr/bin/python3 -I -B - <<'PY'
           import hashlib
           import importlib.util
@@ -71,6 +77,7 @@ jobs:
                            ('general', 'sync', 'legacy', 'web', 'scheduler'))
           UNITS = (*SERVICES, 'w9-proof-legacy.timer', 'w9-proof-trigger.service')
           SCRIPT = Path.cwd() / 'w9_linux_window_diagnostic.py'
+          DRIVER = Path.cwd() / 'w11_linux_coupling.py'
           spec = importlib.util.spec_from_file_location('w10_observe', Path.cwd() / 'w10_observe.py')
           module = importlib.util.module_from_spec(spec)
           spec.loader.exec_module(module)
@@ -222,8 +229,7 @@ jobs:
           driver = None
           result = None
           try:
-              driver = subprocess.Popen(['/usr/bin/python3', '-I', '-B', str(SCRIPT),
-                                         '--authorized-disposable-linux'], start_new_session=True)
+              driver = subprocess.Popen(['/usr/bin/python3', '-I', '-B', str(DRIVER)], start_new_session=True)
               result = driver.wait(timeout=255)  # W9 alarm 240 s + 15 s external margin.
           except BaseException as exc:
               module.emit('initial_driver_failure', status=type(exc).__name__)
@@ -262,3 +268,7 @@ jobs:
                   'final confinement or driver termination failed; NON VERIFIED')
           print('BOUNDED_SYSTEMD_WINDOW_QUALIFIED; SYNTHETIC_SCOPE_ONLY; NO_REBOOT_OR_DB_CERTIFICATION', flush=True)
           PY
+
+      - name: Remove only the exact ephemeral private test inputs
+        if: always()
+        run: /usr/bin/python3 -B w11_ephemeral_input.py cleanup "$RUNNER_TEMP/w11-ephemeral-input"

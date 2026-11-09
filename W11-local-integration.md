@@ -49,4 +49,22 @@ credential/unit mapping, DB fencing, interruption by process death/reboot, and
 production deployment are NOT certified. Polling proofs cannot exclude a trusted
 privileged actor removing masks between observations. The next step is a bounded
 Linux experiment of this exact local coupling using only synthetic resources,
-with separate authorization; no production or remote execution is authorized here.
+under the standing synthetic qualification authority in AGENTS.md; production remains unauthorized.
+
+## Prepared Linux coupling
+
+The workflow now receives ONLY three pinned test-source files through a temporary
+repository secret; neither their contents nor private Git history enters this
+public tree. The secret must not preexist, is removed after every run, and no
+private input is uploaded as an artifact. Fixed-name bounded decoding verifies
+all source hashes before imports. Private tracebacks and test streams are withheld;
+public evidence contains counts, fixed cut labels, observation status and hashes.
+The input is removed on the runner with an always step, and the runner is disposable.
+
+The Linux adapter retains the qualified W10.4 fixture and strict observations,
+then kills independent real-manager owners at PREPARED, partial publication and
+COMMITTED boundaries and during recovery. All five final generations, journals,
+start/restart refusal, fresh proof, final confinement and the historical window
+cuts are required. The database probe remains explicitly simulated; this stage
+cannot certify PostgreSQL fencing or production source mapping. Two adapter
+regressions exercise actual process death locally with simulated observations.

@@ -176,7 +176,7 @@ class Diagnostics(unittest.TestCase):
                 if not condition:
                     raise RuntimeError(reason)
             ns = {'subprocess': types.SimpleNamespace(Popen=lambda *a, **k: driver),
-                  'SCRIPT': 'synthetic', 'module': types.SimpleNamespace(emit=lambda kind, **kw: events.append((kind, kw))),
+                  'SCRIPT': 'synthetic', 'DRIVER': 'synthetic', 'module': types.SimpleNamespace(emit=lambda kind, **kw: events.append((kind, kw))),
                   'signal': types.SimpleNamespace(SIGINT=2, SIGTERM=15, SIGHUP=1, SIG_IGN=0, SIGKILL=9, signal=lambda *a: None),
                   'os': types.SimpleNamespace(killpg=lambda *a: None), 'time': obs.time,
                   'contain': contain, 'observe': lambda *a, **k: None, 'require': require}
