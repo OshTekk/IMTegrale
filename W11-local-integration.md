@@ -68,3 +68,11 @@ start/restart refusal, fresh proof, final confinement and the historical window
 cuts are required. The database probe remains explicitly simulated; this stage
 cannot certify PostgreSQL fencing or production source mapping. Two adapter
 regressions exercise actual process death locally with simulated observations.
+
+W11 Linux result: commit `a4b2066544e19846a40385a69692aecbfd9c9f09`,
+run https://github.com/OshTekk/IMTegrale/actions/runs/42712022267 succeeded.
+All five real-manager owner-death cuts and final confinement passed; the 37
+regressions passed with no skips. Actions and workflow states were restored,
+and the ephemeral source secret was removed. This uses one W11 run of three.
+W12 is a distinct candidate and changes the pinned manager identity explicitly;
+see `W12-confined-commands.md`. It does not retroactively change W11 evidence.

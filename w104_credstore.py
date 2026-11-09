@@ -1,5 +1,8 @@
 """Local coupling to W10.4's fixed synthetic namespace; no deployment entrypoint."""
 
+import contextlib
+import sys
+
 from w10_observe import UNITS, general_stop_evidence, namespace_quiescent
 
 
@@ -18,8 +21,18 @@ def confined_manager(manager_type, policy, *, groups, deadline, observer, **kwar
         raise ValueError('mutation guard must be the fixed W10.4 proof')
 
     def guard():
-        if not namespace_quiescent(groups, deadline, observer):
-            return False
-        return general_stop_evidence(deadline)['expected_pre_sigterm'] is True
+        # The historical command emits exactly one JSON object on stdout.
+        with contextlib.redirect_stdout(sys.stderr):
+            if not namespace_quiescent(groups, deadline, observer):
+                return False
+            return general_stop_evidence(deadline)['expected_pre_sigterm'] is True
 
     return manager_type(policy, mutation_guard=guard, **kwargs)
+
+
+def confined_main(manager_module, argv, *, groups, deadline, observer, **kwargs):
+    """Keep the historical parser, dispatch, apply gate and redacted reports."""
+    return manager_module.safe_main(
+        argv, manager_factory=lambda policy: confined_manager(
+            manager_module.CredstoreManager, policy, groups=groups,
+            deadline=deadline, observer=observer, **kwargs))

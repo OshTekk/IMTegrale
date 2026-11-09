@@ -10,7 +10,7 @@ import sys
 import unittest
 
 HASHES = {
-    'manager.py': '046a3d7b002a33192b95e529397fd95d5b0be1bee77685fb3be855dc4fff44e6',
+    'manager.py': '2165c545706b7d6c04b1fb3e5884212c2d1b683d702c17567c102c154c275985',
     'tests/helpers.py': '717bfad2b4652019b617ffdcf3c95becd63931632b8b912c254c7e8251caf180',
     'tests/__init__.py': '01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b',
 }
@@ -53,13 +53,14 @@ def regressions(root):
     verify(root)
     os.environ['W11_CREDSTORE_SOURCE'] = str(root)
     suite = unittest.defaultTestLoader.loadTestsFromNames(
-        ['test_w10_diagnostics', 'test_w104_quiescence', 'test_w11_credstore'])
+        ['test_w10_diagnostics', 'test_w104_quiescence', 'test_w11_credstore',
+         'test_w11_linux_adapter', 'test_w12_commands'])
     # A failed private frame must not publish private source lines in public logs.
     result = unittest.TextTestRunner(stream=io.StringIO(), verbosity=0).run(suite)
-    print(json.dumps({'w11_local_regressions': result.testsRun,
+    print(json.dumps({'w12_local_regressions': result.testsRun,
                       'failures': len(result.failures), 'errors': len(result.errors),
                       'skips': len(result.skipped)}), flush=True)
-    if not result.wasSuccessful() or result.testsRun != 37 or result.skipped:
+    if not result.wasSuccessful() or result.testsRun != 47 or result.skipped:
         raise RuntimeError('bounded private-input regression failure; no private traceback emitted')
 
 

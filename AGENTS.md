@@ -52,3 +52,11 @@ redacted, limited to the audited trusted workflow and explicitly cleaned up.
 Historical W10.4 evidence remains preserved under `.git`; its successful tested
 candidate is a26b00c7f6f26f90a2dd319186d4c7e48bb6c090. This governance update does
 not change that candidate or its synthetic-only certification boundary.
+
+## Milestone ledger
+
+W11 used ONE of THREE runs: a4b2066544e19846a40385a69692aecbfd9c9f09,
+run 42712022267, success. Actions disabled, ephemeral secret removed and prior
+workflow states restored. W12 is a distinct historical-command qualification;
+its actual run count is recorded durably in `.git/w12-remote-run-ledger.json`.
+Never reset an existing ledger after a failure or a new local commit.

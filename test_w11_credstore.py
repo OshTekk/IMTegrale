@@ -16,7 +16,7 @@ import w10_observe as obs
 from w104_credstore import confined_manager
 
 SOURCE = os.environ.get('W11_CREDSTORE_SOURCE')
-MANAGER_HASH = '046a3d7b002a33192b95e529397fd95d5b0be1bee77685fb3be855dc4fff44e6'
+MANAGER_HASH = '2165c545706b7d6c04b1fb3e5884212c2d1b683d702c17567c102c154c275985'
 HELPERS_HASH = '717bfad2b4652019b617ffdcf3c95becd63931632b8b912c254c7e8251caf180'
 
 
@@ -65,7 +65,8 @@ class CredstoreCoupling(unittest.TestCase):
                    patch.object(obs, 'synthetic_processes', return_value=[]),
                    patch.object(self.observer, 'group', return_value={'status': 'disappeared', 'empty': None}),
                    patch.object(obs, 'STOP_STARTED_US', int(time.monotonic() * 1_000_000) - 1000, create=True),
-                   contextlib.redirect_stdout(io.StringIO())]
+                   contextlib.redirect_stdout(io.StringIO()),
+                   contextlib.redirect_stderr(io.StringIO())]
         for item in patches:
             item.__enter__()
             self.addCleanup(item.__exit__, None, None, None)

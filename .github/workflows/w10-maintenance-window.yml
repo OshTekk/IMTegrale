@@ -1,4 +1,4 @@
-name: W11 confined credstore synthetic Linux qualification
+name: W12 historical confined commands synthetic Linux qualification
 
 'on':
   push:
