@@ -73,25 +73,7 @@ def require_coverage(configured):
 
 def process_free(groups, end):
     observe('closure', groups, end)
-    for unit in SERVICES:
-        s = state(unit, end)
-        OBSERVER.unit_decision('closure', unit, s)
-        if not (s.get('ActiveState') == 'inactive' and s.get('SubState') == 'dead'
-                and s.get('MainPID') == '0' and s.get('ControlPID') == '0'
-                and s.get('Job') in ('', '0')):
-            OBSERVER.decision('closure', unit, 'unit_predicate_false')
-            return False
-        for group in {groups.get(unit, ''), s.get('ControlGroup', '')} - {''}:
-            require(group.startswith('/') and '..' not in group.split('/'), 'invalid cgroup')
-            events = CGROOT / group.lstrip('/') / 'cgroup.events'
-            try:
-                if 'populated 0' not in events.read_text().splitlines():
-                    OBSERVER.decision('closure', unit, 'cgroup_populated_not_zero')
-                    return False
-            except FileNotFoundError:
-                # Removed cgroup plus inactive/no-job under durable masks.
-                pass
-    return True
+    return OBSERVER_MODULE.namespace_quiescent(groups, end, OBSERVER)
 
 
 def close(groups):
@@ -103,6 +85,8 @@ def close(groups):
         os.close(fd)
     ctl('daemon-reload', end=end)
     require(masked(), 'admission not closed BEFORE stop')
+    OBSERVER_MODULE.emit('stop_intent', unit=SERVICES[0], action='systemctl_stop',
+                         requested_signal='SIGTERM', held_in_pre=True)
     ctl('stop', '--no-block', *UNITS, end=end)
     return end
 
@@ -193,6 +177,7 @@ def setup(script):
 
 
 OBSERVER = None
+OBSERVER_MODULE = None
 
 
 def observe(phase, groups, end, force=False):
@@ -203,10 +188,11 @@ def observe(phase, groups, end, force=False):
 
 
 def run(script):
-    global OBSERVER
+    global OBSERVER, OBSERVER_MODULE
     spec = importlib.util.spec_from_file_location('w10_observe', script.with_name('w10_observe.py'))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    OBSERVER_MODULE = module
     OBSERVER = module.Observer()
     setup(script)
     durable(ROOT / 'general.release', 'go')
@@ -268,8 +254,15 @@ def run(script):
     ctl('kill', '--kill-who=all', '--signal=SIGKILL', SERVICES[2])
     wait_free(groups, end)
     require(not (ROOT / 'general.entered').exists(), 'in-flight start escaped stop')
-    print('ONE_CLOSURE_SCENARIO_PASSED; NO WINDOW CERTIFICATION', flush=True)
-    return  # Diagnostic scope ends here; later W9 scenarios are not executed.
+    for unit in UNITS:
+        if unit != SERVICES[0]:
+            outcome = state(unit, end)
+            require((outcome.get('ActiveState'), outcome.get('SubState')) == ('inactive', 'dead'),
+                    'unexpected synthetic unit outcome; termination alone is insufficient')
+    signal_evidence = module.general_stop_evidence(end)
+    require(signal_evidence['expected_pre_sigterm'],
+            'unexpected general pre-start termination; quiescence is not experiment success')
+    print('EXPECTED_GENERAL_PRE_SIGTERM_PROVEN; QUIESCENCE_SEPARATE_FROM_EXIT', flush=True)
     deny_starts()
     # A pre-admitted direct process is outside the contract. Demonstrate, then kill.
     outside = subprocess.Popen([sys.executable, str(ROOT / 'experiment.py'), '--consumer', 'outside'])

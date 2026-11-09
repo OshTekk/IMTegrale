@@ -5,15 +5,29 @@
 @@ -37 +38 @@
 -            'command failed: ' + repr(args) + '\n' + result.stderr)
 +            'synthetic command failed; rc=' + str(result.returncode))
-@@ -73,0 +75 @@
+@@ -74,16 +75,2 @@
+-    for unit in SERVICES:
+-        s = state(unit, end)
+-        if not (s.get('ActiveState') == 'inactive' and s.get('SubState') == 'dead'
+-                and s.get('MainPID') == '0' and s.get('ControlPID') == '0'
+-                and s.get('Job') in ('', '0')):
+-            return False
+-        for group in {groups.get(unit, ''), s.get('ControlGroup', '')} - {''}:
+-            require(group.startswith('/') and '..' not in group.split('/'), 'invalid cgroup')
+-            events = CGROOT / group.lstrip('/') / 'cgroup.events'
+-            try:
+-                if 'populated 0' not in events.read_text().splitlines():
+-                    return False
+-            except FileNotFoundError:
+-                # Removed cgroup plus inactive/no-job under durable masks.
+-                pass
+-    return True
 +    observe('closure', groups, end)
-@@ -75,0 +78 @@
-+        OBSERVER.unit_decision('closure', unit, s)
-@@ -78,0 +82 @@
-+            OBSERVER.decision('closure', unit, 'unit_predicate_false')
-@@ -84,0 +89 @@
-+                    OBSERVER.decision('closure', unit, 'cgroup_populated_not_zero')
-@@ -106,4 +111,7 @@
++    return OBSERVER_MODULE.namespace_quiescent(groups, end, OBSERVER)
+@@ -100,0 +88,2 @@
++    OBSERVER_MODULE.emit('stop_intent', unit=SERVICES[0], action='systemctl_stop',
++                         requested_signal='SIGTERM', held_in_pre=True)
+@@ -106,4 +95,7 @@
 -    while not process_free(groups, end):
 -        require(time.monotonic() < end, 'residual/job; closed window required')
 -        time.sleep(0.05)
@@ -25,8 +39,9 @@
 +        require(masked(), 'lost exclusion')
 +    finally:
 +        observe('closure_exit', groups, end, force=True)
-@@ -186,0 +195,10 @@
+@@ -186,0 +179,11 @@
 +OBSERVER = None
++OBSERVER_MODULE = None
 +
 +
 +def observe(phase, groups, end, force=False):
@@ -36,12 +51,20 @@
 +        print('W10_DIAG observation_error=' + type(exc).__name__ + '; UNKNOWN', flush=True)
 +
 +
-@@ -187,0 +206,5 @@
-+    global OBSERVER
+@@ -187,0 +191,6 @@
++    global OBSERVER, OBSERVER_MODULE
 +    spec = importlib.util.spec_from_file_location('w10_observe', script.with_name('w10_observe.py'))
 +    module = importlib.util.module_from_spec(spec)
 +    spec.loader.exec_module(module)
++    OBSERVER_MODULE = module
 +    OBSERVER = module.Observer()
-@@ -247,0 +271,2 @@
-+    print('ONE_CLOSURE_SCENARIO_PASSED; NO WINDOW CERTIFICATION', flush=True)
-+    return  # Diagnostic scope ends here; later W9 scenarios are not executed.
+@@ -247,0 +257,9 @@
++    for unit in UNITS:
++        if unit != SERVICES[0]:
++            outcome = state(unit, end)
++            require((outcome.get('ActiveState'), outcome.get('SubState')) == ('inactive', 'dead'),
++                    'unexpected synthetic unit outcome; termination alone is insufficient')
++    signal_evidence = module.general_stop_evidence(end)
++    require(signal_evidence['expected_pre_sigterm'],
++            'unexpected general pre-start termination; quiescence is not experiment success')
++    print('EXPECTED_GENERAL_PRE_SIGTERM_PROVEN; QUIESCENCE_SEPARATE_FROM_EXIT', flush=True)

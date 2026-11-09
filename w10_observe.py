@@ -10,7 +10,7 @@ UNITS = tuple('w9-proof-' + r + '.service' for r in
               ('general', 'sync', 'legacy', 'web', 'scheduler', 'trigger')) + ('w9-proof-legacy.timer',)
 PROPS = ('Id', 'LoadState', 'ActiveState', 'SubState', 'MainPID', 'ControlPID',
          'Job', 'ControlGroup', 'Result', 'ExecMainCode', 'ExecMainStatus',
-         'TimeoutStopUSec', 'KillMode', 'SendSIGKILL')
+         'TimeoutStopUSec', 'KillMode', 'SendSIGKILL', 'KillSignal', 'FinalKillSignal')
 CGROOT = Path('/sys/fs/cgroup')
 PROC = Path('/proc')
 ETC = Path('/etc/systemd/system')
@@ -57,7 +57,9 @@ class Observer:
         if self.last_units.get(key) != predicates:
             self.last_units[key] = predicates
             self.output({'phase': phase, 'source': 'actual_unit_decision',
-                         'unit': unit, 'predicates': predicates})
+                         'unit': unit, 'predicates': predicates,
+                         'terminal_quiescence_state': unit_quiescent(unit, values),
+                         'exit_state_fields_are_diagnostic': True})
 
     def residuals(self, pids):
         bounded = tuple(sorted(set(pids))[:32])
@@ -125,7 +127,11 @@ class Observer:
                     'pids': sorted(pids)[:32], 'truncated': bool(folders) or pid_truncated or len(pids) > 32}
         except FileNotFoundError:
             # Distinguish a removed root from an incomplete/racing observation.
-            return {'status': 'disappeared' if not root.exists() else 'incomplete', 'empty': None}
+            try:
+                root.lstat()
+            except FileNotFoundError:
+                return {'status': 'disappeared', 'empty': None}
+            return {'status': 'incomplete', 'empty': None}
         except Exception as exc:
             return {'status': type(exc).__name__, 'empty': None}
 
@@ -235,3 +241,114 @@ class Observer:
             return
         self.bytes += len(encoded)
         emit('snapshot', **data)
+
+
+def unit_quiescent(unit, values):
+    """Termination only; failed outcomes remain evidence, never become success."""
+    return (unit in UNITS and values.get('Id') == unit
+            and (values.get('ActiveState'), values.get('SubState')) in
+                {('inactive', 'dead'), ('failed', 'failed')}
+            and values.get('Job') in ('', '0')
+            and (not unit.endswith('.service') or
+                 (values.get('MainPID') == '0' and values.get('ControlPID') == '0')))
+
+
+def synthetic_processes(end):
+    found = []
+    for entry in PROC.iterdir():
+        if time.monotonic() >= end:
+            raise RuntimeError('process observation deadline expired')
+        if not entry.name.isdecimal() or int(entry.name) == os.getpid():
+            continue
+        try:
+            args = (entry / 'cmdline').read_bytes().split(b'\0')
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        if any(b'/var/lib/w9-maintenance-proof' in arg or arg.rsplit(b'/', 1)[-1] in
+               (b'w9_linux_window.py', b'w9_linux_window_diagnostic.py') for arg in args):
+            found.append(int(entry.name))
+    return found  # Only PID metadata may be emitted, never process arguments.
+
+
+def masks_present():
+    return all((ETC / unit).is_symlink() and (ETC / unit).lstat().st_uid == 0
+               and os.readlink(ETC / unit) == '/dev/null' for unit in UNITS)
+
+
+def namespace_quiescent(groups, end, observer):
+    """Fresh fixed-namespace proof under seven persistent masks; errors refuse."""
+    def read(*args):
+        remaining = end - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError('quiescence observation deadline expired')
+        result = subprocess.run(args, capture_output=True, text=True,
+                                timeout=min(10, remaining), check=False)
+        if result.returncode != 0 or len(result.stdout) > 16384:
+            raise RuntimeError('quiescence observation failed')
+        return result.stdout
+
+    if not masks_present():
+        return False
+    free = True
+    for unit in UNITS:
+        text = read('/usr/bin/systemctl', 'show', unit, '--property=' + ','.join(PROPS))
+        values = dict(line.split('=', 1) for line in text.splitlines() if '=' in line)
+        required = {'Id', 'LoadState', 'ActiveState', 'SubState', 'Job', 'ControlGroup'}
+        if unit.endswith('.service'):
+            required |= {'MainPID', 'ControlPID'}
+        if not required <= values.keys() or values['Id'] != unit:
+            raise RuntimeError('incomplete quiescence observation')
+        observer.unit_decision('quiescence', unit, values)
+        free &= unit_quiescent(unit, values)
+        for group in {groups.get(unit, ''), values['ControlGroup'], '/system.slice/' + unit} - {''}:
+            evidence = observer.group(group)
+            if evidence['status'] == 'present':
+                free &= (evidence.get('empty') is True and not evidence.get('pids')
+                         and evidence.get('truncated') is False)
+            elif evidence['status'] != 'disappeared':
+                raise RuntimeError('cgroup observation incomplete')
+    rows = [line.split() for line in read('/usr/bin/systemctl', 'list-jobs',
+                                        '--no-legend', '--no-pager').splitlines()]
+    if any(len(row) != 4 or not row[0].isdigit() for row in rows):
+        raise RuntimeError('invalid job observation')
+    free &= not any(row[1] in UNITS for row in rows)
+    residuals = synthetic_processes(end)
+    observer.residuals(residuals)
+    free &= not residuals
+    return bool(free and masks_present())
+
+
+def general_stop_evidence(end):
+    """Capture only exit codes and a bounded redacted journal, never Exec argv."""
+    unit = 'w9-proof-general.service'
+    def read(*args):
+        remaining = end - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError('signal observation deadline expired')
+        result = subprocess.run(args, capture_output=True, text=True,
+                                timeout=min(10, remaining), check=False)
+        if result.returncode or len(result.stdout) > 16384:
+            raise RuntimeError('signal observation failed')
+        return result.stdout
+    text = read('/usr/bin/systemctl', 'show', unit,
+                '--property=Id,ActiveState,SubState,Result,ExecMainCode,ExecMainStatus,ExecStartPre,KillSignal')
+    values = dict(line.split('=', 1) for line in text.splitlines() if '=' in line)
+    if values.get('Id') != unit:
+        raise RuntimeError('signal unit identity invalid')
+    # ExecStartPre includes paths/argv: extract only its result fields.
+    pre = re.findall(r'code=([a-z]+)\s*;?\s*status=([0-9]+)', values.get('ExecStartPre', ''))
+    evidence = {key: values.get(key) for key in
+                ('ActiveState', 'SubState', 'Result', 'ExecMainCode', 'ExecMainStatus', 'KillSignal')}
+    if any(value is None or not re.fullmatch(r'[A-Za-z0-9_-]{0,40}', value)
+           for value in evidence.values()):
+        raise RuntimeError('signal fields incomplete')
+    evidence['pre_exits'] = [{'code': code, 'status': int(status)} for code, status in pre]
+    evidence['journal'] = redacted(read('/usr/bin/journalctl', '--unit=' + unit,
+                                        '--no-pager', '-n', '8', '--output=cat'))
+    evidence['expected_pre_sigterm'] = (values.get('KillSignal') == '15'
+                                       and pre == [('killed', '15')]
+                                       and values.get('ExecMainCode') == '0'
+                                       and values.get('ExecMainStatus') == '0'
+                                       and values.get('Result') == 'signal')
+    emit('general_stop_signal', unit=unit, **evidence)
+    return evidence

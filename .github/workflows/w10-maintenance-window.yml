@@ -1,4 +1,4 @@
-name: W10.3 single closure diagnostic
+name: W10.4 bounded maintenance window qualification
 
 'on':
   push:
@@ -36,7 +36,10 @@ jobs:
           lfs: false
           show-progress: false
 
-      - name: Preflight, one diagnostic closure, then verify synthetic confinement
+      - name: Local quiescence and diagnostic regressions
+        run: /usr/bin/python3 -B -m unittest test_w10_diagnostics test_w104_quiescence -q
+
+      - name: Preflight, full corrected experiment, then verify synthetic confinement
         timeout-minutes: 7
         env:
           W10_RUNNER_ENVIRONMENT: ${{ runner.environment }}
@@ -59,7 +62,7 @@ jobs:
           import sys
           import time
 
-          EXPECTED = 'd7d1eb126ee2e0d892223a2a6c587c125e71f3f2dfe7cf973524651d5d87cc3c'
+          EXPECTED = '7181f476cbb9fd4c12f747333dfa548d76a161b219b0320e7059b6040f41b970'
           ORIGINAL_EXPECTED = 'db7256bb9815c549bdc5364311d99b4c07f7f296dbd53e027725c39216d18366'
           ROOT = Path('/var/lib/w9-maintenance-proof')
           ETC = Path('/etc/systemd/system')
@@ -103,19 +106,7 @@ jobs:
               return result.stdout
 
           def synthetic_processes(end):
-              found = []
-              for entry in Path('/proc').iterdir():
-                  require(time.monotonic() < end, 'process scan deadline expired')
-                  if not entry.name.isdecimal() or int(entry.name) == os.getpid():
-                      continue
-                  try:
-                      args = (entry / 'cmdline').read_bytes().split(b'\0')
-                  except (FileNotFoundError, ProcessLookupError):
-                      continue
-                  if any(b'/var/lib/w9-maintenance-proof' in arg or
-                         arg.rsplit(b'/', 1)[-1] in (b'w9_linux_window.py', b'w9_linux_window_diagnostic.py') for arg in args):
-                      found.append(int(entry.name))
-              return found  # Never emit unrelated process arguments.
+              return module.synthetic_processes(end)
 
           def state(unit, end):
               text = call('/usr/bin/systemctl', 'show', unit,
@@ -148,34 +139,7 @@ jobs:
                    *SERVICES, 'w9-proof-trigger.service', end=end, ok=False)
               while True:
                   observe('final_confinement', groups, end)
-                  free = True
-                  for unit in UNITS:
-                      current = state(unit, end)
-                      observer.unit_decision('final_confinement', unit, current)
-                      free &= (current.get('ActiveState') == 'inactive' and
-                               current.get('SubState') == 'dead' and
-                               current.get('Job') in ('', '0'))
-                      if unit.endswith('.service'):
-                          free &= (current.get('MainPID') == '0' and
-                                   current.get('ControlPID') == '0')
-                      candidates = {groups[unit], current.get('ControlGroup', ''),
-                                    '/system.slice/' + unit} - {''}
-                      for group in candidates:
-                          require(group.startswith('/') and '..' not in group.split('/'),
-                                  'invalid synthetic cgroup path')
-                          try:
-                              events = (CGROOT / group.lstrip('/') / 'cgroup.events').read_text()
-                              free &= 'populated 0' in events.splitlines()
-                          except FileNotFoundError:
-                              pass  # Accepted only with all the other inactive/no-job checks.
-                  jobs = call('/usr/bin/systemctl', 'list-jobs', '--no-legend', '--no-pager',
-                              end=end)
-                  free &= not any(any(unit in line.split() for unit in UNITS)
-                                  for line in jobs.splitlines())
-                  residuals = synthetic_processes(end)
-                  observer.residuals(residuals)
-                  free &= not residuals
-                  require(masks_present(), 'persistent closure lost')
+                  free = module.namespace_quiescent(groups, end, observer)
                   if free:
                       print('W10_CONTAINMENT_VERIFIED; LEFT MASKED; DESTROY RUNNER', flush=True)
                       return
@@ -296,5 +260,5 @@ jobs:
           require(result == 0, 'W9 failed; admission remains closed; no retry')
           require(not containment_failed and not termination_failed,
                   'final confinement or driver termination failed; NON VERIFIED')
-          print('ONE_DIAGNOSTIC_CLOSURE_PASSED; SYNTHETIC_SCOPE_ONLY; NO WINDOW CERTIFICATION', flush=True)
+          print('BOUNDED_SYSTEMD_WINDOW_QUALIFIED; SYNTHETIC_SCOPE_ONLY; NO_REBOOT_OR_DB_CERTIFICATION', flush=True)
           PY
