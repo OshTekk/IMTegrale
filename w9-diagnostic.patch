@@ -24,10 +24,11 @@
 -    return True
 +    observe('closure', groups, end)
 +    return OBSERVER_MODULE.namespace_quiescent(groups, end, OBSERVER)
-@@ -100,0 +88,2 @@
+@@ -100,0 +88,3 @@
++    OBSERVER_MODULE.STOP_STARTED_US = int(time.monotonic() * 1_000_000)
 +    OBSERVER_MODULE.emit('stop_intent', unit=SERVICES[0], action='systemctl_stop',
 +                         requested_signal='SIGTERM', held_in_pre=True)
-@@ -106,4 +95,7 @@
+@@ -106,4 +96,7 @@
 -    while not process_free(groups, end):
 -        require(time.monotonic() < end, 'residual/job; closed window required')
 -        time.sleep(0.05)
@@ -39,7 +40,7 @@
 +        require(masked(), 'lost exclusion')
 +    finally:
 +        observe('closure_exit', groups, end, force=True)
-@@ -186,0 +179,11 @@
+@@ -186,0 +180,11 @@
 +OBSERVER = None
 +OBSERVER_MODULE = None
 +
@@ -51,14 +52,14 @@
 +        print('W10_DIAG observation_error=' + type(exc).__name__ + '; UNKNOWN', flush=True)
 +
 +
-@@ -187,0 +191,6 @@
+@@ -187,0 +192,6 @@
 +    global OBSERVER, OBSERVER_MODULE
 +    spec = importlib.util.spec_from_file_location('w10_observe', script.with_name('w10_observe.py'))
 +    module = importlib.util.module_from_spec(spec)
 +    spec.loader.exec_module(module)
 +    OBSERVER_MODULE = module
 +    OBSERVER = module.Observer()
-@@ -242,0 +252,7 @@
+@@ -242,0 +253,7 @@
 +    # Observe the pre-start signal before unrelated closure predicates can fail.
 +    while state(SERVICES[0], end)['ControlPID'] != '0':
 +        require(time.monotonic() < end, 'general pre-start termination not observed')
@@ -66,7 +67,7 @@
 +    signal_evidence = module.general_stop_evidence(end)
 +    require(signal_evidence['expected_pre_sigterm'],
 +            'unexpected general pre-start termination; quiescence is not experiment success')
-@@ -247,0 +264,6 @@
+@@ -247,0 +265,6 @@
 +    for unit in UNITS:
 +        if unit != SERVICES[0]:
 +            outcome = state(unit, end)

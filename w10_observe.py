@@ -343,10 +343,25 @@ def general_stop_evidence(end):
            for value in evidence.values()):
         raise RuntimeError('signal fields incomplete')
     evidence['pre_exits'] = [{'code': code, 'status': int(status)} for code, status in pre]
-    evidence['journal'] = redacted(read('/usr/bin/journalctl', '--unit=' + unit,
-                                        '--no-pager', '-n', '8', '--output=cat'))
+    journal = read('/usr/bin/journalctl', '--unit=' + unit, '--no-pager', '-n', '8',
+                   '--output=json', '--output-fields=MESSAGE,__MONOTONIC_TIMESTAMP')
+    messages, control_exits = [], []
+    since = globals().get('STOP_STARTED_US')
+    for line in journal.splitlines():
+        record = json.loads(line)
+        message = record.get('MESSAGE')
+        stamp = record.get('__MONOTONIC_TIMESTAMP', '')
+        if not isinstance(message, str) or not isinstance(stamp, str) or not stamp.isdigit():
+            raise RuntimeError('signal journal observation incomplete')
+        messages.append(redacted(message))
+        match = re.search(r'Control process exited, code=(killed|exited|dumped), status=([0-9]+)/([A-Z0-9]+)', message)
+        if match and since is not None and int(stamp) >= since:
+            control_exits.append({'code': match[1], 'status': int(match[2]), 'signal': match[3]})
+    evidence['journal'] = messages
+    evidence['fresh_control_exits'] = control_exits
     evidence['expected_pre_sigterm'] = (values.get('KillSignal') == '15'
-                                       and pre == [('killed', '15')]
+                                       and (pre == [('killed', '15')] or not values.get('ExecStartPre', '').strip())
+                                       and control_exits == [{'code': 'killed', 'status': 15, 'signal': 'TERM'}]
                                        and values.get('ExecMainCode') == '0'
                                        and values.get('ExecMainStatus') == '0'
                                        and values.get('Result') == 'signal')

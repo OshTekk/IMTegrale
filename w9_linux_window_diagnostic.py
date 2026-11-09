@@ -85,6 +85,7 @@ def close(groups):
         os.close(fd)
     ctl('daemon-reload', end=end)
     require(masked(), 'admission not closed BEFORE stop')
+    OBSERVER_MODULE.STOP_STARTED_US = int(time.monotonic() * 1_000_000)
     OBSERVER_MODULE.emit('stop_intent', unit=SERVICES[0], action='systemctl_stop',
                          requested_signal='SIGTERM', held_in_pre=True)
     ctl('stop', '--no-block', *UNITS, end=end)

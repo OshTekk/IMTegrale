@@ -1,6 +1,7 @@
 """Nine regressions: fresh evidence, termination versus outcome, and signal redaction."""
 import contextlib
 import io
+import json
 import subprocess
 import time
 import types
@@ -90,14 +91,20 @@ class Quiescence(unittest.TestCase):
         self.values['w9-proof-general.service'].update(ActiveState='deactivating', SubState='stop-sigterm')
         self.assertFalse(self.proof())
 
-    def signal_evidence(self, status):
+    def signal_evidence(self, status, pre_present=True, stamp=101):
         text = ('Id=w9-proof-general.service\nActiveState=failed\nSubState=failed\n'
                 'Result=signal\nExecMainCode=0\nExecMainStatus=0\nKillSignal=15\n'
                 'ExecStartPre={ path=/SECRET; argv[]=private; code=killed ; status=' + str(status) + ' }\n')
+        if not pre_present:
+            text = text.split('ExecStartPre=', 1)[0] + 'ExecStartPre=\n'
+        message = ('Control process exited, code=killed, status=' + str(status) +
+                   ('/TERM' if status == 15 else '/KILL') + ' SECRET=private /private/path')
         def read(args, **kwargs):
             return types.SimpleNamespace(returncode=0, stdout=(
-                'killed signal SECRET=private /private/path' if 'journalctl' in args[0] else text), stderr='')
+                json.dumps({'MESSAGE': message, '__MONOTONIC_TIMESTAMP': str(stamp)})
+                if 'journalctl' in args[0] else text), stderr='')
         with patch.object(obs.subprocess, 'run', side_effect=read), \
+             patch.object(obs, 'STOP_STARTED_US', 100, create=True), \
              contextlib.redirect_stdout(io.StringIO()) as output:
             result = obs.general_stop_evidence(time.monotonic() + 5)
         self.assertNotIn('SECRET', output.getvalue())
@@ -115,6 +122,8 @@ class Quiescence(unittest.TestCase):
         self.assertEqual(result['ExecMainCode'], '0')
         self.assertEqual(result['ExecMainStatus'], '0')
         self.assertEqual(result['Result'], 'signal')
+        self.assertTrue(self.signal_evidence(15, pre_present=False)['expected_pre_sigterm'])
+        self.assertFalse(self.signal_evidence(15, stamp=99)['expected_pre_sigterm'])
 
 
 if __name__ == '__main__':
