@@ -62,7 +62,7 @@ jobs:
           import sys
           import time
 
-          EXPECTED = '7181f476cbb9fd4c12f747333dfa548d76a161b219b0320e7059b6040f41b970'
+          EXPECTED = '5150fe5e7d36fc1dd70eb3986f1b6d91fbecf77d5fefafc4a595012df1c8c44f'
           ORIGINAL_EXPECTED = 'db7256bb9815c549bdc5364311d99b4c07f7f296dbd53e027725c39216d18366'
           ROOT = Path('/var/lib/w9-maintenance-proof')
           ETC = Path('/etc/systemd/system')

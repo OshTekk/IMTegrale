@@ -15,6 +15,9 @@ class Quiescence(unittest.TestCase):
         self.values = {unit: {'Id': unit, 'LoadState': 'masked', 'ActiveState': 'inactive',
                              'SubState': 'dead', 'MainPID': '0', 'ControlPID': '0', 'Job': '',
                              'ControlGroup': '', 'Result': 'success'} for unit in obs.UNITS}
+        # Real timers do not expose service PID/ControlGroup properties.
+        for key in ('MainPID', 'ControlPID', 'ControlGroup'):
+            self.values['w9-proof-legacy.timer'].pop(key)
         self.jobs = ''
         self.observer = types.SimpleNamespace(
             unit_decision=lambda *a: None, residuals=lambda *a: None,
@@ -69,6 +72,10 @@ class Quiescence(unittest.TestCase):
                  patch.object(obs.subprocess, 'run', return_value=result):
                 with self.assertRaisesRegex(RuntimeError, 'observation failed'):
                     obs.namespace_quiescent({}, time.monotonic() + 5, self.observer)
+        saved = self.values['w9-proof-general.service'].pop('ControlGroup')
+        with self.assertRaisesRegex(RuntimeError, 'incomplete quiescence'):
+            self.proof()
+        self.values['w9-proof-general.service']['ControlGroup'] = saved
         del self.values['w9-proof-general.service']['Job']
         with self.assertRaisesRegex(RuntimeError, 'incomplete quiescence'):
             self.proof()

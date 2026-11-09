@@ -58,13 +58,18 @@
 +    spec.loader.exec_module(module)
 +    OBSERVER_MODULE = module
 +    OBSERVER = module.Observer()
-@@ -247,0 +257,9 @@
+@@ -242,0 +252,7 @@
++    # Observe the pre-start signal before unrelated closure predicates can fail.
++    while state(SERVICES[0], end)['ControlPID'] != '0':
++        require(time.monotonic() < end, 'general pre-start termination not observed')
++        time.sleep(0.05)
++    signal_evidence = module.general_stop_evidence(end)
++    require(signal_evidence['expected_pre_sigterm'],
++            'unexpected general pre-start termination; quiescence is not experiment success')
+@@ -247,0 +264,6 @@
 +    for unit in UNITS:
 +        if unit != SERVICES[0]:
 +            outcome = state(unit, end)
 +            require((outcome.get('ActiveState'), outcome.get('SubState')) == ('inactive', 'dead'),
 +                    'unexpected synthetic unit outcome; termination alone is insufficient')
-+    signal_evidence = module.general_stop_evidence(end)
-+    require(signal_evidence['expected_pre_sigterm'],
-+            'unexpected general pre-start termination; quiescence is not experiment success')
 +    print('EXPECTED_GENERAL_PRE_SIGTERM_PROVEN; QUIESCENCE_SEPARATE_FROM_EXIT', flush=True)

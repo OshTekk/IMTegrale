@@ -293,14 +293,14 @@ def namespace_quiescent(groups, end, observer):
     for unit in UNITS:
         text = read('/usr/bin/systemctl', 'show', unit, '--property=' + ','.join(PROPS))
         values = dict(line.split('=', 1) for line in text.splitlines() if '=' in line)
-        required = {'Id', 'LoadState', 'ActiveState', 'SubState', 'Job', 'ControlGroup'}
+        required = {'Id', 'LoadState', 'ActiveState', 'SubState', 'Job'}
         if unit.endswith('.service'):
-            required |= {'MainPID', 'ControlPID'}
+            required |= {'MainPID', 'ControlPID', 'ControlGroup'}
         if not required <= values.keys() or values['Id'] != unit:
             raise RuntimeError('incomplete quiescence observation')
         observer.unit_decision('quiescence', unit, values)
         free &= unit_quiescent(unit, values)
-        for group in {groups.get(unit, ''), values['ControlGroup'], '/system.slice/' + unit} - {''}:
+        for group in {groups.get(unit, ''), values.get('ControlGroup', ''), '/system.slice/' + unit} - {''}:
             evidence = observer.group(group)
             if evidence['status'] == 'present':
                 free &= (evidence.get('empty') is True and not evidence.get('pids')

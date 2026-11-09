@@ -249,6 +249,13 @@ def run(script):
     while state(SERVICES[2])['MainPID'] != '0':
         require(time.monotonic() < until, 'legacy principal did not stop')
         time.sleep(0.05)
+    # Observe the pre-start signal before unrelated closure predicates can fail.
+    while state(SERVICES[0], end)['ControlPID'] != '0':
+        require(time.monotonic() < end, 'general pre-start termination not observed')
+        time.sleep(0.05)
+    signal_evidence = module.general_stop_evidence(end)
+    require(signal_evidence['expected_pre_sigterm'],
+            'unexpected general pre-start termination; quiescence is not experiment success')
     require(not process_free(groups, end), 'residual incorrectly accepted')
     print('residual rejected after principal exit', flush=True)
     ctl('kill', '--kill-who=all', '--signal=SIGKILL', SERVICES[2])
@@ -259,9 +266,6 @@ def run(script):
             outcome = state(unit, end)
             require((outcome.get('ActiveState'), outcome.get('SubState')) == ('inactive', 'dead'),
                     'unexpected synthetic unit outcome; termination alone is insufficient')
-    signal_evidence = module.general_stop_evidence(end)
-    require(signal_evidence['expected_pre_sigterm'],
-            'unexpected general pre-start termination; quiescence is not experiment success')
     print('EXPECTED_GENERAL_PRE_SIGTERM_PROVEN; QUIESCENCE_SEPARATE_FROM_EXIT', flush=True)
     deny_starts()
     # A pre-admitted direct process is outside the contract. Demonstrate, then kill.
