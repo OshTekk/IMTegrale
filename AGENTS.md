@@ -60,3 +60,10 @@ run 42712022267, success. Actions disabled, ephemeral secret removed and prior
 workflow states restored. W12 is a distinct historical-command qualification;
 its actual run count is recorded durably in `.git/w12-remote-run-ledger.json`.
 Never reset an existing ledger after a failure or a new local commit.
+
+W12 used ONE of THREE runs: d02a6caf565cf9f446b27c4467ea3323791f39a7,
+run 42713353499, success. Restore/secret cleanup verified. W13 used ZERO remote
+runs; five real local PostgreSQL characterizations passed but demonstrated missing
+database fencing. Do not call those passing characterization tests certification.
+Continue the next safe synthetic proof under the same standing authority, not a
+new SHA approval; production authority or irreversible operations stay excluded.

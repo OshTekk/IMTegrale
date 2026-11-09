@@ -32,3 +32,12 @@ Validated before publication: 47 local regressions pass; credstore 253 tests,
 0 failures/errors, 40 skips; controller 1113 tests, baseline-identical 9 failures,
 27 errors, 2 skips (all 36 failure/error identities compared exactly). Ruff and
 syntax checks pass for new code; inherited security-lint diagnostics are unchanged.
+
+Linux result: public `d02a6caf565cf9f446b27c4467ea3323791f39a7`,
+https://github.com/OshTekk/IMTegrale/actions/runs/42713353499, success.
+All 47 regressions passed without skips; real policy parsing and historical
+command dispatch, killed publication/recovery, all five W11 owner-death cuts,
+the retained W10.4 experiment and final confinement passed. Actions was restored
+disabled, source secret removed, historical states and unrelated settings verified.
+One W12 run used; no corrective run. This certifies only the explicit confined
+embedding and fixed synthetic Linux scope, never the default shell invocation.
