@@ -24,3 +24,20 @@
 - Never reopen admission automatically on failure, erase failed-state evidence,
   increase timeouts to pass, or modify unrelated services. Synthetic Linux
   qualification does not certify production, reboot, database fencing or rollout.
+
+## W10.4 session authorization — 2026-11-09
+
+The user explicitly granted TWO additional remote runs for this session only:
+the exact a26b00c7f6f26f90a2dd319186d4c7e48bb6c090 candidate, plus one final
+corrective candidate if necessary, regardless of the intermediate failure type.
+A narrow correction may proceed after local tests and publication audit without
+a new SHA approval, even if signal origin remained unresolved previously.
+This supersedes the earlier signal-origin condition, not the restoration, scope,
+redaction or integrity invariants. Count actual runs using the saved .git evidence;
+never reset this budget in a later prompt. Restore and independently verify
+Actions disabled after EACH run. Further runs require new user authorization.
+
+Session status: a26b00c7 completed successfully in run 42695555895. One of the
+two additional runs was used; the corrective slot was not needed. No rerun.
+The unused slot does not authorize unrelated work or a future session.
+The tested/public candidate stays a26b00c7; this budget note is local documentation.
