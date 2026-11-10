@@ -77,3 +77,38 @@ Evidence `.git/w15-local-pg-20261110T072852Z/`; two LOCAL attempts retained, ZER
 of THREE remote runs used. These are synthetic characterizations, not global
 rotation certification; the historical manager is unchanged and its W13 gap
 remains. Actions independently verified disabled; no publication occurred.
+
+## Règles permanentes de continuation (instruction utilisateur 2026-11-10)
+
+1. PREUVE = CORRECTION IMMÉDIATE : dès qu'une expérience démontre un défaut
+du gestionnaire/candidat ou une faille de frontière, enchaîner dans le même
+tour par le correctif et sa validation locale, puis Linux synthétique si pertinent.
+Ne pas clôturer au seul constat. Conserver le défaut, les échecs et les limites
+dans les preuves ; une impossibilité d'accès/sécurité doit être expliquée, jamais
+contournée. Ne pas confondre compteurs de quiescence et fermeture/fencing.
+2. ZÉRO FIN MUETTE : chaque réponse finale indique une ligne « État de la feuille
+de route globale », puis se termine par un bloc « 🔄 CONSEIL QUOTA : New Thread »
+prêt à copier-coller si contexte lourd ou jalon majeur clos, ou par
+« ▶️ SUITE EN COURS / ACTION REQUISE » si seul un arbitrage reste nécessaire.
+Cette exigence vaut aussi avant douze tours et remplace l'ancienne absence
+de handoff de routine lorsqu'elle serait contradictoire.
+3. W16 et suite : corriger le candidat du gestionnaire avec admission PostgreSQL
+durable, startup en vol, terminaison explicite, refus des transactions préparées
+et des observations incertaines ; valider publication et recovery. Poursuivre
+local → audit → Ubuntu synthétique si pertinent → GET indépendant enabled=false
+→ jalon suivant. Maximum trois runs distants par jalon, comptabilisés durablement.
+Aucune production, publication privée, réouverture automatique, résolution
+automatique de transaction préparée ou opération irréversible autorisée.
+
+Feuille de route globale : W13–W15 caractérisations acquises ; W16 correction
+du candidat et PostgreSQL réel ; W17 chaîne Linux/systemd + DB et injections
+de panne ; puis preuve des mappings/anciens appelants/autorités et périmètre
+de certification explicite. La certification de production reste hors autorisation.
+
+W16 corrected candidate: 25/25 local PostgreSQL 17.11 cases and 47/47 historical
+regressions pass. Durable admission is distinct from workload counters; startup
+locks cover the post-auth visibility gap. Prepared work/slots/subscriptions/origins
+refuse publication; guarded recovery uses a protected fsynced identity-bound receipt.
+See W16-corrected-postgres-admission.md and `.git/w16-local-run-ledger.json`.
+W16 zero remote runs. W17 real Linux+DB chain has separate durable budget
+`.git/w17-remote-run-ledger.json`; never reset it after failure.

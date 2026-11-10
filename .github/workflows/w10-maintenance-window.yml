@@ -1,4 +1,4 @@
-name: W12 historical confined commands synthetic Linux qualification
+name: W17 durable PostgreSQL and systemd synthetic qualification
 
 'on':
   push:
@@ -36,6 +36,30 @@ jobs:
           lfs: false
           show-progress: false
 
+      - name: Build exact PostgreSQL 17.11 before receiving private inputs
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -n apt-get update -qq
+          sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends bison flex python3-psycopg
+          w16_build="$RUNNER_TEMP/w16-pg-build"
+          w16_install="/tmp/w16-pg17-$GITHUB_RUN_ID"
+          test ! -e "$w16_build"
+          test ! -e "$w16_install"
+          mkdir -m 755 "$w16_build"
+          cd "$w16_build"
+          curl --fail --silent --show-error --location --max-time 60 \
+            https://ftp.postgresql.org/pub/source/v17.11/postgresql-17.11.tar.bz2 -o postgres.tar.bz2
+          echo 'dd27f2b3c59e73ed14aa3324901242bf69a032a6347805f274e6260322d42979  postgres.tar.bz2' | sha256sum -c -
+          tar -xjf postgres.tar.bz2
+          cd postgresql-17.11
+          ./configure --prefix="$w16_install" --without-readline --without-zlib --without-icu > "$w16_build/configure.log" 2>&1 || { tail -60 "$w16_build/configure.log"; exit 1; }
+          make -s -j2 > "$w16_build/make.log" 2>&1 || { tail -60 "$w16_build/make.log"; exit 1; }
+          make -s install > "$w16_build/install.log" 2>&1 || { tail -60 "$w16_build/install.log"; exit 1; }
+          test "$("$w16_install/bin/postgres" --version)" = 'postgres (PostgreSQL) 17.11'
+          echo "W16_POSTGRES_BIN=$w16_install/bin" >> "$GITHUB_ENV"
+
       - name: Receive pinned ephemeral test inputs (never print private source)
         env:
           W11_EPHEMERAL_INPUT: ${{ secrets.W11_EPHEMERAL_SOURCE }}
@@ -55,7 +79,7 @@ jobs:
           test "$RUNNER_ARCH" = X64
           /usr/bin/sudo -n /usr/bin/true
           /usr/bin/sudo -n /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LC_ALL=C \
-            W11_CREDSTORE_SOURCE="$RUNNER_TEMP/w11-ephemeral-input" \
+            W11_CREDSTORE_SOURCE="$RUNNER_TEMP/w11-ephemeral-input" W16_POSTGRES_BIN="$W16_POSTGRES_BIN" \
             /usr/bin/python3 -I -B - <<'PY'
           import hashlib
           import importlib.util
@@ -77,7 +101,7 @@ jobs:
                            ('general', 'sync', 'legacy', 'web', 'scheduler'))
           UNITS = (*SERVICES, 'w9-proof-legacy.timer', 'w9-proof-trigger.service')
           SCRIPT = Path.cwd() / 'w9_linux_window_diagnostic.py'
-          DRIVER = Path.cwd() / 'w11_linux_coupling.py'
+          DRIVER = Path.cwd() / 'w17_linux_coupling.py'
           spec = importlib.util.spec_from_file_location('w10_observe', Path.cwd() / 'w10_observe.py')
           module = importlib.util.module_from_spec(spec)
           spec.loader.exec_module(module)
