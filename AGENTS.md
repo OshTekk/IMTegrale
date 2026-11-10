@@ -67,3 +67,13 @@ runs; five real local PostgreSQL characterizations passed but demonstrated missi
 database fencing. Do not call those passing characterization tests certification.
 Continue the next safe synthetic proof under the same standing authority, not a
 new SHA approval; production authority or irreversible operations stay excluded.
+
+W14: eleven real local PostgreSQL 17.11 admission/startup/termination/controller-death/
+crash-recovery assertions passed; evidence `.git/w14-local-pg-20261110T072601Z/`.
+Three LOCAL attempts retained, ZERO of THREE remote runs used in durable ledger.
+W15: fifteen real local assertions passed; prepared transaction persists after
+closed admission, zero sessions and crash recovery: database_quiescent=false.
+Evidence `.git/w15-local-pg-20261110T072852Z/`; two LOCAL attempts retained, ZERO
+of THREE remote runs used. These are synthetic characterizations, not global
+rotation certification; the historical manager is unchanged and its W13 gap
+remains. Actions independently verified disabled; no publication occurred.
