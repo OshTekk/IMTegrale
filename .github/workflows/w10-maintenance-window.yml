@@ -41,13 +41,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Bound dependency acquisition and reject incomplete indexes before install.
-          sudo -n timeout --signal=TERM --kill-after=5s 45s apt-get \
-            -o Acquire::Retries=0 -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10 \
-            -o APT::Update::Error-Mode=any update -qq
-          sudo -n env DEBIAN_FRONTEND=noninteractive timeout --signal=TERM --kill-after=5s 45s apt-get \
-            -o Acquire::Retries=0 -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10 \
-            install -y -qq --no-install-recommends bison flex python3-psycopg
+          /usr/bin/sudo -n /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LC_ALL=C \
+            W17_RUNNER_ENVIRONMENT='${{ runner.environment }}' \
+            /usr/bin/python3 -I -B w17_acquire_dependencies.py
           w16_build="$RUNNER_TEMP/w16-pg-build"
           w16_install="/tmp/w16-pg17-$GITHUB_RUN_ID"
           test ! -e "$w16_build"
