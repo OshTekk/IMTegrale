@@ -778,7 +778,9 @@ def perform_sync_operation(
         raise AutonomousSyncRuntimeUnavailable
     target_ref = target_reference(account.imt_username)
     profile_due = _profile_refresh_due(account, now)
-    metadata_due = _ue_metadata_refresh_due(account, now)
+    # An explicit synchronization must also recheck official grades and ECTS.
+    # Only background polling uses the metadata cache; operation quotas still apply.
+    metadata_due = actor in {"owner", "admin"} or _ue_metadata_refresh_due(account, now)
     stored = load_service_session(
         account.id,
         opener=sync_runtime.pass_session_opener,

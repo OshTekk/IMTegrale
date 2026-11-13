@@ -10,7 +10,7 @@ from app.database import Base, SessionLocal
 from app.models import Account, Event, Note, SyncRequest
 from app.services import sync as sync_service
 from app.services import sync_control
-from app.services.imt import ImtFetchError, ImtPassClient, PassEntry
+from app.services.imt import ImtFetchError, ImtPassClient, PassEntry, parse_competency_api_payload
 from app.services.jobs import process_one
 from app.services.sync_control import (
     SyncCooldownActive,
@@ -46,6 +46,90 @@ def clear_cooldown(account_id: str) -> None:
         account.sync_active_request_id = None
         account.sync_active_until = None
         db.commit()
+
+
+def test_manual_sync_recovers_official_metadata_for_new_ue(
+    client: TestClient,
+    monkeypatch,
+    pass_session_runtime,
+) -> None:
+    calls = 0
+
+    def notes(pass_client, _username, _password):
+        nonlocal calls
+        calls += 1
+        # Anonymous catalog fixture: 17 cached UE / 56 ECTS before ENT130 appears.
+        # Grades on the other UE are synthetic and carry no student identity.
+        catalog = [
+            ("APSA110", 1, 1), ("DDRS110", 1, 1), ("ENT110", 1, 3),
+            ("ESH110", 1, 4), ("LCI110", 1, 1), ("MGP110", 1, 2),
+            ("SIT130", 1, 4), ("SIT140", 1, 3), ("SIT150", 1, 4),
+            ("APSA120", 2, 1), ("DDRS120", 2, 1), ("ELP110", 2, 6),
+            ("ENT120", 2, 6), ("INF110", 2, 6), ("LCI120", 2, 1),
+            ("MTS110", 2, 6), ("RES110", 2, 6),
+        ]
+        rows = [
+            {
+                "nom": f"UE synthétique {code} S{semester + 4}",
+                "semestre": f"Semestre {semester}",
+                "valide": "Validé",
+                "code": f"FIP-{code}-BR-{2024 + semester}",
+                "grade_calcule": "B",
+                "credit_calcule": credits,
+                "credit_presente": credits,
+            }
+            for code, semester, credits in catalog
+        ]
+        if calls > 1 and pass_client.include_competencies_on_fetch:
+            rows.append(
+                {
+                    "nom": "Troisième période en entreprise S6",
+                    "semestre": "Semestre 2",
+                    "valide": "Validé",
+                    "code": "FIP-ENT130-BR-2026",
+                    "grade": None,
+                    "grade_calcule": "A",
+                    "credit_calcule": "5.00",
+                    "credit_presente": "5.00",
+                }
+            )
+        pass_client.last_competency_ues = (
+            parse_competency_api_payload({"data": rows})
+            if pass_client.include_competencies_on_fetch
+            else None
+        )
+        return [PassEntry("SIT130", "Examen", 15, 1, False), PassEntry("ENT130", "Rapport", 17.25, 1, False)]
+
+    monkeypatch.setattr(ImtPassClient, "fetch_entries", notes)
+    account_id = login_owner(client, "metadata-recovery@example.test")
+    before_dashboard = client.get("/api/v1/dashboard").json()
+    before = next(ue for ue in before_dashboard["ues"] if ue["code"] == "ENT130")
+    assert before["credits_ects"] is None
+    assert before["grade_source"] == "pass_calculated"
+    assert before_dashboard["summary"]["validated_credits"] == 56
+    with SessionLocal() as db:
+        account = db.get(Account, account_id)
+        account.ue_metadata_refreshed_at = datetime.now(UTC) - timedelta(days=28)
+        db.commit()
+    clear_cooldown(account_id)
+    accepted = client.post("/api/v1/sync", json={}, headers=csrf_headers(client))
+    assert accepted.status_code == 202
+    assert process_one("sync", sync_runtime=pass_session_runtime) is True
+    dashboard = client.get("/api/v1/dashboard").json()
+    ue = next(ue for ue in dashboard["ues"] if ue["code"] == "ENT130")
+    assert ue["title"] == "Troisième période en entreprise S6"
+    assert ue["official_code"] == "FIP-ENT130-BR-2026"
+    assert ue["grade"] == "A"
+    assert ue["grade_source"] == "competences"
+    assert ue["credits_ects"] == ue["earned_credits_ects"] == 5
+    assert ue["metadata_refreshed_at"] is not None
+    assert ue["semester"] == "S6"
+    assert len(dashboard["ues"]) == 18
+    assert dashboard["summary"]["validated_credits"] == 61
+    assert dashboard["summary"]["missing_ects_count"] == 0
+    assert sum(item["credits_ects"] for item in dashboard["ues"] if item["semester"] == "S6") == 38
+    with SessionLocal() as db:
+        assert db.get(SyncRequest, accepted.json()["request_id"]).status == "succeeded"
 
 
 def test_manual_sync_uses_server_cooldown_retry_after_and_idempotency(
