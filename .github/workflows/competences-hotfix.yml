@@ -19,9 +19,9 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
-          ref: 906afe0dc15407357d37659659f216d9c528b8aa
+          ref: cdabaa5e38dee91f1728a63683c55846fc1bdcf4
       - name: Verify exact application source
-        run: test "$(git rev-parse HEAD)" = 906afe0dc15407357d37659659f216d9c528b8aa
+        run: test "$(git rev-parse HEAD)" = cdabaa5e38dee91f1728a63683c55846fc1bdcf4
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
@@ -36,15 +36,15 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
-          ref: 906afe0dc15407357d37659659f216d9c528b8aa
+          ref: cdabaa5e38dee91f1728a63683c55846fc1bdcf4
       - name: Verify exact application source
-        run: test "$(git rev-parse HEAD)" = 906afe0dc15407357d37659659f216d9c528b8aa
+        run: test "$(git rev-parse HEAD)" = cdabaa5e38dee91f1728a63683c55846fc1bdcf4
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
           cache: pip
       - name: Install
-        run: python -m pip install --disable-pip-version-check -e '.[dev]'
+        run: python -m pip install --disable-pip-version-check -c deploy/requirements.lock -r deploy/requirements.lock -e '.[dev]'
       - name: Lint
         run: ruff check backend scripts
       - name: Security static analysis
@@ -98,15 +98,15 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
-          ref: 906afe0dc15407357d37659659f216d9c528b8aa
+          ref: cdabaa5e38dee91f1728a63683c55846fc1bdcf4
       - name: Verify exact application source
-        run: test "$(git rev-parse HEAD)" = 906afe0dc15407357d37659659f216d9c528b8aa
+        run: test "$(git rev-parse HEAD)" = cdabaa5e38dee91f1728a63683c55846fc1bdcf4
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
           cache: pip
       - name: Install
-        run: python -m pip install --disable-pip-version-check -e '.[dev]'
+        run: python -m pip install --disable-pip-version-check -c deploy/requirements.lock -r deploy/requirements.lock -e '.[dev]'
       - name: Create schema from migrations
         run: alembic upgrade head
       - name: PostgreSQL constraints and concurrency
@@ -127,9 +127,9 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
-          ref: 906afe0dc15407357d37659659f216d9c528b8aa
+          ref: cdabaa5e38dee91f1728a63683c55846fc1bdcf4
       - name: Verify exact application source
-        run: test "$(git rev-parse HEAD)" = 906afe0dc15407357d37659659f216d9c528b8aa
+        run: test "$(git rev-parse HEAD)" = cdabaa5e38dee91f1728a63683c55846fc1bdcf4
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
         with:
           version: 11.9.0
@@ -164,7 +164,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: frontend-e2e-906afe0dc15407357d37659659f216d9c528b8aa
+          name: frontend-e2e-cdabaa5e38dee91f1728a63683c55846fc1bdcf4
           path: |
             frontend/test-results/
             frontend/e2e/__screenshots__/
@@ -185,9 +185,9 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
-          ref: 906afe0dc15407357d37659659f216d9c528b8aa
+          ref: cdabaa5e38dee91f1728a63683c55846fc1bdcf4
       - name: Verify exact application source
-        run: test "$(git rev-parse HEAD)" = 906afe0dc15407357d37659659f216d9c528b8aa
+        run: test "$(git rev-parse HEAD)" = cdabaa5e38dee91f1728a63683c55846fc1bdcf4
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
@@ -226,7 +226,7 @@ jobs:
             --wheel "${wheels[0]}" \
             --dist frontend/dist \
             --sbom artifacts/imtegrale.cdx.json \
-            --source-sha "906afe0dc15407357d37659659f216d9c528b8aa" \
+            --source-sha "cdabaa5e38dee91f1728a63683c55846fc1bdcf4" \
             --openapi artifacts/openapi/imtegrale.openapi.json \
             --migration artifacts/migrations/0029_operational_sequence_reconciliation.py \
             --package-source backend/app \
@@ -240,7 +240,7 @@ jobs:
       - name: Retain audited release bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: imtegrale-906afe0dc15407357d37659659f216d9c528b8aa
+          name: imtegrale-cdabaa5e38dee91f1728a63683c55846fc1bdcf4
           path: artifacts/
           if-no-files-found: error
           retention-days: 30
@@ -254,9 +254,9 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
-          ref: 906afe0dc15407357d37659659f216d9c528b8aa
+          ref: cdabaa5e38dee91f1728a63683c55846fc1bdcf4
       - name: Verify exact application source
-        run: test "$(git rev-parse HEAD)" = 906afe0dc15407357d37659659f216d9c528b8aa
+        run: test "$(git rev-parse HEAD)" = cdabaa5e38dee91f1728a63683c55846fc1bdcf4
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
@@ -266,7 +266,7 @@ jobs:
       - name: Download the exact uploaded release bundle
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: imtegrale-906afe0dc15407357d37659659f216d9c528b8aa
+          name: imtegrale-cdabaa5e38dee91f1728a63683c55846fc1bdcf4
           path: downloaded-artifact
           digest-mismatch: error
       - name: Verify the downloaded release bundle
