@@ -14,6 +14,7 @@ from app.services.imt import (
     COMPETENCIES_USER_URL,
     IMT_ATLANTIQUE_IDP_ENTITY_ID,
     MAX_REQUESTS_PER_OPERATION,
+    PASS_REPORT_URL,
     ImtFetchError,
     ImtPassClient,
 )
@@ -366,6 +367,69 @@ def test_competencies_api_rejects_a_non_json_user_response(monkeypatch) -> None:
 
     with pytest.raises(ImtFetchError, match="format inattendu"):
         client.fetch_competency_ues_authenticated(credentials=("student", "secret"))
+
+
+@pytest.mark.parametrize("conflicting_results", [False, True])
+def test_competencies_refresh_reports_primary_failure(
+    monkeypatch, caplog, conflicting_results: bool
+) -> None:
+    client = ImtPassClient()
+    export_url = "https://pass.imt-atlantique.fr/OpDotNet/export?Format=HTML4.0"
+    results_url = f"{COMPETENCIES_RESULTS_BASE_URL}/101"
+    rows = [
+        {
+            "nom": f"UE fictive {index}",
+            "code": f"FIP-ABC{index:03}-AA-2000",
+            "semestre": "Semestre 2",
+            "valide": "Validé",
+            "grade_calcule": "B",
+            "credit_presente": 3,
+            "credit_calcule": 3,
+        }
+        for index in range(1, 20)
+    ]
+    if conflicting_results:
+        rows.append(dict(rows[-1], grade_calcule="A"))
+    responses = {
+        PASS_REPORT_URL: fake_response(
+            url=PASS_REPORT_URL, body=b'''{"ExportUrlBase":"/OpDotNet/export"}'''
+        ),
+        export_url: fake_response(
+            url=export_url,
+            body=b"<table><tr><td>Evaluation ABC001</td></tr>"
+                 b"<tr><td>Projet</td><td>Classique /20</td><td>1</td><td>15</td></tr></table>",
+        ),
+        COMPETENCIES_HOME_URL: fake_response(url=COMPETENCIES_HOME_URL),
+        COMPETENCIES_CSRF_URL: fake_response(status=204, url=COMPETENCIES_CSRF_URL),
+        COMPETENCIES_USER_URL: fake_json_response(
+            {"etudiant": {"etudiant_id": 101}}, url=COMPETENCIES_USER_URL
+        ),
+        results_url: fake_json_response({"data": rows}, url=results_url),
+    }
+
+    def post(url: str, **_kwargs) -> requests.Response:
+        if url == COMPETENCIES_LOGIN_URL:
+            return fake_json_response({"token": "fictitious-token-12345"}, url=url)
+        assert url == COMPETENCIES_LOGOUT_URL
+        return fake_response(status=500, url=url, body=b"FICTITIOUS_PRIVATE_CANARY")
+
+    monkeypatch.setattr(client, "_get", lambda url, **_kwargs: responses[url])
+    monkeypatch.setattr(client, "_post", post)
+
+    notes = client.fetch_entries_authenticated(include_competencies=True)
+
+    assert len(notes) == 1
+    assert client.last_competency_attempted
+    assert not client.last_competency_succeeded
+    assert client.last_competency_ues is None
+    branch = "parse_competency_api_payload" if conflicting_results else "_ensure_success"
+    error_type = "ImtFetchError" if conflicting_results else "ImtUpstreamError"
+    assert f"COMPETENCES metadata could not be refreshed: {error_type} branch={branch}:" in caplog.text
+    assert ("COMPETENCES logout also failed: ImtUpstreamError branch=_ensure_success:" in caplog.text) == (
+        conflicting_results
+    )
+    assert "FICTITIOUS_PRIVATE_CANARY" not in caplog.text
+    assert "fictitious-token-12345" not in caplog.text
 
 
 def test_hub_sso_uses_current_credentials_when_cas_requests_login(monkeypatch) -> None:

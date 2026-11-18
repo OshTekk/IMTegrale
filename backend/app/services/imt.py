@@ -89,6 +89,16 @@ class ImtUpstreamError(ImtFetchError):
         self.retry_after_seconds = retry_after_seconds
 
 
+def _log_competency_error(message: str, error: Exception) -> None:
+    branch = "unknown"
+    trace = error.__traceback__
+    while trace is not None:
+        if trace.tb_frame.f_globals is globals():
+            branch = f"{trace.tb_frame.f_code.co_name}:{trace.tb_lineno}"
+        trace = trace.tb_next
+    logger.warning("%s: %s branch=%s", message, type(error).__name__, branch)
+
+
 @dataclass(frozen=True, slots=True)
 class PassEntry:
     ue_code: str
@@ -746,10 +756,7 @@ class ImtPassClient:
                     )
                     self.last_competency_succeeded = True
                 except (ImtError, requests.RequestException) as exc:
-                    logger.warning(
-                        "COMPETENCES metadata could not be refreshed: %s",
-                        type(exc).__name__,
-                    )
+                    _log_competency_error("COMPETENCES metadata could not be refreshed", exc)
             return entries
 
     def fetch_profile_authenticated(self) -> PassProfile:
@@ -923,6 +930,7 @@ class ImtPassClient:
 
             authorization = f"Bearer {token}"
             api_headers = self._hub_api_headers(authorization=authorization)
+            parsed = False
             try:
                 user_response = self._get(
                     COMPETENCIES_USER_URL,
@@ -947,6 +955,7 @@ class ImtPassClient:
                 entries = parse_competency_api_payload(
                     results_payload, diagnostics=self.competency_diagnostics
                 )
+                parsed = True
             finally:
                 logout_headers = dict(api_headers)
                 logout_headers.update(
@@ -956,14 +965,19 @@ class ImtPassClient:
                 )
                 if xsrf_token is not None:
                     logout_headers["X-XSRF-TOKEN"] = xsrf_token
-                logout_response = self._post(
-                    COMPETENCIES_LOGOUT_URL,
-                    data=(),
-                    headers=logout_headers,
-                    allowed_origins={HUB_ORIGIN},
-                    max_bytes=MAX_HUB_AUTH_BYTES,
-                )
-                self._ensure_success(logout_response)
+                try:
+                    logout_response = self._post(
+                        COMPETENCIES_LOGOUT_URL,
+                        data=(),
+                        headers=logout_headers,
+                        allowed_origins={HUB_ORIGIN},
+                        max_bytes=MAX_HUB_AUTH_BYTES,
+                    )
+                    self._ensure_success(logout_response)
+                except (ImtError, requests.RequestException) as exc:
+                    if parsed:
+                        raise
+                    _log_competency_error("COMPETENCES logout also failed", exc)
             return entries
 
 
