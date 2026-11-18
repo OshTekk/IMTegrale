@@ -81,6 +81,13 @@ export interface ManualSyncStatus {
     error_code: string | null;
   } | null;
   pass_access: PassAccessStatus;
+  sources?: {
+    pass: { state: "fresh" | "failed" | "unknown"; refreshed_at: string | null };
+    competences: {
+      state: "fresh" | "partial" | "cached" | "failed" | "rejected" | "empty" | "not_read" | "unknown";
+      refreshed_at: string | null;
+    };
+  };
 }
 
 export interface PassAccessStatus {

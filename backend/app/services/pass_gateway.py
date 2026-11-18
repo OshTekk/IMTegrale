@@ -48,6 +48,7 @@ from app.services.autonomous_sync_credentials import (
     pause_autonomous_account,
 )
 from app.services.imt import (
+    CompetencyDiagnostics,
     CompetencyUe,
     ImtAuthenticationError,
     ImtError,
@@ -168,6 +169,7 @@ class GatewayResult:
     hub_succeeded: bool
     autonomous_credential_used: bool = False
     authenticated_username: str | None = None
+    competency_diagnostics: CompetencyDiagnostics | None = None
 
 
 def _system_state(db: Session, *, for_update: bool = False) -> PassSystemState:
@@ -727,6 +729,7 @@ def perform_login_operation(
             entries=entries,
             profile=client.last_profile,
             competency_ues=client.last_competency_ues if initial_import else None,
+            competency_diagnostics=getattr(client, "competency_diagnostics", None),
             request_count=request_count,
             session_reused=False,
             full_sso_performed=True,
@@ -998,6 +1001,7 @@ def perform_sync_operation(
             entries=entries,
             profile=client.last_profile,
             competency_ues=client.last_competency_ues,
+            competency_diagnostics=getattr(client, "competency_diagnostics", None),
             request_count=request_count,
             session_reused=session_reused,
             full_sso_performed=full_sso,

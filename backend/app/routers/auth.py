@@ -216,6 +216,11 @@ async def login_imt(
             entries=gateway.entries,
             profile=gateway.profile,
             competency_ues=gateway.competency_ues,
+            competency_invalid_credits=(
+                gateway.competency_diagnostics.invalid_credits
+                if gateway.competency_diagnostics is not None
+                else 0
+            ),
             session_snapshot=gateway.session_snapshot,
             pass_session_sealer=pass_session_sealer,
             hub_attempted=gateway.hub_attempted,

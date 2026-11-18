@@ -11,7 +11,7 @@ import { useDashboard, useRefreshDashboard } from "../lib/queries";
 import { broadcastSessionChange } from "../lib/sessionSync";
 import { formatSyncDuration, manualSyncMessage, useServerCountdown } from "../lib/sync";
 import { useAccountEventStream } from "../lib/useAccountEventStream";
-import type { Session } from "../types";
+import type { ManualSyncStatus, Session } from "../types";
 import { Logo } from "./Logo";
 import { Modal } from "./Modal";
 import { PassReconnectModal } from "./PassReconnectModal";
@@ -28,6 +28,27 @@ import {
 } from "./appNavigation";
 
 export { isAppNavItemActive } from "./appNavigation";
+
+const syncSourceStates = {
+  fresh: "à jour",
+  partial: "import partiel",
+  cached: "cache utilisé",
+  failed: "échec",
+  rejected: "import refusé",
+  empty: "aucun résultat importable",
+  not_read: "non consulté",
+  unknown: "état inconnu",
+} as const;
+
+function syncSourceLabel(
+  name: string,
+  source: NonNullable<ManualSyncStatus["sources"]>["competences"],
+) {
+  const date = source.refreshed_at
+    ? ` · ${new Date(source.refreshed_at).toLocaleDateString("fr-FR")}`
+    : "";
+  return `${name} ${syncSourceStates[source.state]}${date}`;
+}
 
 function PageRouteLoading() {
   return (
@@ -59,6 +80,7 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
   const manualSync = dashboard.data?.account.manual_sync;
   const syncRemaining = useServerCountdown(manualSync);
   const syncMessage = manualSyncMessage(manualSync, syncRemaining);
+  const sourceFreshness = manualSync?.sources;
   const syncRecheckKey = useRef<string | null>(null);
   const eventAccountId = dashboard.data?.account.id;
   const latestEventId = dashboard.data?.latest_event_id;
@@ -174,11 +196,18 @@ export function AppShell({ session, preloadRoute }: { session: Session; preloadR
           <span className={`live-dot ${live}`} />
           <div>
             <strong>{live === "connected" ? "Données en direct" : "Reconnexion…"}</strong>
-            <span>
-              {dashboard.data?.account.last_sync_at
-                ? `Sync ${new Date(dashboard.data.account.last_sync_at).toLocaleDateString("fr-FR")}`
-                : "En attente de sync"}
-            </span>
+            {sourceFreshness ? (
+              <>
+                <span>{syncSourceLabel("PASS", sourceFreshness.pass)}</span>
+                <span>{syncSourceLabel("COMPETENCES", sourceFreshness.competences)}</span>
+              </>
+            ) : (
+              <span>
+                {dashboard.data?.account.last_sync_at
+                  ? `Sync ${new Date(dashboard.data.account.last_sync_at).toLocaleDateString("fr-FR")}`
+                  : "En attente de sync"}
+              </span>
+            )}
           </div>
         </div>
       </aside>

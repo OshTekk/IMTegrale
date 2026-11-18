@@ -91,6 +91,28 @@ def test_competencies_parser_imports_official_titles_and_attempted_credits() -> 
     assert entries[1].earned_credits_ects == 0
 
 
+@pytest.mark.parametrize(("code", "term", "credits"), [("ABC123", 2, 4), ("DEF234", 3, 2)])
+def test_invalid_planned_credits_do_not_hide_other_official_results(
+    code: str, term: int, credits: int
+) -> None:
+    valid = {
+        "nom": "UE synthétique",
+        "semestre": f"Semestre {term}",
+        "valide": "Validé",
+        "code": f"FIP-{code}-AA-2000",
+        "grade_calcule": "B",
+        "credit_calcule": credits,
+        "credit_presente": credits,
+    }
+    invalid = dict(valid, code="FIP-XYZ345-AA-2000", credit_presente="")
+
+    entries = parse_competency_api_payload({"data": [invalid, valid]})
+
+    assert [(ue.ue_code, ue.semester, ue.grade, ue.earned_credits_ects) for ue in entries] == [
+        (code, f"S{term + 4}", "B", credits)
+    ]
+
+
 def test_competencies_parser_rejects_source_and_title_semester_mismatch() -> None:
     with pytest.raises(ImtFetchError, match="contradictoires"):
         parse_competency_api_payload(

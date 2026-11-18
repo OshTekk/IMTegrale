@@ -452,6 +452,9 @@ def manual_sync_view(
         .limit(1)
     )
     latest_view = None
+    competency_result = {}
+    pass_state = "unknown"
+    competency_state = "unknown"
     if latest is not None:
         latest_status = latest.status
         latest_error = latest.error_code
@@ -466,6 +469,13 @@ def manual_sync_view(
             "completed_at": latest.completed_at,
             "error_code": latest_error,
         }
+        if latest_status == "succeeded":
+            pass_state = "fresh"
+            competency_result = (latest.result or {}).get("competences", {})
+            competency_state = competency_result.get("state", "unknown")
+        elif latest_status == "failed":
+            pass_state = "failed"
+            competency_state = "not_read"
 
     from app.services.pass_gateway import pass_status_view
 
@@ -494,4 +504,19 @@ def manual_sync_view(
         "server_time": current,
         "last_request": latest_view,
         "pass_access": pass_access,
+        "sources": {
+            "pass": {
+                "state": pass_state,
+                "refreshed_at": account.last_successful_sync_at,
+            },
+            "competences": {
+                "state": competency_state,
+                "refreshed_at": account.ue_metadata_refreshed_at,
+                "accepted": competency_result.get("accepted", 0),
+                "preserved": competency_result.get("preserved", 0),
+                "invalid_credits": competency_result.get("invalid_credits", 0),
+                "excluded_status": competency_result.get("excluded_status", 0),
+                "missing_semester": competency_result.get("missing_semester", 0),
+            },
+        },
     }

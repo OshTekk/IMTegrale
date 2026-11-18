@@ -119,6 +119,13 @@ class CompetencyUe:
     earned_credits_ects: float | None = None
 
 
+@dataclass(slots=True)
+class CompetencyDiagnostics:
+    excluded_status: int = 0
+    missing_semester: int = 0
+    invalid_credits: int = 0
+
+
 def _clean(value: str) -> str:
     return re.sub(r"\s+", " ", html_lib.unescape(value or "")).strip()
 
@@ -209,6 +216,7 @@ class ImtPassClient:
         self._request_count = 0
         self.last_profile: PassProfile | None = None
         self.last_competency_ues: list[CompetencyUe] | None = None
+        self.competency_diagnostics = CompetencyDiagnostics()
         self.last_competency_attempted = False
         self.last_competency_succeeded = False
         self.authenticated = False
@@ -721,6 +729,7 @@ class ImtPassClient:
 
             self.last_profile = None
             self.last_competency_ues = None
+            self.competency_diagnostics = CompetencyDiagnostics()
             self.last_competency_attempted = include_competencies
             self.last_competency_succeeded = False
             if include_profile:
@@ -738,9 +747,8 @@ class ImtPassClient:
                     self.last_competency_succeeded = True
                 except (ImtError, requests.RequestException) as exc:
                     logger.warning(
-                        "COMPETENCES metadata could not be refreshed: %s: %s",
+                        "COMPETENCES metadata could not be refreshed: %s",
                         type(exc).__name__,
-                        exc,
                     )
             return entries
 
@@ -936,7 +944,9 @@ class ImtPassClient:
                     max_bytes=MAX_HUB_RESULTS_BYTES,
                 )
                 results_payload = self._hub_json(results_response, label="les résultats d'UE")
-                entries = parse_competency_api_payload(results_payload)
+                entries = parse_competency_api_payload(
+                    results_payload, diagnostics=self.competency_diagnostics
+                )
             finally:
                 logout_headers = dict(api_headers)
                 logout_headers.update(
@@ -1086,14 +1096,18 @@ def _competency_semester(value: object, title: str) -> tuple[str | None, str | N
     return from_title or from_source, source
 
 
-def parse_competency_api_payload(payload: object) -> list[CompetencyUe]:
+def parse_competency_api_payload(
+    payload: object, *, diagnostics: CompetencyDiagnostics | None = None
+) -> list[CompetencyUe]:
     rows = payload.get("data") if isinstance(payload, Mapping) else None
     if not isinstance(rows, list):
         raise ImtFetchError("COMPETENCES n'a pas fourni une liste d'UE valide")
     if len(rows) > MAX_COMPETENCY_UES:
         raise ImtFetchError("COMPETENCES a fourni trop d'UE")
 
+    stats = diagnostics if diagnostics is not None else CompetencyDiagnostics()
     entries: dict[str, CompetencyUe] = {}
+    rejected_codes: set[str] = set()
     for row in rows:
         if not isinstance(row, Mapping):
             raise ImtFetchError("COMPETENCES a fourni une UE mal formée")
@@ -1102,9 +1116,11 @@ def parse_competency_api_payload(payload: object) -> list[CompetencyUe]:
         if (
             not isinstance(status_value, str)
             or _fold(_clean(status_value)) not in OFFICIAL_RESULT_STATUSES
-            or semester_value is None
-            or not str(semester_value).strip()
         ):
+            stats.excluded_status += 1
+            continue
+        if semester_value is None or not str(semester_value).strip():
+            stats.missing_semester += 1
             continue
         title_value = row.get("nom")
         official_code_value = row.get("code")
@@ -1128,17 +1144,20 @@ def parse_competency_api_payload(payload: object) -> list[CompetencyUe]:
 
         credits = _decimal(row.get("credit_presente"))
         if credits is None or not math.isfinite(credits) or not 0 < credits <= 60:
-            raise ImtFetchError("COMPETENCES a fourni des crédits ECTS invalides")
+            stats.invalid_credits += 1
+            rejected_codes.add(code)
+            continue
         earned_value = row.get("credit_calcule")
-        earned_credits = (
-            None
-            if earned_value is None or str(earned_value).strip() == ""
-            else _decimal(earned_value)
-        )
-        if earned_credits is not None and (
-            not math.isfinite(earned_credits) or not 0 <= earned_credits <= credits
+        earned_present = earned_value is not None and bool(str(earned_value).strip())
+        earned_credits = _decimal(earned_value) if earned_present else None
+        if earned_present and (
+            earned_credits is None
+            or not math.isfinite(earned_credits)
+            or not 0 <= earned_credits <= credits
         ):
-            raise ImtFetchError("COMPETENCES a fourni des crédits obtenus invalides")
+            stats.invalid_credits += 1
+            rejected_codes.add(code)
+            continue
 
         entry = CompetencyUe(
             ue_code=code,
@@ -1155,8 +1174,14 @@ def parse_competency_api_payload(payload: object) -> list[CompetencyUe]:
             raise ImtFetchError("COMPETENCES a fourni deux définitions contradictoires d'une UE")
         entries[code] = entry
 
-    logger.info("COMPETENCES metadata parsed: %s UE", len(entries))
-    return list(entries.values())
+    accepted = [entry for code, entry in entries.items() if code not in rejected_codes]
+    if not accepted and rejected_codes:
+        raise ImtFetchError("COMPETENCES a fourni des crédits ECTS invalides")
+    logger.info(
+        "COMPETENCES metadata parsed: accepted=%d invalid_credits=%d excluded_status=%d missing_semester=%d",
+        len(accepted), stats.invalid_credits, stats.excluded_status, stats.missing_semester,
+    )
+    return accepted
 
 
 def _profile_field_value(

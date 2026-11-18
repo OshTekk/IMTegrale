@@ -132,6 +132,82 @@ def test_manual_sync_recovers_official_metadata_for_new_ue(
         assert db.get(SyncRequest, accepted.json()["request_id"]).status == "succeeded"
 
 
+def test_partial_official_import_keeps_prior_values_and_reports_source_status(
+    client: TestClient, monkeypatch, pass_session_runtime
+) -> None:
+    row = {
+        "nom": "UE synthétique",
+        "semestre": "Semestre 2",
+        "valide": "Validé",
+        "code": "FIP-ABC123-AA-2000",
+        "grade_calcule": "C",
+        "credit_calcule": 4,
+        "credit_presente": 4,
+    }
+    new_result = dict(
+        row, code="FIP-DEF234-AA-2000", semestre="Semestre 3", grade_calcule="D",
+        credit_calcule=3, credit_presente=3,
+    )
+    rows = [row]
+    calls = 0
+
+    def fetch(pass_client, _username, _password):
+        nonlocal calls
+        calls += 1
+        pass_client.last_competency_attempted = pass_client.include_competencies_on_fetch
+        try:
+            pass_client.last_competency_ues = parse_competency_api_payload(
+                {"data": rows}, diagnostics=pass_client.competency_diagnostics
+            )
+        except ImtFetchError:
+            pass_client.last_competency_ues = None
+        return [PassEntry("ABC123", "Examen", 15, 1, False), PassEntry("DEF234", "Examen", 15, 1, False)]
+
+    monkeypatch.setattr(ImtPassClient, "fetch_entries", fetch)
+    account_id = login_owner(client, "partial-catalog@example.test")
+    before = client.get("/api/v1/dashboard").json()
+    previous = next(ue for ue in before["ues"] if ue["code"] == "ABC123")
+
+    def synchronize():
+        clear_cooldown(account_id)
+        accepted = client.post("/api/v1/sync", json={}, headers=csrf_headers(client))
+        assert accepted.status_code == 202
+        assert process_one("sync", sync_runtime=pass_session_runtime)
+        return client.get("/api/v1/dashboard").json()
+
+    rows[:] = [dict(row, credit_presente=""), row, new_result]
+    partial = synchronize()
+    sources = partial["account"]["manual_sync"]["sources"]
+    assert sources["pass"]["state"] == "fresh"
+    assert sources["competences"] == {
+        "state": "partial",
+        "refreshed_at": previous["metadata_refreshed_at"],
+        "accepted": 1,
+        "preserved": 1,
+        "invalid_credits": 1,
+        "excluded_status": 0,
+        "missing_semester": 0,
+    }
+    by_code = {ue["code"]: ue for ue in partial["ues"]}
+    assert by_code["ABC123"]["metadata_refreshed_at"] == previous["metadata_refreshed_at"]
+    assert by_code["ABC123"]["grade"] == "C"
+    assert by_code["DEF234"]["grade_source"] == "competences"
+    assert by_code["DEF234"]["earned_credits_ects"] == 3
+    assert partial["summary"]["validated_credits"] == 7
+
+    rows[:] = [dict(row, grade_calcule=None, credit_calcule=None), new_result]
+    repeated = synchronize()
+    assert repeated["summary"]["validated_credits"] == 7
+    assert repeated["account"]["manual_sync"]["sources"]["competences"]["preserved"] == 1
+
+    rows[:] = [row, dict(row, grade_calcule="A")]
+    rejected = synchronize()
+    assert rejected["account"]["manual_sync"]["sources"]["competences"]["state"] == "failed"
+    assert rejected["summary"]["validated_credits"] == 7
+    assert next(ue for ue in rejected["ues"] if ue["code"] == "ABC123")["grade"] == "C"
+    assert calls == 4
+
+
 def test_manual_sync_uses_server_cooldown_retry_after_and_idempotency(
     client: TestClient,
     monkeypatch,

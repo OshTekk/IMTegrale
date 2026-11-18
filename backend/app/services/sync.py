@@ -31,6 +31,7 @@ from app.services.imt import (
     MAX_NOTE_LABEL_LENGTH,
     MAX_PASS_ENTRIES,
     MAX_UE_CODE_LENGTH,
+    CompetencyDiagnostics,
     CompetencyUe,
     ImtAuthenticationError,
     ImtFetchError,
@@ -359,9 +360,10 @@ def apply_competency_ues(
     entries: list[CompetencyUe] | None,
     *,
     actor: str = "system",
+    invalid_credits: int = 0,
 ) -> dict[str, int]:
     if entries is None:
-        return {"total": 0, "updated": 0}
+        return {"total": 0, "updated": 0, "preserved": 0, "protected": 0}
     if len(entries) > MAX_UE_SETTINGS_PER_ACCOUNT:
         raise ImtFetchError("COMPETENCES a fourni trop d'UE distinctes")
 
@@ -375,6 +377,12 @@ def apply_competency_ues(
 
     now = utcnow()
     updated = 0
+    accepted = 0
+    omitted = sum(
+        setting.metadata_source == "competences" and code not in incoming_codes
+        for code, setting in by_code.items()
+    )
+    protected = 0
     for entry in entries:
         code = ue_code(entry.ue_code)
         title = clean_text(entry.title)
@@ -409,6 +417,14 @@ def apply_competency_ues(
             raise ImtFetchError("COMPETENCES a fourni un grade invalide")
 
         setting = by_code.get(code)
+        if setting is not None and setting.metadata_source == "competences" and (
+            (setting.official_code and setting.official_code != entry.official_code)
+            or (setting.semester is not None and entry.semester is None)
+            or (setting.official_grade is not None and entry.grade is None)
+            or (setting.earned_credits_ects is not None and earned_credits is None)
+        ):
+            protected += 1
+            continue
         if setting is None:
             setting = UeSetting(account_id=account.id, code=code, year=ue_year(code))
             db.add(setting)
@@ -435,18 +451,25 @@ def apply_competency_ues(
         setting.metadata_refreshed_at = now
         setting.updated_at = now
         updated += int(changed)
+        accepted += 1
 
-    account.ue_metadata_refreshed_at = now
-    account.ue_metadata_refresh_requested_at = None
-    if entries:
+    if accepted and not (invalid_credits or protected):
+        account.ue_metadata_refreshed_at = now
+        account.ue_metadata_refresh_requested_at = None
+    if accepted:
         record_event(
             db,
             account_id=account.id,
             kind="ue:metadata_refreshed",
             actor=actor,
-            payload={"total": len(entries), "updated": updated, "source": "competences"},
+            payload={"total": accepted, "updated": updated, "source": "competences"},
         )
-    return {"total": len(entries), "updated": updated}
+    return {
+        "total": accepted,
+        "updated": updated,
+        "preserved": omitted + protected,
+        "protected": protected,
+    }
 
 
 def _sync_error(exc: Exception) -> tuple[str, str]:
@@ -645,15 +668,37 @@ def execute_sync_request(
             )
             result = apply_pass_entries(db, account, gateway.entries, actor=request.actor)
             apply_pass_profile(account, gateway.profile)
-            competency_result = apply_competency_ues(
-                db,
-                account,
-                gateway.competency_ues,
-                actor=request.actor,
+            stats = gateway.competency_diagnostics or CompetencyDiagnostics()
+            competency_result = {"total": 0, "updated": 0, "preserved": 0, "protected": 0}
+            competency_state = "cached"
+            if gateway.competency_ues is None:
+                if gateway.hub_attempted:
+                    competency_state = "failed"
+            else:
+                try:
+                    with db.begin_nested():
+                        competency_result = apply_competency_ues(
+                            db,
+                            account,
+                            gateway.competency_ues,
+                            actor=request.actor,
+                            invalid_credits=stats.invalid_credits,
+                        )
+                except ImtFetchError:
+                    competency_state = "rejected"
+                else:
+                    if stats.invalid_credits or competency_result["preserved"]:
+                        competency_state = "partial"
+                    elif competency_result["total"]:
+                        competency_state = "fresh"
+                    else:
+                        competency_state = "empty"
+            can_reconcile_basis = competency_result["total"] and not (
+                stats.invalid_credits or competency_result["protected"]
             )
             leaderboard_basis_result = (
                 reconcile_participating_leaderboard_basis(db, account)
-                if gateway.competency_ues is not None
+                if can_reconcile_basis
                 else "unchanged"
             )
             if leaderboard_basis_result != "unchanged":
@@ -688,6 +733,14 @@ def execute_sync_request(
                 "updated": result["updated"],
                 "archived": result["archived"],
                 "ue_metadata_updated": competency_result["updated"],
+                "competences": {
+                    "state": competency_state,
+                    "accepted": competency_result["total"],
+                    "preserved": competency_result["preserved"],
+                    "invalid_credits": stats.invalid_credits,
+                    "excluded_status": stats.excluded_status,
+                    "missing_semester": stats.missing_semester,
+                },
                 "leaderboard_basis": leaderboard_basis_result,
             }
             finalize_sync_request(

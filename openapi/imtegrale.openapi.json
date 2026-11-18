@@ -2848,6 +2848,68 @@
         "title": "CalendarSubscriptionUpdate",
         "type": "object"
       },
+      "CompetencesSyncFreshnessResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "accepted": {
+            "title": "Accepted",
+            "type": "integer"
+          },
+          "excluded_status": {
+            "title": "Excluded Status",
+            "type": "integer"
+          },
+          "invalid_credits": {
+            "title": "Invalid Credits",
+            "type": "integer"
+          },
+          "missing_semester": {
+            "title": "Missing Semester",
+            "type": "integer"
+          },
+          "preserved": {
+            "title": "Preserved",
+            "type": "integer"
+          },
+          "refreshed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refreshed At"
+          },
+          "state": {
+            "enum": [
+              "fresh",
+              "partial",
+              "cached",
+              "failed",
+              "rejected",
+              "empty",
+              "not_read",
+              "unknown"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "refreshed_at",
+          "accepted",
+          "preserved",
+          "invalid_credits",
+          "excluded_status",
+          "missing_semester"
+        ],
+        "title": "CompetencesSyncFreshnessResponse",
+        "type": "object"
+      },
       "DashboardAccountResponse": {
         "additionalProperties": false,
         "properties": {
@@ -6258,6 +6320,9 @@
             "title": "Server Time",
             "type": "string"
           },
+          "sources": {
+            "$ref": "#/components/schemas/SyncSourcesResponse"
+          },
           "state": {
             "enum": [
               "available",
@@ -6279,7 +6344,8 @@
           "active_until",
           "server_time",
           "last_request",
-          "pass_access"
+          "pass_access",
+          "sources"
         ],
         "title": "ManualSyncResponse",
         "type": "object"
@@ -7872,6 +7938,38 @@
           "service_session"
         ],
         "title": "PassReconnectResponse",
+        "type": "object"
+      },
+      "PassSyncFreshnessResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "refreshed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refreshed At"
+          },
+          "state": {
+            "enum": [
+              "fresh",
+              "failed",
+              "unknown"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "refreshed_at"
+        ],
+        "title": "PassSyncFreshnessResponse",
         "type": "object"
       },
       "PasskeyAuthenticationVerify": {
@@ -9754,6 +9852,23 @@
           "enabled"
         ],
         "title": "SyncSetupUpdate",
+        "type": "object"
+      },
+      "SyncSourcesResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "competences": {
+            "$ref": "#/components/schemas/CompetencesSyncFreshnessResponse"
+          },
+          "pass": {
+            "$ref": "#/components/schemas/PassSyncFreshnessResponse"
+          }
+        },
+        "required": [
+          "pass",
+          "competences"
+        ],
+        "title": "SyncSourcesResponse",
         "type": "object"
       },
       "SyncStartResponse": {

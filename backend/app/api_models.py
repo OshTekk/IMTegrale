@@ -178,6 +178,26 @@ class SyncRequestSummaryResponse(ApiModel):
     error_code: str | None
 
 
+class PassSyncFreshnessResponse(ApiModel):
+    state: Literal["fresh", "failed", "unknown"]
+    refreshed_at: datetime | None
+
+
+class CompetencesSyncFreshnessResponse(ApiModel):
+    state: Literal["fresh", "partial", "cached", "failed", "rejected", "empty", "not_read", "unknown"]
+    refreshed_at: datetime | None
+    accepted: int
+    preserved: int
+    invalid_credits: int
+    excluded_status: int
+    missing_semester: int
+
+
+class SyncSourcesResponse(ApiModel):
+    pass_: PassSyncFreshnessResponse = Field(alias="pass")
+    competences: CompetencesSyncFreshnessResponse
+
+
 class ManualSyncResponse(ApiModel):
     state: Literal[
         "available",
@@ -194,6 +214,7 @@ class ManualSyncResponse(ApiModel):
     server_time: datetime
     last_request: SyncRequestSummaryResponse | None
     pass_access: PassAccessResponse
+    sources: SyncSourcesResponse
 
 
 class SyncStartResponse(ApiModel):

@@ -1523,6 +1523,40 @@ export type CalendarSubscriptionUpdate = {
 };
 
 /**
+ * CompetencesSyncFreshnessResponse
+ */
+export type CompetencesSyncFreshnessResponse = {
+    /**
+     * Accepted
+     */
+    accepted: number;
+    /**
+     * Excluded Status
+     */
+    excluded_status: number;
+    /**
+     * Invalid Credits
+     */
+    invalid_credits: number;
+    /**
+     * Missing Semester
+     */
+    missing_semester: number;
+    /**
+     * Preserved
+     */
+    preserved: number;
+    /**
+     * Refreshed At
+     */
+    refreshed_at: string | null;
+    /**
+     * State
+     */
+    state: 'fresh' | 'partial' | 'cached' | 'failed' | 'rejected' | 'empty' | 'not_read' | 'unknown';
+};
+
+/**
  * DashboardAccountResponse
  */
 export type DashboardAccountResponse = {
@@ -3172,6 +3206,7 @@ export type ManualSyncResponse = {
      * Server Time
      */
     server_time: string;
+    sources: SyncSourcesResponse;
     /**
      * State
      */
@@ -3961,6 +3996,20 @@ export type PassReconnectResponse = {
      */
     ok: true;
     service_session: ServiceSessionResponse;
+};
+
+/**
+ * PassSyncFreshnessResponse
+ */
+export type PassSyncFreshnessResponse = {
+    /**
+     * Refreshed At
+     */
+    refreshed_at: string | null;
+    /**
+     * State
+     */
+    state: 'fresh' | 'failed' | 'unknown';
 };
 
 /**
@@ -4853,6 +4902,14 @@ export type SyncSetupUpdate = {
      * Interval Hours
      */
     interval_hours?: 2 | 4 | 6 | 8 | 12 | 24;
+};
+
+/**
+ * SyncSourcesResponse
+ */
+export type SyncSourcesResponse = {
+    competences: CompetencesSyncFreshnessResponse;
+    pass: PassSyncFreshnessResponse;
 };
 
 /**

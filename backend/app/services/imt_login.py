@@ -167,6 +167,7 @@ def finalize_imt_login(
     hub_succeeded: bool,
     user_agent: str,
     settings: Settings,
+    competency_invalid_credits: int = 0,
     now: datetime | None = None,
 ) -> FinalizedImtLogin:
     """Persist every successful-login side effect in the locked transaction."""
@@ -185,7 +186,9 @@ def finalize_imt_login(
                 actor="owner",
                 initial_import=True,
             )
-            apply_competency_ues(db, account, competency_ues, actor="owner")
+            apply_competency_ues(
+                db, account, competency_ues, actor="owner", invalid_credits=competency_invalid_credits
+            )
         apply_pass_profile(account, profile)
         stored_session = store_service_session_if_reusable(
             db,
