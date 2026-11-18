@@ -641,7 +641,7 @@ def test_stale_consent_is_neither_active_nor_published(
     assert [entry["official_name"] for entry in board["entries"]] == ["Viewer STUDENT"]
 
 
-def test_latest_official_metadata_generation_reconciles_or_withdraws_participation(
+def test_omitted_official_result_preserves_the_certified_leaderboard_generation(
     client: TestClient,
     monkeypatch,
 ) -> None:
@@ -664,17 +664,18 @@ def test_latest_official_metadata_generation_reconciles_or_withdraws_participati
         assert profile.score_ects_basis == {"SIT130": 6.0}
         assert ensure_utc(profile.score_basis_updated_at) == ensure_utc(account.ue_metadata_refreshed_at)
 
-        apply_competency_ues(
+        generation = account.ue_metadata_refreshed_at
+        result = apply_competency_ues(
             db,
             account,
             [CompetencyUe("OTHER100", "Autre UE", 3)],
         )
-        assert reconcile_participating_leaderboard_basis(db, account) == "withdrawn"
+        assert result["preserved"] == 1
+        assert account.ue_metadata_refreshed_at == generation
+        assert reconcile_participating_leaderboard_basis(db, account) == "refreshed"
         db.commit()
-        assert profile.is_participating is False
-        assert profile.rejoin_after is None
-        assert profile.consent_version is None
-        assert profile.score_ects_basis is None
+        assert profile.is_participating is True
+        assert profile.score_ects_basis == {"SIT130": 6.0}
 
 
 def test_join_requires_official_pass_identity(client: TestClient, monkeypatch) -> None:

@@ -363,7 +363,7 @@ def apply_competency_ues(
     invalid_credits: int = 0,
 ) -> dict[str, int]:
     if entries is None:
-        return {"total": 0, "updated": 0, "preserved": 0, "protected": 0}
+        return {"total": 0, "updated": 0, "preserved": 0}
     if len(entries) > MAX_UE_SETTINGS_PER_ACCOUNT:
         raise ImtFetchError("COMPETENCES a fourni trop d'UE distinctes")
 
@@ -378,11 +378,11 @@ def apply_competency_ues(
     now = utcnow()
     updated = 0
     accepted = 0
-    omitted = sum(
+    preserved = sum(
         setting.metadata_source == "competences" and code not in incoming_codes
         for code, setting in by_code.items()
     )
-    protected = 0
+    accepted_settings = []
     for entry in entries:
         code = ue_code(entry.ue_code)
         title = clean_text(entry.title)
@@ -423,7 +423,7 @@ def apply_competency_ues(
             or (setting.official_grade is not None and entry.grade is None)
             or (setting.earned_credits_ects is not None and earned_credits is None)
         ):
-            protected += 1
+            preserved += 1
             continue
         if setting is None:
             setting = UeSetting(account_id=account.id, code=code, year=ue_year(code))
@@ -431,6 +431,7 @@ def apply_competency_ues(
             by_code[code] = setting
         changed = any(
             (
+                setting.metadata_source != "competences",
                 setting.title != title,
                 setting.credits_ects != credits,
                 setting.earned_credits_ects != earned_credits,
@@ -448,12 +449,16 @@ def apply_competency_ues(
         setting.official_code = entry.official_code
         setting.official_grade = entry.grade
         setting.metadata_source = "competences"
-        setting.metadata_refreshed_at = now
-        setting.updated_at = now
+        accepted_settings.append((setting, changed))
         updated += int(changed)
         accepted += 1
 
-    if accepted and not (invalid_credits or protected):
+    partial = bool(invalid_credits or preserved)
+    for setting, changed in accepted_settings:
+        if changed or not partial:
+            setting.metadata_refreshed_at = now
+            setting.updated_at = now
+    if accepted and not partial:
         account.ue_metadata_refreshed_at = now
         account.ue_metadata_refresh_requested_at = None
     if accepted:
@@ -462,13 +467,12 @@ def apply_competency_ues(
             account_id=account.id,
             kind="ue:metadata_refreshed",
             actor=actor,
-            payload={"total": accepted, "updated": updated, "source": "competences"},
+            payload={"total": accepted, "updated": updated, "source": "competences", "partial": partial},
         )
     return {
         "total": accepted,
         "updated": updated,
-        "preserved": omitted + protected,
-        "protected": protected,
+        "preserved": preserved,
     }
 
 
@@ -669,7 +673,7 @@ def execute_sync_request(
             result = apply_pass_entries(db, account, gateway.entries, actor=request.actor)
             apply_pass_profile(account, gateway.profile)
             stats = gateway.competency_diagnostics or CompetencyDiagnostics()
-            competency_result = {"total": 0, "updated": 0, "preserved": 0, "protected": 0}
+            competency_result = {"total": 0, "updated": 0, "preserved": 0}
             competency_state = "cached"
             if gateway.competency_ues is None:
                 if gateway.hub_attempted:
@@ -693,12 +697,9 @@ def execute_sync_request(
                         competency_state = "fresh"
                     else:
                         competency_state = "empty"
-            can_reconcile_basis = competency_result["total"] and not (
-                stats.invalid_credits or competency_result["protected"]
-            )
             leaderboard_basis_result = (
                 reconcile_participating_leaderboard_basis(db, account)
-                if can_reconcile_basis
+                if competency_state == "fresh"
                 else "unchanged"
             )
             if leaderboard_basis_result != "unchanged":
