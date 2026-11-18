@@ -40,13 +40,8 @@ const syncSourceStates = {
   unknown: "état inconnu",
 } as const;
 
-function syncSourceLabel(
-  name: string,
-  source: NonNullable<ManualSyncStatus["sources"]>["competences"],
-) {
-  const date = source.refreshed_at
-    ? ` · ${new Date(source.refreshed_at).toLocaleDateString("fr-FR")}`
-    : "";
+function syncSourceLabel(name: string, source: NonNullable<ManualSyncStatus["sources"]>["competences"]) {
+  const date = source.refreshed_at ? ` · ${new Date(source.refreshed_at).toLocaleDateString("fr-FR")}` : "";
   return `${name} ${syncSourceStates[source.state]}${date}`;
 }
 

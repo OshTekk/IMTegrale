@@ -453,7 +453,7 @@ def manual_sync_view(
     )
     latest_view = None
     competency_result = {}
-    pass_state = "unknown"
+    notes_source_state = "unknown"
     competency_state = "unknown"
     if latest is not None:
         latest_status = latest.status
@@ -470,11 +470,11 @@ def manual_sync_view(
             "error_code": latest_error,
         }
         if latest_status == "succeeded":
-            pass_state = "fresh"
+            notes_source_state = "fresh"
             competency_result = (latest.result or {}).get("competences", {})
             competency_state = competency_result.get("state", "unknown")
         elif latest_status == "failed":
-            pass_state = "failed"
+            notes_source_state = "failed"
             competency_state = "not_read"
 
     from app.services.pass_gateway import pass_status_view
@@ -506,7 +506,7 @@ def manual_sync_view(
         "pass_access": pass_access,
         "sources": {
             "pass": {
-                "state": pass_state,
+                "state": notes_source_state,
                 "refreshed_at": account.last_successful_sync_at,
             },
             "competences": {
