@@ -2,7 +2,7 @@ name: COMPETENCES exact-source qualification
 
 on:
   push:
-    branches: [codex/official-results-release-qualification]
+    branches: [codex/competences-full-batch-candidate-ci]
 
 permissions:
   contents: read
@@ -19,9 +19,9 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
-          ref: 54b85570a0d4373baaa65e1cd1b1d93025bfd89e
+          ref: 39b9e2e710c3e89f565c98ef60581f2b521bce44
       - name: Verify exact application source
-        run: test "$(git rev-parse HEAD)" = 54b85570a0d4373baaa65e1cd1b1d93025bfd89e
+        run: test "$(git rev-parse HEAD)" = 39b9e2e710c3e89f565c98ef60581f2b521bce44
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.11.18"
@@ -36,9 +36,9 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
-          ref: 54b85570a0d4373baaa65e1cd1b1d93025bfd89e
+          ref: 39b9e2e710c3e89f565c98ef60581f2b521bce44
       - name: Verify exact application source
-        run: test "$(git rev-parse HEAD)" = 54b85570a0d4373baaa65e1cd1b1d93025bfd89e
+        run: test "$(git rev-parse HEAD)" = 39b9e2e710c3e89f565c98ef60581f2b521bce44
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.11.18"
@@ -100,9 +100,9 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
-          ref: 54b85570a0d4373baaa65e1cd1b1d93025bfd89e
+          ref: 39b9e2e710c3e89f565c98ef60581f2b521bce44
       - name: Verify exact application source
-        run: test "$(git rev-parse HEAD)" = 54b85570a0d4373baaa65e1cd1b1d93025bfd89e
+        run: test "$(git rev-parse HEAD)" = 39b9e2e710c3e89f565c98ef60581f2b521bce44
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.11.18"
@@ -131,9 +131,9 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
-          ref: 54b85570a0d4373baaa65e1cd1b1d93025bfd89e
+          ref: 39b9e2e710c3e89f565c98ef60581f2b521bce44
       - name: Verify exact application source
-        run: test "$(git rev-parse HEAD)" = 54b85570a0d4373baaa65e1cd1b1d93025bfd89e
+        run: test "$(git rev-parse HEAD)" = 39b9e2e710c3e89f565c98ef60581f2b521bce44
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
         with:
           version: 11.9.0
@@ -168,7 +168,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: frontend-e2e-54b85570a0d4373baaa65e1cd1b1d93025bfd89e
+          name: frontend-e2e-39b9e2e710c3e89f565c98ef60581f2b521bce44
           path: |
             frontend/test-results/
             frontend/e2e/__screenshots__/
@@ -189,9 +189,9 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
-          ref: 54b85570a0d4373baaa65e1cd1b1d93025bfd89e
+          ref: 39b9e2e710c3e89f565c98ef60581f2b521bce44
       - name: Verify exact application source
-        run: test "$(git rev-parse HEAD)" = 54b85570a0d4373baaa65e1cd1b1d93025bfd89e
+        run: test "$(git rev-parse HEAD)" = 39b9e2e710c3e89f565c98ef60581f2b521bce44
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.11.18"
@@ -231,7 +231,7 @@ jobs:
             --wheel "${wheels[0]}" \
             --dist frontend/dist \
             --sbom artifacts/imtegrale.cdx.json \
-            --source-sha "54b85570a0d4373baaa65e1cd1b1d93025bfd89e" \
+            --source-sha "39b9e2e710c3e89f565c98ef60581f2b521bce44" \
             --openapi artifacts/openapi/imtegrale.openapi.json \
             --migration artifacts/migrations/0029_operational_sequence_reconciliation.py \
             --package-source backend/app \
@@ -245,7 +245,7 @@ jobs:
       - name: Retain audited release bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: imtegrale-54b85570a0d4373baaa65e1cd1b1d93025bfd89e
+          name: imtegrale-39b9e2e710c3e89f565c98ef60581f2b521bce44
           path: artifacts/
           if-no-files-found: error
           retention-days: 30
@@ -259,9 +259,9 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
-          ref: 54b85570a0d4373baaa65e1cd1b1d93025bfd89e
+          ref: 39b9e2e710c3e89f565c98ef60581f2b521bce44
       - name: Verify exact application source
-        run: test "$(git rev-parse HEAD)" = 54b85570a0d4373baaa65e1cd1b1d93025bfd89e
+        run: test "$(git rev-parse HEAD)" = 39b9e2e710c3e89f565c98ef60581f2b521bce44
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.11.18"
@@ -273,7 +273,7 @@ jobs:
       - name: Download the exact uploaded release bundle
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: imtegrale-54b85570a0d4373baaa65e1cd1b1d93025bfd89e
+          name: imtegrale-39b9e2e710c3e89f565c98ef60581f2b521bce44
           path: downloaded-artifact
           digest-mismatch: error
       - name: Verify the downloaded release bundle
