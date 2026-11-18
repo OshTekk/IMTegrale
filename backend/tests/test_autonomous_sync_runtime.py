@@ -42,7 +42,7 @@ from app.services.imt_sync_credentials import (
     enroll_verified_credential,
     revoke_sync_credential,
 )
-from app.services.pass_sessions import PassSessionRequired, store_service_session
+from app.services.pass_sessions import PassSessionRequired, serialize_service_cookies, store_service_session
 from app.services.sync import sync_account
 from app.services.sync_control import manual_sync_view
 from app.services.sync_worker_credentials import SyncRuntimeContext
@@ -156,6 +156,63 @@ def _credential(account_id: str) -> ImtSyncCredential:
         assert credential is not None
         db.expunge(credential)
         return credential
+
+
+@pytest.mark.parametrize("replace_during_login", [False, True])
+def test_manual_sync_renews_hub_with_the_consented_credential(
+    monkeypatch,
+    pass_session_runtime: SyncRuntimeContext,
+    replace_during_login: bool,
+) -> None:
+    _configure_runtime(monkeypatch)
+    account_id = _seed_autonomous_account(pass_session_runtime)
+    sync_account(account_id, actor="owner", notify=False, sync_runtime=pass_session_runtime)
+    original_fetch = SyntheticPassClient.fetch_entries
+    replacement_ids: list[str] = []
+
+    def fetch_with_expired_hub(self, username, password):
+        entries = original_fetch(self, username, password)
+        self.last_competency_reauth_required = password == "test-service-session"
+        if replace_during_login and not self.last_competency_reauth_required:
+            with SessionLocal() as db:
+                account = db.get(Account, account_id)
+                assert account is not None
+                replacement = store_service_session(
+                    db,
+                    account,
+                    serialize_service_cookies(self.session),
+                    sealer=pass_session_runtime.pass_session_sealer,
+                    hub_attempted=False,
+                    hub_succeeded=False,
+                )
+                replacement_ids.append(replacement.id)
+                db.commit()
+        return entries
+
+    monkeypatch.setattr(SyntheticPassClient, "fetch_entries", fetch_with_expired_hub)
+    SyntheticPassClient.calls.clear()
+    if replace_during_login:
+        with pytest.raises(AutonomousSyncStateChanged):
+            sync_account(account_id, actor="owner", notify=False, sync_runtime=pass_session_runtime)
+    else:
+        sync_account(account_id, actor="owner", notify=False, sync_runtime=pass_session_runtime)
+
+    assert SyntheticPassClient.calls == ["test-service-session", SYNTHETIC_PASSWORD]
+    with SessionLocal() as db:
+        operation = db.scalar(select(PassOperation).order_by(PassOperation.started_at.desc()))
+        assert operation is not None
+        assert operation.autonomous_credential_used
+        assert operation.full_sso_performed
+        assert not operation.session_reused
+        assert operation.request_count == 2
+        if replace_during_login:
+            assert operation.status == "failed"
+            assert db.scalar(
+                select(PassServiceSession.id).where(
+                    PassServiceSession.account_id == account_id,
+                    PassServiceSession.state == "active",
+                )
+            ) == replacement_ids[0]
 
 
 def test_autonomous_fallback_performs_one_sso_then_reuses_session(

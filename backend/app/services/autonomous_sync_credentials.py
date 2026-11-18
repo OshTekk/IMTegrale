@@ -219,19 +219,15 @@ def _operation_is_current(
     )
 
 
-def _active_session_exists(db: Session, account_id: str, now: datetime) -> bool:
-    return (
-        db.scalar(
-            select(PassServiceSession.id)
-            .where(
-                PassServiceSession.account_id == account_id,
-                PassServiceSession.state == "active",
-                PassServiceSession.expires_at > now,
-            )
-            .limit(1)
-        )
-        is not None
+def _active_session_id(db: Session, account_id: str, now: datetime, *, lock: bool) -> str | None:
+    statement = select(PassServiceSession.id).where(
+        PassServiceSession.account_id == account_id,
+        PassServiceSession.state == "active",
+        PassServiceSession.expires_at > now,
     )
+    if lock:
+        statement = statement.with_for_update()
+    return db.scalar(statement)
 
 
 def _account_allows_autonomous(
@@ -302,7 +298,7 @@ def assert_autonomous_state_current(
     actor: str,
     db: Session | None = None,
     lock_for_commit: bool = False,
-    require_session_absent: bool = True,
+    expected_session_id: str | None = None,
 ) -> Account:
     owns_session = db is None
     managed_db = db or SessionLocal()
@@ -348,7 +344,7 @@ def assert_autonomous_state_current(
                 hashlib.sha256(credential.encrypted_envelope).digest(),
                 snapshot.envelope_digest,
             )
-            or (require_session_absent and _active_session_exists(managed_db, account.id, now))
+            or _active_session_id(managed_db, account.id, now, lock=lock_for_commit) != expected_session_id
         ):
             raise AutonomousSyncStateChanged
         return account

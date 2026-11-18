@@ -47,6 +47,7 @@ from app.services.autonomous_sync_credentials import (
     mark_autonomous_credential_used,
     pause_autonomous_account,
 )
+from app.services.autonomous_sync_schedule import autonomous_fallback_is_available
 from app.services.imt import (
     CompetencyDiagnostics,
     CompetencyUe,
@@ -810,6 +811,7 @@ def perform_sync_operation(
     autonomous_snapshot: AutonomousCredentialSnapshot | None = None
     autonomous_credential_used = False
     final_state_locked = False
+    rejected_hub_session_id: str | None = None
     owner_password_unset = object()
 
     def perform_fallback_fetch(
@@ -848,6 +850,7 @@ def perform_sync_operation(
                     sync_request_id=sync_request_id,
                     pass_operation_id=lease.id,
                     actor=actor,
+                    expected_session_id=rejected_hub_session_id,
                 )
                 autonomous_credential_used = True
                 full_sso = True
@@ -867,6 +870,19 @@ def perform_sync_operation(
             return client.fetch_entries(account.imt_username, owner_password)
         finally:
             del owner_password
+
+    def replace_session_and_fetch(
+        local_owner_password: str | None | object = owner_password_unset,
+    ) -> list[PassEntry]:
+        nonlocal client, current_client_counted, session_reused
+        _close_client_session(client)
+        client = ImtPassClient(timeout_seconds=get_settings().imt_timeout_seconds)
+        current_client_counted = False
+        client.include_profile_on_fetch = profile_due
+        client.include_competencies_on_fetch = metadata_due
+        entries = perform_fallback_fetch(local_owner_password)
+        session_reused = False
+        return entries
 
     try:
         if stored is not None:
@@ -900,16 +916,23 @@ def perform_sync_operation(
                     local_owner_password = owner_password_for(account)
                     if local_owner_password is None:
                         raise PassSessionRequired from None
-                _close_client_session(client)
-                client = ImtPassClient(timeout_seconds=get_settings().imt_timeout_seconds)
-                current_client_counted = False
-                client.include_profile_on_fetch = profile_due
-                client.include_competencies_on_fetch = metadata_due
                 try:
-                    entries = perform_fallback_fetch(local_owner_password)
+                    entries = replace_session_and_fetch(local_owner_password)
                 finally:
                     del local_owner_password
-                session_reused = False
+            else:
+                if (
+                    getattr(client, "last_competency_reauth_required", False)
+                    and actor == "owner"
+                    and sync_request_id is not None
+                    and autonomous_fallback_is_available(
+                        db, account, runtime_enabled=settings.autonomous_sync_enabled, settings=settings
+                    )
+                ):
+                    request_count += client.request_count
+                    current_client_counted = True
+                    rejected_hub_session_id = stored.id
+                    entries = replace_session_and_fetch()
         else:
             client.include_profile_on_fetch = profile_due
             client.include_competencies_on_fetch = metadata_due
@@ -930,6 +953,7 @@ def perform_sync_operation(
                 sync_request_id=sync_request_id,
                 pass_operation_id=lease.id,
                 actor=actor,
+                expected_session_id=rejected_hub_session_id,
             )
             locked_account = assert_autonomous_state_current(
                 autonomous_snapshot,
@@ -938,6 +962,7 @@ def perform_sync_operation(
                 actor=actor,
                 db=db,
                 lock_for_commit=True,
+                expected_session_id=rejected_hub_session_id,
             )
             final_state_locked = True
             store_service_session_if_reusable(

@@ -78,6 +78,10 @@ class ImtFetchError(ImtError):
     pass
 
 
+class ImtCompetencySessionRequired(ImtFetchError):
+    pass
+
+
 class ImtNetworkError(ImtFetchError):
     pass
 
@@ -229,6 +233,7 @@ class ImtPassClient:
         self.competency_diagnostics = CompetencyDiagnostics()
         self.last_competency_attempted = False
         self.last_competency_succeeded = False
+        self.last_competency_reauth_required = False
         self.authenticated = False
         self.include_profile_on_fetch = True
         self.include_competencies_on_fetch = True
@@ -742,6 +747,7 @@ class ImtPassClient:
             self.competency_diagnostics = CompetencyDiagnostics()
             self.last_competency_attempted = include_competencies
             self.last_competency_succeeded = False
+            self.last_competency_reauth_required = False
             if include_profile:
                 try:
                     self.last_profile = self.fetch_profile_authenticated()
@@ -756,6 +762,7 @@ class ImtPassClient:
                     )
                     self.last_competency_succeeded = True
                 except (ImtError, requests.RequestException) as exc:
+                    self.last_competency_reauth_required = isinstance(exc, ImtCompetencySessionRequired)
                     _log_competency_error("COMPETENCES metadata could not be refreshed", exc)
             return entries
 
@@ -790,7 +797,7 @@ class ImtPassClient:
         self._ensure_success(response)
         if _url_origin(response.url) != HUB_ORIGIN or self._contains_password_form(response.text):
             if credentials is None:
-                raise ImtFetchError("La session IMT n'a pas pu ouvrir COMPETENCES")
+                raise ImtCompetencySessionRequired("La session IMT n'a pas pu ouvrir COMPETENCES")
             response = self._complete_cas(response, *credentials)
             self._ensure_success(response)
         if _url_origin(response.url) != HUB_ORIGIN or self._contains_password_form(response.text):
