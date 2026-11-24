@@ -7,7 +7,7 @@ from threading import Barrier
 
 import pytest
 from app.database import Base, SessionLocal
-from app.models import Account, Event, Note, SyncRequest
+from app.models import Account, Event, Note, SyncRequest, UeSetting
 from app.services import sync as sync_service
 from app.services import sync_control
 from app.services.imt import ImtFetchError, ImtPassClient, PassEntry, parse_competency_api_payload
@@ -205,7 +205,24 @@ def test_partial_official_import_keeps_prior_values_and_reports_source_status(
     assert rejected["account"]["manual_sync"]["sources"]["competences"]["state"] == "failed"
     assert rejected["summary"]["validated_credits"] == 7
     assert next(ue for ue in rejected["ues"] if ue["code"] == "ABC123")["grade"] == "C"
-    assert calls == 4
+
+    pending = dict(
+        row, code="FIP-PEN100-AA-2000", valide="En cours de validation",
+        grade_calcule=None, credit_presente=None, credit_calcule=None,
+    )
+    rows[:] = [
+        row, new_result, pending,
+        dict(pending, code="FIP-PEN200-AA-2000", grade_calcule=" ", credit_presente="", credit_calcule=" "),
+    ]
+    complete = synchronize()
+    status = complete["account"]["manual_sync"]["sources"]["competences"]
+    assert status["state"] == "fresh"
+    assert status["accepted"] == 2
+    assert status["invalid_credits"] == status["preserved"] == 0
+    assert complete["summary"]["validated_credits"] == 7
+    with SessionLocal() as db:
+        assert db.scalar(select(UeSetting.code).where(UeSetting.code.in_(["PEN100", "PEN200"]))) is None
+    assert calls == 5
 
 
 def test_manual_sync_uses_server_cooldown_retry_after_and_idempotency(

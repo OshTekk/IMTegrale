@@ -173,7 +173,7 @@ def test_competencies_api_uses_csrf_bearer_and_current_student_only(monkeypatch)
                     "credit_presente": "4.00",
                 },
                 {
-                    "nom": "UE synthétique incomplète",
+                    "nom": "UE synthétique en attente",
                     "semestre": "Semestre 2",
                     "valide": "En cours de validation",
                     "code": "FIP-XYZ345-AA-2000",
@@ -223,7 +223,7 @@ def test_competencies_api_uses_csrf_bearer_and_current_student_only(monkeypatch)
     assert entries[0].semester == "S5"
     assert entries[0].grade == "E"
     assert len(entries) == 1
-    assert client.competency_diagnostics.invalid_credits == 1
+    assert client.competency_diagnostics.invalid_credits == 0
     assert len(gets) == 4
     assert len(posts) == 2
     assert posts[0][0] == COMPETENCIES_LOGIN_URL

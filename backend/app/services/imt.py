@@ -1163,13 +1163,19 @@ def parse_competency_api_payload(
         if grade is not None and grade not in OFFICIAL_GRADES:
             raise ImtFetchError("COMPETENCES a fourni un grade invalide")
 
-        credits = _decimal(row.get("credit_presente"))
+        planned_value = row.get("credit_presente")
+        earned_value = row.get("credit_calcule")
+        planned_present = planned_value is not None and bool(str(planned_value).strip())
+        earned_present = earned_value is not None and bool(str(earned_value).strip())
+        if grade is None and not planned_present and not earned_present:
+            # The portal lists enrolled UEs before it publishes any results for them.
+            continue
+
+        credits = _decimal(planned_value)
         if credits is None or not math.isfinite(credits) or not 0 < credits <= 60:
             stats.invalid_credits += 1
             rejected_codes.add(code)
             continue
-        earned_value = row.get("credit_calcule")
-        earned_present = earned_value is not None and bool(str(earned_value).strip())
         earned_credits = _decimal(earned_value) if earned_present else None
         if earned_present and (
             earned_credits is None
